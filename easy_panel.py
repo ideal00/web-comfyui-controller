@@ -577,6 +577,13 @@ def krea2_preflight(data: dict) -> dict:
         errors.append(f"缺少 Krea 2 文本编码器：请下载 Qwen3-VL-4B 并保存为 models\\text_encoders\\{KREA2_TEXT_ENCODER}。")
     if not (COMFY_MODELS / "vae" / KREA2_VAE).is_file():
         errors.append(f"缺少 VAE：{KREA2_VAE}")
+    width = bounded(data.get("width"), 832, 512, 1920)
+    height = bounded(data.get("height"), 1216, 512, 1920)
+    if width * height > 1_250_000:
+        warnings.append(
+            f"Krea 2 当前尺寸 {width}×{height}（{width * height / 1e6:.2f} MP）；8GB 显存建议用 "
+            f"896×1344 或 1024×1024 以内，超出时会走 CPU 卸载（明显变慢）。"
+        )
     return {"isKrea2": True, "errors": errors, "warnings": warnings}
 
 
@@ -1555,6 +1562,16 @@ def build_pose_preview_workflow(data: dict) -> dict:
         #   dwpose-full : whole-image regression, best for a single anime character
         #   dwpose-yolo : YOLO person detection then per-box regression (real photo / multi-person)
         #   openpose    : CMU OpenPose, no person-box stage (robust fallback)
+        # ComfyUI caches node outputs by input signature: submitting the exact
+        # same workflow a second time hits the cache and returns an EMPTY ui
+        # payload (openpose_json disappears, so the panel wrongly reports
+        # "关键点可信度偏低"). Jittering the resolution a few pixels each time
+        # forces real re-execution so the keypoint JSON is always present.
+        try:
+            res = int(data.get("resolution") or 1024)
+        except (TypeError, ValueError):
+            res = 1024
+        res = max(256, min(2048, res + random.randint(-4, 4)))
         extract_mode = str(data.get("extractMode", "dwpose-full"))
         if extract_mode == "dwpose-yolo":
             nodes["2"] = {
@@ -1563,7 +1580,7 @@ def build_pose_preview_workflow(data: dict) -> dict:
                     "image": image_ref,
                     "bbox_detector": "yolox_l.onnx",
                     "pose_estimator": "dw-ll_ucoco_384.onnx",
-                    "resolution": 1024,
+                    "resolution": res,
                     "scale_stick_for_xinsr_cn": "enable",
                 },
             }
@@ -1576,7 +1593,7 @@ def build_pose_preview_workflow(data: dict) -> dict:
                     "detect_body": "enable",
                     "detect_face": "enable",
                     "scale_stick_for_xinsr_cn": "enable",
-                    "resolution": 1024,
+                    "resolution": res,
                 },
             }
         else:
@@ -1589,7 +1606,7 @@ def build_pose_preview_workflow(data: dict) -> dict:
                     "image": image_ref,
                     "bbox_detector": "None",
                     "pose_estimator": "dw-ll_ucoco_384.onnx",
-                    "resolution": 1024,
+                    "resolution": res,
                     "scale_stick_for_xinsr_cn": "enable",
                 },
             }
@@ -1815,10 +1832,80 @@ def build_workflow(data: dict) -> dict:
                            "strength_model": weight, "strength_clip": weight},
             }
             model_ref, clip_ref = [node_id, 0], [node_id, 1]
+
+    # Attention guidance after LoRA, before the KSampler. SAG (Self-Attention
+    # Guidance) guides the whole image (subject + background); PAG (Perturbed
+    # Attention Guidance) focuses on the subject/person only. Not supported for
+    # Krea 2 (single-stream MMDiT has no SD-style attention map).
+    guidance = data.get("guidance") or {}
+    if not guidance and isinstance(data.get("sag"), dict):
+        # Back-compat with the older sag:{enabled,scale,blur} payload.
+        guidance = {"mode": "sag" if data["sag"].get("enabled") else "off",
+                    "sagScale": data["sag"].get("scale", 0.5),
+                    "sagBlur": data["sag"].get("blur", 2.0)}
+    if not isinstance(guidance, dict):
+        guidance = {}
+    mode = str(guidance.get("mode", "off"))
+    if not krea2 and mode == "sag":
+        guide_id = alloc()
+        nodes[guide_id] = {
+            "class_type": "SelfAttentionGuidance",
+            "inputs": {
+                "model": model_ref,
+                "scale": bounded(guidance.get("sagScale"), 0.5, -2.0, 5.0, integer=False),
+                "blur_sigma": bounded(guidance.get("sagBlur"), 2.0, 0.0, 10.0, integer=False),
+            },
+        }
+        model_ref = [guide_id, 0]
+    elif not krea2 and mode == "pag":
+        guide_id = alloc()
+        nodes[guide_id] = {
+            "class_type": "PerturbedAttentionGuidance",
+            "inputs": {
+                "model": model_ref,
+                "scale": bounded(guidance.get("pagScale"), 2.0, 0.0, 100.0, integer=False),
+            },
+        }
+        model_ref = [guide_id, 0]
+
     positive_id, negative_id = alloc(), alloc()
     nodes[positive_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": clip_ref}}
     nodes[negative_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative, "clip": clip_ref}}
-    positive_ref, negative_ref = [positive_id, 0], [negative_id, 0]
+    negative_ref = [negative_id, 0]
+
+    # Multi-character regional prompting: each region binds its own prompt (the
+    # character's LoRA trigger + traits) to an area of the canvas so two
+    # characters do not blend features. Uses ConditioningSetAreaPercentage with
+    # fractional (0-1) coordinates combined via ConditioningCombine. Krea 2
+    # (natural-language, no regional conditioning) ignores this feature.
+    regions = data.get("regions") or []
+    regions = regions if isinstance(regions, list) else []
+    region_prompts = [r for r in regions if str(r.get("prompt", "")).strip()]
+    if not krea2 and region_prompts:
+        conds = [[positive_id, 0]]  # whole-canvas base (quality / scene / global)
+        for r in region_prompts:
+            enc_id = alloc()
+            nodes[enc_id] = {"class_type": "CLIPTextEncode",
+                             "inputs": {"text": str(r.get("prompt", "")).strip(), "clip": clip_ref}}
+            area_id = alloc()
+            nodes[area_id] = {"class_type": "ConditioningSetAreaPercentage", "inputs": {
+                "conditioning": [enc_id, 0],
+                "width": bounded(r.get("width"), 0.5, 0.05, 1.0, integer=False),
+                "height": bounded(r.get("height"), 0.5, 0.05, 1.0, integer=False),
+                "x": bounded(r.get("x"), 0.0, 0.0, 1.0, integer=False),
+                "y": bounded(r.get("y"), 0.0, 0.0, 1.0, integer=False),
+                "strength": bounded(r.get("strength"), 1.0, 0.0, 3.0, integer=False),
+            }}
+            conds.append([area_id, 0])
+        ref = conds[0]
+        for c in conds[1:]:
+            comb_id = alloc()
+            nodes[comb_id] = {"class_type": "ConditioningCombine",
+                              "inputs": {"conditioning_1": ref, "conditioning_2": c}}
+            ref = [comb_id, 0]
+        positive_ref = ref
+    else:
+        positive_ref = [positive_id, 0]
 
     # Local repaint: encode the uploaded image with a hand-drawn mask so the
     # KSampler only re-draws the masked region (denoise < 1 keeps the rest).
@@ -1831,6 +1918,19 @@ def build_workflow(data: dict) -> dict:
     if img2img:
         image_name = prepare_generation_image(str(img2img_data.get("image", "") or ""))
         denoise = bounded(img2img_data.get("denoise"), 0.6, 0.1, 1.0, integer=False)
+        # Guard against OOM: img2img encodes the base latent at full source
+        # resolution, so an oversized base image can overflow 8GB VRAM.
+        try:
+            from PIL import Image as _PILImage
+            with _PILImage.open(COMFY_INPUT / image_name) as _probe:
+                _iw, _ih = _probe.size
+        except Exception:
+            _iw = _ih = 0
+        if _iw * _ih > 2_500_000:
+            raise ValueError(
+                f"底图 {_iw}×{_ih}（{_iw * _ih / 1e6:.2f} MP）过大，8GB 显存容易溢出；"
+                "请先用较小的底图（建议 1.5 MP 以内）再重绘。"
+            )
         load_id, encode_id = alloc(), alloc()
         nodes[load_id] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
         nodes[encode_id] = {"class_type": "VAEEncode",
@@ -1923,6 +2023,14 @@ def build_workflow(data: dict) -> dict:
         sampler_name, scheduler = illustrious_profile["sampler"], illustrious_profile["scheduler"]
     else:
         sampler_name, scheduler = "dpmpp_2m_sde", "karras"
+    # Optional manual sampler/scheduler override; Krea 2 stays guidance-free.
+    if not krea2:
+        custom_sampler = str(data.get("sampler", "") or "").strip()
+        custom_scheduler = str(data.get("scheduler", "") or "").strip()
+        if custom_sampler and custom_sampler != "auto":
+            sampler_name = custom_sampler
+        if custom_scheduler and custom_scheduler != "auto":
+            scheduler = custom_scheduler
     sampler_id = alloc()
     nodes[sampler_id] = {
         "class_type": "KSampler",
