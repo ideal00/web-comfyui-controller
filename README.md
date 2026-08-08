@@ -9,17 +9,37 @@
 - **多模型族支持**：SDXL / Illustrious / Anima / Krea 2 四族模型，自动匹配采样器 / 调度器 / 预测类型与质量前缀
 - **提示词编译器**：分区化提示词编辑（人物 / 外貌 / 服装 / 姿势 / 构图 / 场景 / 光线 / 画风 / 自然语言 / 手动），质量标签、安全标签、LoRA 触发词置顶、动态负面词、冲突检测
 - **AI 结构化翻译**：中文描述 → 英文标签，支持 DeepSeek / OpenAI / Anthropic / Gemini / Ollama 等协议，自动识别推理模型并扩容 token 预算；另含 Google 直译
-- **注意力引导（SAG / PAG）**：在 LoRA 之后、采样前注入 Self-Attention Guidance 或 Perturbed Attention Guidance，提升构图与主体一致性（Krea 2 除外）
-- **多角色分区提示**：用 ConditioningSetAreaPercentage 把各角色提示词绑定到画布不同区域，避免多角色特征互相混合（Krea 2 除外）
+- **注意力引导（SAG / PAG）**：在 LoRA 之后、采样前注入真实模型补丁；Krea 2 不支持，多角色 Hook LoRA 模式会自动关闭以避免重复计算和特征冲突
+- **多角色分区提示**：以柔边蒙版 conditioning 隔离角色提示词，并用 Hook LoRA 将角色 LoRA 的模型/CLIP 权重限制在对应位置；自动汇总人数与共同互动、抑制男性误入和左右分镜，全局场景作为连续背景层（Krea 2 / Anima 除外）
 - **自定义采样器 / 调度器**：手动覆盖采样参数并实时显示徽标（Krea 2 固定免引导 euler / simple）
 - **Danbooru 标签搜索**：中英标签补全（依赖 `vendor/tagcomplete-data`，需自行下载）
-- **LoRA 备忘与服装预设**：同名 TXT 解析导入、多分区服装预设（人物 / 服装 / 姿势 / 场景等 9 分区）、多套预设叠加
+- **LoRA 备忘与服装预设**：同名 TXT 解析导入、多分区服装预设（人物 / 服装 / 姿势 / 场景等 9 分区）、多套预设叠加；刷新会恢复 LoRA 与权重，移除 LoRA 时只撤销该 LoRA 预设加入的词
 - **OpenPose 姿势控制**：DWPose 骨架提取（自动回退 dwpose-full → dwpose-yolo）+ 骨架编辑器 + ControlNet，结果缓存复用
 - **蒙版局部重绘**：浏览器内画笔蒙版编辑器 + `VAEEncodeForInpaint` 局部重绘
 - **整图重绘（img2img）**：Krea 2 出真实底图 → Illustrious / Anima 二次元化（内置超大底图 OOM 防护）
 - **读取 AI 图片参数**：解析 PNG / WebP / JPG 内嵌元数据（ComfyUI / A1111 / NovelAI），一键回填面板
 - **生成后调色实时预览**：复刻 ComfyUI_LayerStyle 的亮度对比度 / RGB / HSV / Gamma / Levels 节点
-- **任务队列**：多任务排队，每个任务独立 LoRA，先暂存再一次性发送
+- **任务队列**：多任务排队，每个任务会保留自己的 LoRA 和“生成数量”；支持最多 50 个逻辑任务 / 200 张图，并在当前浏览器会话刷新后恢复未发送队列
+
+## 模型采样推荐
+
+高级参数由后端按模型下发，不再由前端重复硬编码。选择模型时会清除上一个模型遗留的手动采样覆盖；“快速 / 推荐 / 细节”按钮会同时设置步数、CFG、采样器和调度器。
+
+| 本机模型 | 推荐组合 | 备注 |
+| --- | --- | --- |
+| WAI Illustrious v14 | 28 steps · CFG 5.0 · `euler_ancestral / normal` | 当前本机出图链路已验证 |
+| Reed / 通用 ILXL | 28 steps · CFG 5.0 · `euler_ancestral / normal` | 无专属模型卡时使用保守配置 |
+| Illustrious XL Base | 30 steps · CFG 5.5 · `euler_ancestral / normal` | 基础模型稳妥起点 |
+| Spectacular Anime ILXL | 30 steps · CFG 5.0 · `dpmpp_2m_sde / simple` | 本地测试明确要求 Simple，不使用 Normal |
+| Milmu Anime Illustrious v-pred | 30 steps · CFG 5.5 · `dpmpp_2m_sde / karras` | 保留 `ModelSamplingDiscrete(v_prediction)` |
+| Gock So Anime Love Song | 30 steps · CFG 7.0 · `dpmpp_2m_sde / karras` | 本地作者风格基线；材质细节可用 34 / 6.5 |
+| PlantMilk Model Suite | 30 steps · CFG 6.5 · `dpmpp_2m_sde / karras` | SDXL 写实模型保守起点 |
+| Anima Base | 34 steps · CFG 4.8 · `er_sde / simple` | 本地 Anima 工作流已验证；28–38 步可用 |
+| Hoseki LustrousMix Anima | 24 steps · CFG 4.5 · `er_sde / beta` | 模型发布配置 |
+| Nova Anime Anima | 24 steps · CFG 4.5 · `euler_ancestral / normal` | 模型发布配置 |
+| Krea 2 Turbo FP8 / INT8 | 8 steps · CFG 1.0 · `euler / simple` | 蒸馏模型，后端锁定并禁用 SAG/PAG |
+
+SAG 推荐从 `scale 0.35–0.5 / blur 2.0` 开始；PAG 推荐 `1.5–2.0`，通常不要超过 `2.5`。二者默认关闭，都会增加生成耗时。
 
 ## 安装教程（Windows）
 

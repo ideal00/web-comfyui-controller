@@ -60,6 +60,42 @@ def anima_sampling_settings(model_name: str) -> tuple[str, str]:
     return "er_sde", "simple"
 
 
+def _sampling_combo(key: str, label: str, steps: int, cfg: float, sampler: str,
+                    scheduler: str, note: str) -> dict:
+    return {"key": key, "label": label, "steps": steps, "cfg": cfg,
+            "sampler": sampler, "scheduler": scheduler, "guidance": "off", "note": note}
+
+
+def anima_sampling_profile(model_name: str) -> dict:
+    """Model-card and locally validated presets for installed Anima variants."""
+    name = Path(str(model_name or "")).name.lower()
+    if name.startswith("hosekilustrousmixanima"):
+        combos = [
+            _sampling_combo("recommended", "推荐", 24, 4.5, "er_sde", "beta", "模型发布配置，色彩与细节均衡。"),
+            _sampling_combo("fast", "快速", 20, 4.2, "euler", "simple", "更快预览构图与 LoRA。"),
+            _sampling_combo("detail", "细节", 30, 4.6, "er_sde", "beta", "增加收敛，不建议超过 34 步。"),
+        ]
+        label = "Hoseki LustrousMix Anima"
+    elif name.startswith("novaanime"):
+        combos = [
+            _sampling_combo("recommended", "推荐", 24, 4.5, "euler_ancestral", "normal", "模型发布配置，线条较柔和。"),
+            _sampling_combo("fast", "快速", 20, 4.2, "euler", "simple", "快速检查构图。"),
+            _sampling_combo("detail", "细节", 30, 4.6, "er_sde", "simple", "更稳定的细节与色块。"),
+        ]
+        label = "Nova Anime Anima"
+    else:
+        combos = [
+            _sampling_combo("recommended", "推荐", 34, 4.8, "er_sde", "simple", "本地 Anima 风格包已验证。"),
+            _sampling_combo("fast", "快速", 28, 4.5, "euler", "simple", "速度优先，适合提示词预览。"),
+            _sampling_combo("detail", "细节", 38, 4.8, "er_sde", "simple", "细节上限；40 步以上收益通常有限。"),
+        ]
+        label = "Anima Base"
+    return {**combos[0], "family": "anima", "label": label, "combos": combos,
+            "locked": False, "prediction": "native", "guidance_supported": True,
+            "guidance_note": "默认关闭；单人构图可试 SAG 0.35–0.5，多人或 8GB 显存建议关闭。",
+            "source": "模型发布配置 / 本地 Anima Soft Illustration 工作流"}
+
+
 def is_illustrious_model(model_name: str) -> bool:
     """Recognize the installed Illustrious / ILXL checkpoint family."""
     normalized = str(model_name or "").replace("\\", "/").lower()
@@ -76,11 +112,11 @@ def illustrious_sampling_settings(model_name: str) -> dict:
     """
     name = Path(str(model_name or "")).name.lower()
     if name.startswith("milmu") or "vpred" in name:
-        return {"steps": 30, "cfg": 5.0, "sampler": "euler",
-                "scheduler": "normal", "prediction": "v_prediction"}
+        return {"steps": 30, "cfg": 5.5, "sampler": "dpmpp_2m_sde",
+                "scheduler": "karras", "prediction": "v_prediction"}
     if name.startswith("spectacular"):
-        return {"steps": 24, "cfg": 7.0, "sampler": "euler_ancestral",
-                "scheduler": "beta", "prediction": "eps"}
+        return {"steps": 30, "cfg": 5.0, "sampler": "dpmpp_2m_sde",
+                "scheduler": "simple", "prediction": "eps"}
     if name.startswith("wai"):
         return {"steps": 28, "cfg": 5.0, "sampler": "euler_ancestral",
                 "scheduler": "normal", "prediction": "eps"}
@@ -104,6 +140,90 @@ def is_krea2_model(model_name: str) -> bool:
 def krea2_sampling_settings() -> dict:
     """Krea 2 Turbo: guidance-free flow sampling, very few steps."""
     return {"steps": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple"}
+
+
+def model_sampling_profile(model_name: str) -> dict:
+    """Return the UI/backend sampling contract for one installed model."""
+    name = Path(str(model_name or "")).name.lower()
+    if is_krea2_model(model_name):
+        base = krea2_sampling_settings()
+        combo = _sampling_combo("recommended", "官方 Turbo", base["steps"], base["cfg"],
+                                base["sampler"], base["scheduler"],
+                                "8 步蒸馏模型；ComfyUI CFG 1 等价于关闭 CFG。")
+        return {**combo, "family": "krea2", "label": "Krea 2 Turbo", "combos": [combo],
+                "locked": True, "prediction": "flow", "guidance_supported": False,
+                "guidance_note": "固定免引导；SAG/PAG 与手动采样覆盖均禁用。",
+                "source": "Krea 官方 Turbo 模型卡"}
+    if is_anima_model(model_name):
+        return anima_sampling_profile(model_name)
+    if is_illustrious_model(model_name):
+        base = illustrious_sampling_settings(model_name)
+        if name.startswith("milmu") or "vpred" in name:
+            label = "Milmu Anime Illustrious v-pred"
+            combos = [
+                _sampling_combo("recommended", "推荐", 30, 5.5, "dpmpp_2m_sde", "karras", "本地材质测试已验证。"),
+                _sampling_combo("fast", "快速", 24, 5.0, "euler", "karras", "减少步数，保留 v-pred 处理。"),
+                _sampling_combo("detail", "细节", 34, 5.5, "dpmpp_2m_sde", "karras", "更充分收敛，适合材质。"),
+            ]
+        elif name.startswith("spectacular"):
+            label = "Spectacular Anime ILXL"
+            combos = [
+                _sampling_combo("recommended", "推荐", 30, 5.0, "dpmpp_2m_sde", "simple", "本地测试明确要求 Simple，禁止 Normal。"),
+                _sampling_combo("fast", "快速", 24, 5.0, "euler_ancestral", "simple", "快速预览，保持 Simple 调度。"),
+                _sampling_combo("detail", "细节", 34, 5.0, "dpmpp_2m_sde", "simple", "细节增加但不提高 CFG。"),
+            ]
+        elif name.startswith("wai"):
+            label = "WAI Illustrious SDXL"
+            combos = [
+                _sampling_combo("recommended", "推荐", 28, 5.0, "euler_ancestral", "normal", "当前本机出图链路已验证。"),
+                _sampling_combo("fast", "快速", 22, 4.5, "euler_ancestral", "normal", "LoRA 与构图预览。"),
+                _sampling_combo("detail", "细节", 32, 5.0, "dpmpp_2m_sde", "karras", "提高纹理细节，风格会略有变化。"),
+            ]
+        elif name.startswith("illustriousxl"):
+            label = "Illustrious XL Base"
+            combos = [
+                _sampling_combo("recommended", "推荐", 30, 5.5, "euler_ancestral", "normal", "基础模型稳妥配置。"),
+                _sampling_combo("fast", "快速", 24, 5.0, "euler_ancestral", "normal", "快速检查提示词。"),
+                _sampling_combo("detail", "细节", 34, 5.5, "dpmpp_2m_sde", "karras", "细节优先。"),
+            ]
+        else:
+            label = "Illustrious / ILXL"
+            combos = [
+                _sampling_combo("recommended", "推荐", base["steps"], base["cfg"], base["sampler"], base["scheduler"], "保守的 Illustrious 通用配置。"),
+                _sampling_combo("fast", "快速", 22, 4.5, "euler_ancestral", "normal", "提示词与 LoRA 预览。"),
+                _sampling_combo("detail", "细节", 32, 5.0, "dpmpp_2m_sde", "karras", "纹理与背景细节优先。"),
+            ]
+        hires = {"scale": 1.25, "denoise": 0.30, "steps": 18, "cfg": 4.5}
+        return {**combos[0], "family": "illustrious", "label": label, "combos": combos,
+                "locked": False, "prediction": base["prediction"], "hires": hires,
+                "guidance_supported": True,
+                "guidance_note": "默认关闭；单人主体可试 PAG 1.5–2.0，多人分区应关闭。",
+                "source": "本地模型元数据与已验证 Prompt Library"}
+    if name.startswith("gockso"):
+        combos = [
+            _sampling_combo("recommended", "推荐", 30, 7.0, "dpmpp_2m_sde", "karras", "本地作者风格基线已验证。"),
+            _sampling_combo("fast", "快速", 24, 6.5, "dpmpp_2m", "karras", "快速构图预览。"),
+            _sampling_combo("detail", "材质细节", 34, 6.5, "dpmpp_2m_sde", "karras", "本地皮肤与丝袜材质测试配置。"),
+        ]
+        label = "Gock So Anime Love Song (SDXL)"
+    elif name.startswith("plantmilk"):
+        combos = [
+            _sampling_combo("recommended", "推荐", 30, 6.5, "dpmpp_2m_sde", "karras", "SDXL 写实模型的稳妥起点。"),
+            _sampling_combo("fast", "快速", 24, 6.0, "dpmpp_2m", "karras", "构图预览。"),
+            _sampling_combo("detail", "细节", 36, 6.5, "dpmpp_2m_sde", "karras", "写实纹理优先。"),
+        ]
+        label = "PlantMilk Model Suite (SDXL)"
+    else:
+        combos = [
+            _sampling_combo("recommended", "推荐", 30, 6.0, "dpmpp_2m_sde", "karras", "通用 SDXL 稳妥配置。"),
+            _sampling_combo("fast", "快速", 24, 5.5, "dpmpp_2m", "karras", "快速预览。"),
+            _sampling_combo("detail", "细节", 36, 6.0, "dpmpp_2m_sde", "karras", "细节优先。"),
+        ]
+        label = "标准 SDXL"
+    return {**combos[0], "family": "sdxl", "label": label, "combos": combos,
+            "locked": False, "prediction": "eps", "guidance_supported": True,
+            "guidance_note": "默认关闭；单人可试 PAG 1.5–2.0，背景整体增强可试 SAG 0.35–0.5。",
+            "source": "本地验证记录 / SDXL 通用保守配置"}
 
 
 def checkpoint_issue(model_name: str) -> str | None:
@@ -487,7 +607,9 @@ def compile_prompt(data: dict) -> dict:
         warnings.append("当前为画风测试模式，但“画风与上色”分区不为空；这些词可能掩盖 LoRA 自身表现。")
     errors: list[str] = []
     user_term_count = sum(len(split_prompt_terms(sections[key], limit=360)) for key in PROMPT_SECTION_KEYS)
-    if not user_term_count and not trigger_terms and not natural_language:
+    region_term_count = sum(len(split_prompt_terms(item.get("prompt", ""), limit=180))
+                            for item in (data.get("regions") or []) if isinstance(item, dict))
+    if not user_term_count and not trigger_terms and not natural_language and not region_term_count:
         errors.append("请至少填写人物、场景、姿势、其他标签或自然语言描述中的一项。")
     return {"positive": positive, "negative": ", ".join(negative_terms),
             "errors": errors, "warnings": warnings, "sections": sections,
@@ -676,17 +798,274 @@ def load_lora_notes() -> dict:
     return content if isinstance(content, dict) else {}
 
 
-def selected_lora_triggers(data: dict) -> list[str]:
-    """Return documented triggers for selected LoRAs without applying them silently."""
+def normalized_lora_name(value: str) -> str:
+    return str(value or "").replace("\\", "/").strip().casefold()
+
+
+def lora_note(notes: dict, lora_name: str) -> dict:
+    """Resolve notes saved either by relative LoRA path or by basename."""
+    raw = str(lora_name or "")
+    normalized = raw.replace("\\", "/")
+    basename = normalized.rsplit("/", 1)[-1]
+    note = notes.get(raw) or notes.get(normalized) or notes.get(basename) or {}
+    return note if isinstance(note, dict) else {}
+
+
+def selected_lora_trigger_entries(data: dict) -> list[tuple[str, str]]:
+    """Return ``(selected LoRA name, documented trigger)`` pairs."""
     notes = load_lora_notes()
-    triggers: list[str] = []
+    entries: list[tuple[str, str]] = []
     for lora in data.get("loras", []):
-        key = str(lora.get("name", "")).replace("\\", "/").rsplit("/", 1)[-1]
-        note = notes.get(key, {})
-        trigger = str(note.get("trigger", "")).strip() if isinstance(note, dict) else ""
-        if trigger and trigger.casefold() not in {item.casefold() for item in triggers}:
-            triggers.append(trigger)
-    return triggers
+        name = str(lora.get("name", "") or "").strip()
+        trigger = str(lora_note(notes, name).get("trigger", "") or "").strip()
+        if name and trigger:
+            entries.append((name, trigger))
+    return entries
+
+
+def selected_lora_triggers(data: dict, exclude_names: set[str] | None = None) -> list[str]:
+    """Return documented triggers, optionally excluding region-bound LoRAs."""
+    excluded = {normalized_lora_name(name) for name in (exclude_names or set())}
+    return [trigger for name, trigger in selected_lora_trigger_entries(data)
+            if normalized_lora_name(name) not in excluded]
+
+
+REGION_SUBJECT_TAGS = {"1girl", "1boy", "1other", "person"}
+REGION_GLOBAL_SECTION_KEYS = ("composition", "scene", "lighting", "style")
+REGION_LAYOUT_POSITIVE = (
+    "single continuous scene", "one image", "same background", "coherent composition",
+)
+REGION_LAYOUT_NEGATIVE = (
+    "split screen", "collage", "diptych", "triptych", "multiple views",
+    "comic panels", "panel layout", "border", "frame between characters",
+)
+
+
+def _region_number(value, default: float, low: float, high: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        result = default
+    return min(high, max(low, result))
+
+
+def normalized_regions(data: dict) -> list[dict]:
+    """Validate and normalize regional characters before constructing nodes.
+
+    A modest overlap is allowed because regional conditioning is applied through
+    feathered masks.  Excessive overlap still recreates the fused faces, hair
+    colours and limbs this feature is meant to prevent.
+    """
+    raw_regions = data.get("regions") or []
+    if not isinstance(raw_regions, list):
+        return []
+    selected = {normalized_lora_name(item.get("name")): str(item.get("name", ""))
+                for item in data.get("loras", []) if str(item.get("name", "")).strip()}
+    regions: list[dict] = []
+    for index, raw in enumerate(raw_regions[:6]):
+        if not isinstance(raw, dict):
+            continue
+        prompt = str(raw.get("prompt", "") or "").strip()
+        if not prompt:
+            continue
+        x = _region_number(raw.get("x"), 0.0, 0.0, 0.95)
+        y = _region_number(raw.get("y"), 0.0, 0.0, 0.95)
+        width = min(_region_number(raw.get("width"), 0.5, 0.05, 1.0), 1.0 - x)
+        height = min(_region_number(raw.get("height"), 1.0, 0.05, 1.0), 1.0 - y)
+        subject = str(raw.get("subject", "1girl") or "1girl").strip().lower()
+        if subject not in REGION_SUBJECT_TAGS:
+            subject = "1girl"
+        requested_lora = str(raw.get("lora", "") or "").strip()
+        lora_name = selected.get(normalized_lora_name(requested_lora), "") if requested_lora else ""
+        if requested_lora and not lora_name:
+            raise ValueError(f"角色 {index + 1} 绑定的 LoRA 已不在当前选择列表中，请重新选择。")
+        regions.append({
+            "name": str(raw.get("name", "") or "").strip(),
+            "prompt": prompt,
+            "subject": subject,
+            "lora": lora_name,
+            "x": x, "y": y, "width": width, "height": height,
+            # Values below 0.75 are routinely drowned out by the base prompt.
+            "strength": _region_number(raw.get("strength"), 1.0, 0.75, 1.5),
+        })
+    if raw_regions and len(regions) < 2:
+        raise ValueError("多人区域至少需要两个已填写专属提示词的角色。")
+    for left_index, left in enumerate(regions):
+        for right_index in range(left_index + 1, len(regions)):
+            right = regions[right_index]
+            overlap_width = max(0.0, min(left["x"] + left["width"], right["x"] + right["width"])
+                                - max(left["x"], right["x"]))
+            overlap_height = max(0.0, min(left["y"] + left["height"], right["y"] + right["height"])
+                                 - max(left["y"], right["y"]))
+            overlap = overlap_width * overlap_height
+            smaller = min(left["width"] * left["height"], right["width"] * right["height"])
+            if smaller and overlap / smaller > 0.35:
+                raise ValueError(f"角色 {left_index + 1} 与角色 {right_index + 1} 的区域发生重叠；"
+                                 "重叠范围过大，会同时混合两套人物特征，请缩小到约 10%–20%。")
+    return regions
+
+
+def regional_shared_terms(regions: list[dict]) -> list[str]:
+    """Terms repeated in every character belong to their shared relationship.
+
+    Keeping e.g. ``hug, kiss`` in both half-frame prompts asks each half to draw
+    a complete couple.  Moving exact common terms to the group prompt makes the
+    interaction happen once, between the declared characters.
+    """
+    if len(regions) < 2:
+        return []
+    term_lists = [split_prompt_terms(region["prompt"], limit=180) for region in regions]
+    common = {normalize_prompt_key(term) for term in term_lists[0]}
+    for terms in term_lists[1:]:
+        common &= {normalize_prompt_key(term) for term in terms}
+    return [term for term in term_lists[0] if normalize_prompt_key(term) in common]
+
+
+def regional_group_prompt(regions: list[dict]) -> str:
+    girls = sum(region["subject"] == "1girl" for region in regions)
+    boys = sum(region["subject"] == "1boy" for region in regions)
+    others = len(regions) - girls - boys
+    counts: list[str] = []
+    if girls:
+        counts.extend(([f"{girls}girls"] if girls > 1 else ["1girl"]))
+    if boys:
+        counts.extend(([f"{boys}boys"] if boys > 1 else ["1boy"]))
+    if others:
+        counts.append(f"{others}other" if others > 1 else "1other")
+    if len(regions) > 1:
+        counts.append("multiple people")
+    if girls > 1 and not boys and not others:
+        counts.extend(("multiple girls", "all female"))
+    return unique_prompt_terms(", ".join(counts), ", ".join(REGION_LAYOUT_POSITIVE))
+
+
+def regional_negative_prompt(negative: str, regions: list[dict]) -> str:
+    additions = list(REGION_LAYOUT_NEGATIVE)
+    if regions and all(region["subject"] == "1girl" for region in regions):
+        additions.extend(("1boy", "male", "man", "boys"))
+    elif regions and all(region["subject"] == "1boy" for region in regions):
+        additions.extend(("1girl", "female", "woman", "girls"))
+    return unique_prompt_terms(negative, ", ".join(additions))
+
+
+def regional_position_prompt(region: dict) -> str:
+    center_x = region["x"] + region["width"] / 2
+    center_y = region["y"] + region["height"] / 2
+    if region["width"] < 0.8:
+        return "character on the left" if center_x < 0.5 else "character on the right"
+    if region["height"] < 0.8:
+        return "character at the top" if center_y < 0.5 else "character at the bottom"
+    return ""
+
+
+def regional_mask_layout(regions: list[dict], width: int, height: int) -> list[dict]:
+    """Convert percentage boxes to slightly overlapping, cross-faded masks.
+
+    Adjacent 50/50 boxes are expanded four percent into the neighbour.  Each
+    inner edge is feathered across the complete overlap, so the two conditions
+    cross-fade instead of producing a visible diptych boundary.
+    """
+    boxes = [{**region} for region in regions]
+    for left_index, left in enumerate(boxes):
+        for right_index in range(left_index + 1, len(boxes)):
+            right = boxes[right_index]
+            vertical = max(0.0, min(left["y"] + left["height"], right["y"] + right["height"])
+                           - max(left["y"], right["y"]))
+            horizontal = max(0.0, min(left["x"] + left["width"], right["x"] + right["width"])
+                             - max(left["x"], right["x"]))
+            vertical_ratio = vertical / min(left["height"], right["height"])
+            horizontal_ratio = horizontal / min(left["width"], right["width"])
+            if vertical_ratio >= 0.5:
+                first, second = (left, right) if left["x"] <= right["x"] else (right, left)
+                gap = second["x"] - (first["x"] + first["width"])
+                if abs(gap) <= 0.011:
+                    blend = 0.04
+                    first["width"] = min(1.0 - first["x"], first["width"] + blend)
+                    second["x"] = max(0.0, second["x"] - blend)
+                    second["width"] = min(1.0 - second["x"], second["width"] + blend)
+            elif horizontal_ratio >= 0.5:
+                first, second = (left, right) if left["y"] <= right["y"] else (right, left)
+                gap = second["y"] - (first["y"] + first["height"])
+                if abs(gap) <= 0.011:
+                    blend = 0.04
+                    first["height"] = min(1.0 - first["y"], first["height"] + blend)
+                    second["y"] = max(0.0, second["y"] - blend)
+                    second["height"] = min(1.0 - second["y"], second["height"] + blend)
+
+    layouts: list[dict] = []
+    for index, box in enumerate(boxes):
+        feathers = {"left": 0, "top": 0, "right": 0, "bottom": 0}
+        for other_index, other in enumerate(boxes):
+            if index == other_index:
+                continue
+            overlap_x = max(0.0, min(box["x"] + box["width"], other["x"] + other["width"])
+                            - max(box["x"], other["x"]))
+            overlap_y = max(0.0, min(box["y"] + box["height"], other["y"] + other["height"])
+                            - max(box["y"], other["y"]))
+            if not overlap_x or not overlap_y:
+                continue
+            if abs((box["x"] + box["width"] / 2) - (other["x"] + other["width"] / 2)) >= \
+                    abs((box["y"] + box["height"] / 2) - (other["y"] + other["height"] / 2)):
+                side = "right" if other["x"] > box["x"] else "left"
+                feathers[side] = max(feathers[side], round(overlap_x * width))
+            else:
+                side = "bottom" if other["y"] > box["y"] else "top"
+                feathers[side] = max(feathers[side], round(overlap_y * height))
+        x = round(box["x"] * width)
+        y = round(box["y"] * height)
+        box_width = max(1, min(width - x, round(box["width"] * width)))
+        box_height = max(1, min(height - y, round(box["height"] * height)))
+        layouts.append({"x": x, "y": y, "width": box_width, "height": box_height,
+                        "feathers": feathers})
+    return layouts
+
+
+def regional_global_prompt(data: dict, compiled: dict, bound_loras: set[str]) -> str:
+    """Build a character-free scene/style prompt shared by every region."""
+    sections = compiled["sections"]
+    explicit = str(data.get("regionGlobalPrompt", "") or "").strip()
+    regions = normalized_regions(data)
+    return unique_prompt_terms(
+        ", ".join(selected_lora_triggers(data, exclude_names=bound_loras)),
+        ", ".join(compiled["profile"]["quality"]),
+        regional_group_prompt(regions),
+        ", ".join(regional_shared_terms(regions)),
+        *(sections[key] for key in REGION_GLOBAL_SECTION_KEYS),
+        explicit,
+    )
+
+
+def regional_character_prompt(data: dict, compiled: dict, region: dict,
+                              bound_loras: set[str]) -> str:
+    """Build one isolated character prompt with its optional hooked LoRA trigger."""
+    trigger = ""
+    if region["lora"]:
+        wanted = normalized_lora_name(region["lora"])
+        trigger = next((value for name, value in selected_lora_trigger_entries(data)
+                        if normalized_lora_name(name) == wanted), "")
+    global_triggers = selected_lora_triggers(data, exclude_names=bound_loras)
+    global_prompt = regional_global_prompt(data, compiled, bound_loras)
+    quality_keys = {normalize_prompt_key(term)
+                    for term in compiled["profile"]["quality"]}
+    trigger_keys = {normalize_prompt_key(term) for term in global_triggers}
+    all_regions = normalized_regions(data)
+    shared_keys = {normalize_prompt_key(term) for term in regional_shared_terms(all_regions)}
+    group_keys = {normalize_prompt_key(term)
+                  for term in split_prompt_terms(regional_group_prompt(all_regions), limit=80)}
+    context_terms = [term for term in split_prompt_terms(global_prompt, limit=180)
+                     if normalize_prompt_key(term)
+                     not in quality_keys | trigger_keys | shared_keys | group_keys]
+    local_terms = [term for term in split_prompt_terms(region["prompt"], limit=180)
+                   if normalize_prompt_key(term) not in shared_keys]
+    return unique_prompt_terms(
+        trigger,
+        ", ".join(global_triggers),
+        ", ".join(compiled["profile"]["quality"]),
+        region["subject"],
+        regional_position_prompt(region),
+        ", ".join(local_terms),
+        ", ".join(context_terms),
+    )
 
 
 def lora_compatibility_warnings(data: dict, family: str) -> list[str]:
@@ -1741,6 +2120,7 @@ def build_workflow(data: dict) -> dict:
     krea2 = is_krea2_model(model)
     illustrious = (not anima and not krea2) and is_illustrious_model(model)
     illustrious_profile = illustrious_sampling_settings(model) if illustrious else None
+    sampling_profile = model_sampling_profile(model)
     if not anima and not krea2:
         issue = checkpoint_issue(model)
         if issue:
@@ -1755,19 +2135,26 @@ def build_workflow(data: dict) -> dict:
     height = bounded(data.get("height"), 1216, 512, 1920)
     width -= width % 8
     height -= height % 8
+    regions = normalized_regions(data)
+    if regions and (anima or krea2):
+        family_name = "Anima" if anima else "Krea 2"
+        raise ValueError(f"{family_name} 暂不支持区域提示词；请切回 SDXL / Illustrious，或关闭多人分区。")
+    regional_mode = bool(regions and not anima and not krea2)
+    if regional_mode:
+        negative = regional_negative_prompt(negative, regions)
+    bound_lora_names = {region["lora"] for region in regions if region["lora"]}
+    bound_lora_keys = {normalized_lora_name(name) for name in bound_lora_names}
+    selected_loras = {normalized_lora_name(item.get("name")): item
+                      for item in data.get("loras", []) if str(item.get("name", "")).strip()}
     # Keep API callers aligned with the model family even when a frontend omits
     # these fields.  Illustrious derivatives do not all share a prediction type
     # or their preferred sampler, so their model-aware profile is authoritative.
-    if anima:
-        default_steps, default_cfg = 30, 4.0
-    elif krea2:
-        default_steps, default_cfg = krea2_sampling_settings()["steps"], krea2_sampling_settings()["cfg"]
-    elif illustrious_profile:
-        default_steps, default_cfg = illustrious_profile["steps"], illustrious_profile["cfg"]
+    default_steps, default_cfg = sampling_profile["steps"], sampling_profile["cfg"]
+    if sampling_profile.get("locked"):
+        steps, cfg = default_steps, default_cfg
     else:
-        default_steps, default_cfg = 28, 5.5
-    steps = bounded(data.get("steps"), default_steps, 8, 60)
-    cfg = bounded(data.get("cfg"), default_cfg, 1, 15, integer=False)
+        steps = bounded(data.get("steps"), default_steps, 8, 60)
+        cfg = bounded(data.get("cfg"), default_cfg, 1, 15, integer=False)
     seed_value = data.get("seed", -1)
     seed = random.randrange(1, 2**63 - 1) if str(seed_value) in {"", "-1", "random"} else bounded(seed_value, 1, 0, 2**63 - 1)
 
@@ -1816,6 +2203,11 @@ def build_workflow(data: dict) -> dict:
         name = str(lora.get("name", ""))
         if not name:
             continue
+        # Character LoRAs assigned to a region are attached later as conditioning
+        # hooks. Loading them here would patch the whole model and blend every
+        # character's face, hair, outfit and body shape across all regions.
+        if regional_mode and normalized_lora_name(name) in bound_lora_keys:
+            continue
         weight = bounded(lora.get("weight"), 0.7, 0, 1.5, integer=False)
         node_id = alloc()
         if anima or krea2:
@@ -1846,7 +2238,13 @@ def build_workflow(data: dict) -> dict:
     if not isinstance(guidance, dict):
         guidance = {}
     mode = str(guidance.get("mode", "off"))
-    if not krea2 and mode == "sag":
+    if mode not in {"off", "sag", "pag"}:
+        raise ValueError("未知的注意力引导模式。")
+    if regional_mode and mode != "off":
+        raise ValueError("多人分区不能同时启用 SAG/PAG；这会重复模型 Hook、显著变慢并干扰人物隔离。")
+    if mode != "off" and not sampling_profile["guidance_supported"]:
+        raise ValueError(f"{sampling_profile['label']} 不支持 SAG/PAG，请关闭注意力引导。")
+    if sampling_profile["guidance_supported"] and mode == "sag":
         guide_id = alloc()
         nodes[guide_id] = {
             "class_type": "SelfAttentionGuidance",
@@ -1857,7 +2255,7 @@ def build_workflow(data: dict) -> dict:
             },
         }
         model_ref = [guide_id, 0]
-    elif not krea2 and mode == "pag":
+    elif sampling_profile["guidance_supported"] and mode == "pag":
         guide_id = alloc()
         nodes[guide_id] = {
             "class_type": "PerturbedAttentionGuidance",
@@ -1868,42 +2266,76 @@ def build_workflow(data: dict) -> dict:
         }
         model_ref = [guide_id, 0]
 
+    base_positive = regional_global_prompt(data, compiled, bound_lora_names) if regional_mode else prompt
     positive_id, negative_id = alloc(), alloc()
-    nodes[positive_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": clip_ref}}
+    nodes[positive_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": base_positive, "clip": clip_ref}}
     nodes[negative_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative, "clip": clip_ref}}
     negative_ref = [negative_id, 0]
 
-    # Multi-character regional prompting: each region binds its own prompt (the
-    # character's LoRA trigger + traits) to an area of the canvas so two
-    # characters do not blend features. Uses ConditioningSetAreaPercentage with
-    # fractional (0-1) coordinates combined via ConditioningCombine. Krea 2
-    # (natural-language, no regional conditioning) ignores this feature.
-    regions = data.get("regions") or []
-    regions = regions if isinstance(regions, list) else []
-    region_prompts = [r for r in regions if str(r.get("prompt", "")).strip()]
-    if not krea2 and region_prompts:
-        conds = [[positive_id, 0]]  # whole-canvas base (quality / scene / global)
-        for r in region_prompts:
+    # Each character gets a feathered mask conditioning. A bound character LoRA
+    # is also attached as a hook, so its model and CLIP patches are active only
+    # while ComfyUI evaluates that character. Soft overlap at adjacent boundaries
+    # preserves one continuous scene instead of producing a visible split-screen.
+    # The character-free base remains the DEFAULT for background and interaction.
+    if regional_mode:
+        conds = []
+        mask_layouts = regional_mask_layout(regions, width, height)
+        empty_mask_id = alloc()
+        nodes[empty_mask_id] = {"class_type": "SolidMask", "inputs": {
+            "value": 0.0, "width": width, "height": height,
+        }}
+        for region_index, r in enumerate(regions):
+            region_clip_ref = clip_ref
+            if r["lora"]:
+                lora = selected_loras[normalized_lora_name(r["lora"])]
+                weight = bounded(lora.get("weight"), 0.7, 0, 1.5, integer=False)
+                hook_id, hooked_clip_id = alloc(), alloc()
+                nodes[hook_id] = {"class_type": "CreateHookLora", "inputs": {
+                    "lora_name": r["lora"], "strength_model": weight, "strength_clip": weight,
+                }}
+                nodes[hooked_clip_id] = {"class_type": "SetClipHooks", "inputs": {
+                    "clip": clip_ref, "hooks": [hook_id, 0],
+                    "apply_to_conds": True, "schedule_clip": False,
+                }}
+                region_clip_ref = [hooked_clip_id, 0]
             enc_id = alloc()
             nodes[enc_id] = {"class_type": "CLIPTextEncode",
-                             "inputs": {"text": str(r.get("prompt", "")).strip(), "clip": clip_ref}}
-            area_id = alloc()
-            nodes[area_id] = {"class_type": "ConditioningSetAreaPercentage", "inputs": {
-                "conditioning": [enc_id, 0],
-                "width": bounded(r.get("width"), 0.5, 0.05, 1.0, integer=False),
-                "height": bounded(r.get("height"), 0.5, 0.05, 1.0, integer=False),
-                "x": bounded(r.get("x"), 0.0, 0.0, 1.0, integer=False),
-                "y": bounded(r.get("y"), 0.0, 0.0, 1.0, integer=False),
-                "strength": bounded(r.get("strength"), 1.0, 0.0, 3.0, integer=False),
+                             "inputs": {"text": regional_character_prompt(
+                                 data, compiled, r, bound_lora_names), "clip": region_clip_ref}}
+            layout = mask_layouts[region_index]
+            solid_id = alloc()
+            nodes[solid_id] = {"class_type": "SolidMask", "inputs": {
+                "value": 1.0, "width": layout["width"], "height": layout["height"],
             }}
-            conds.append([area_id, 0])
+            mask_ref = [solid_id, 0]
+            if any(layout["feathers"].values()):
+                feather_id = alloc()
+                nodes[feather_id] = {"class_type": "FeatherMask", "inputs": {
+                    "mask": mask_ref, **layout["feathers"],
+                }}
+                mask_ref = [feather_id, 0]
+            composite_id = alloc()
+            nodes[composite_id] = {"class_type": "MaskComposite", "inputs": {
+                "destination": [empty_mask_id, 0], "source": mask_ref,
+                "x": layout["x"], "y": layout["y"], "operation": "add",
+            }}
+            masked_id = alloc()
+            nodes[masked_id] = {"class_type": "ConditioningSetMask", "inputs": {
+                "conditioning": [enc_id, 0], "mask": [composite_id, 0],
+                "strength": r["strength"], "set_cond_area": "mask bounds",
+            }}
+            conds.append([masked_id, 0])
         ref = conds[0]
         for c in conds[1:]:
             comb_id = alloc()
             nodes[comb_id] = {"class_type": "ConditioningCombine",
                               "inputs": {"conditioning_1": ref, "conditioning_2": c}}
             ref = [comb_id, 0]
-        positive_ref = ref
+        default_id = alloc()
+        nodes[default_id] = {"class_type": "ConditioningSetDefaultCombine", "inputs": {
+            "cond": ref, "cond_DEFAULT": [positive_id, 0],
+        }}
+        positive_ref = [default_id, 0]
     else:
         positive_ref = [positive_id, 0]
 
@@ -2015,16 +2447,10 @@ def build_workflow(data: dict) -> dict:
         }
         positive_ref, negative_ref = [apply_id, 0], [apply_id, 1]
 
-    if anima:
-        sampler_name, scheduler = anima_sampling_settings(model)
-    elif krea2:
-        sampler_name, scheduler = krea2_sampling_settings()["sampler"], krea2_sampling_settings()["scheduler"]
-    elif illustrious_profile:
-        sampler_name, scheduler = illustrious_profile["sampler"], illustrious_profile["scheduler"]
-    else:
-        sampler_name, scheduler = "dpmpp_2m_sde", "karras"
-    # Optional manual sampler/scheduler override; Krea 2 stays guidance-free.
-    if not krea2:
+    sampler_name, scheduler = sampling_profile["sampler"], sampling_profile["scheduler"]
+    # Optional manual sampler/scheduler override; locked distilled profiles keep
+    # the exact sampler contract they were trained for.
+    if not sampling_profile.get("locked"):
         custom_sampler = str(data.get("sampler", "") or "").strip()
         custom_scheduler = str(data.get("scheduler", "") or "").strip()
         if custom_sampler and custom_sampler != "auto":
@@ -2042,10 +2468,11 @@ def build_workflow(data: dict) -> dict:
     sample_ref = [sampler_id, 0]
     hires_enabled = illustrious and str(data.get("illustriousMode", "precision")) == "hires"
     if hires_enabled:
-        scale = bounded(data.get("hiresScale"), 1.25, 1.1, 1.5, integer=False)
-        hires_denoise = bounded(data.get("hiresDenoise"), 0.30, 0.15, 0.45, integer=False)
-        hires_steps = bounded(data.get("hiresSteps"), 20, 8, 30)
-        hires_cfg = bounded(data.get("hiresCfg"), 4.5, 3, 7, integer=False)
+        hires_defaults = sampling_profile.get("hires") or {}
+        scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25), 1.1, 1.5, integer=False)
+        hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.30), 0.15, 0.45, integer=False)
+        hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 18), 8, 30)
+        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 3, 7, integer=False)
         upscale_id, hires_sampler_id = alloc(), alloc()
         nodes[upscale_id] = {
             "class_type": "LatentUpscaleBy",
@@ -2787,6 +3214,39 @@ def google_translate(data: dict) -> dict:
 
 
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+MAX_BATCH_TASKS = 50
+MAX_BATCH_IMAGES = 200
+
+
+def expand_generation_jobs(jobs) -> list[dict]:
+    """Expand logical panel tasks into independent ComfyUI prompt jobs."""
+    if not isinstance(jobs, list) or not jobs or len(jobs) > MAX_BATCH_TASKS:
+        raise ValueError(f"任务队列必须包含 1-{MAX_BATCH_TASKS} 个逻辑任务。")
+    expanded: list[dict] = []
+    for task_index, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            raise ValueError("第 %d 个任务格式不正确。" % (task_index + 1))
+        raw_count = job.get("batchCount", 1)
+        try:
+            image_count = int(raw_count)
+        except (TypeError, ValueError):
+            raise ValueError("第 %d 个任务的生成数量无效。" % (task_index + 1)) from None
+        if not 1 <= image_count <= 16:
+            raise ValueError("第 %d 个任务的生成数量必须为 1-16。" % (task_index + 1))
+        for image_index in range(image_count):
+            item = dict(job)
+            item.pop("batchCount", None)
+            seed_text = str(item.get("seed", "") or "").strip()
+            if re.fullmatch(r"\d+", seed_text):
+                # Match the immediate-generation path: a fixed seed increments
+                # once per image, while -1/random is independently randomized.
+                item["seed"] = str((int(seed_text) + image_index) % (2**63 - 1))
+            expanded.append({"task_index": task_index, "image_index": image_index,
+                             "image_count": image_count, "payload": item})
+    if len(expanded) > MAX_BATCH_IMAGES:
+        raise ValueError(f"任务队列展开后共 {len(expanded)} 张，超过 {MAX_BATCH_IMAGES} 张上限；"
+                         "请拆成两次发送。")
+    return expanded
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2846,11 +3306,14 @@ class Handler(BaseHTTPRequestHandler):
                 vaes = info.get("VAELoader", {}).get("input", {}).get("required", {}).get("vae_name", [[]])[0]
                 anima_ready = ANIMA_TEXT_ENCODER in text_encoders and ANIMA_VAE in vaes
                 krea2_ready = KREA2_TEXT_ENCODER in text_encoders and KREA2_VAE in vaes
+                sampling_profiles = {name: model_sampling_profile(name)
+                                     for name in checkpoints + anima_models + krea2_models}
                 self.send_json({"checkpoints": checkpoints, "unavailable_checkpoints": unavailable_checkpoints,
                                 "anima_models": anima_models, "anima_ready": anima_ready,
                                 "krea2_models": krea2_models, "krea2_ready": krea2_ready,
                                 "anima_tag_count": len(ANIMA_TAG_INDEX), "loras": loras,
-                                "loraMeta": lora_meta_map(loras), "controlnets": controlnets})
+                                "loraMeta": lora_meta_map(loras), "controlnets": controlnets,
+                                "samplingProfiles": sampling_profiles})
             elif parsed.path == "/api/status":
                 queue = comfy_json("/queue")
                 self.send_json({"running": len(queue.get("queue_running", [])), "pending": len(queue.get("queue_pending", []))})
@@ -2908,7 +3371,7 @@ class Handler(BaseHTTPRequestHandler):
                     content = extract_image_upload(self.headers.get("Content-Type", ""), body)
                     self.send_json(parse_generation_info(content))
                 return
-            size = bounded(self.headers.get("Content-Length"), 0, 0, 5_000_000)
+            size = bounded(self.headers.get("Content-Length"), 0, 0, 50_000_000)
             data = json.loads(self.rfile.read(size).decode("utf-8"))
             if self.path == "/api/read-output":
                 name = str(data.get("name", "") or "").strip()
@@ -2954,15 +3417,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(import_lora_sidecar(str(data.get("name", ""))))
             elif self.path == "/api/generate-batch":
                 jobs = data.get("jobs")
-                if not isinstance(jobs, list) or not jobs or len(jobs) > 50:
-                    raise ValueError("任务队列必须包含 1-50 个任务。")
+                expanded = expand_generation_jobs(jobs)
+                # Build every workflow before submitting the first one. This
+                # prevents a malformed late task from leaving a partially sent
+                # queue that the panel can no longer account for.
+                prepared = [{**item, "workflow": build_workflow(item["payload"])}
+                            for item in expanded]
                 submitted = []
-                for index, job in enumerate(jobs):
-                    if not isinstance(job, dict):
-                        raise ValueError("第 %d 个任务格式不正确。" % (index + 1))
-                    submitted.append({"index": index,
-                                      "prompt_id": comfy_json("/prompt", "POST", build_workflow(job)).get("prompt_id")})
-                self.send_json({"jobs": submitted})
+                for index, item in enumerate(prepared):
+                    submitted.append({"index": index, "task_index": item["task_index"],
+                                      "image_index": item["image_index"],
+                                      "image_count": item["image_count"],
+                                      "prompt_id": comfy_json("/prompt", "POST", item["workflow"]).get("prompt_id")})
+                self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
+                                "total_images": len(submitted)})
             else:
                 self.send_json(comfy_json("/prompt", "POST", build_workflow(data)))
         except CLIENT_DISCONNECT_ERRORS:
