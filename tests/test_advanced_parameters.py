@@ -40,11 +40,13 @@ class SamplingProfileTests(unittest.TestCase):
 
     def test_installed_model_recommendations_match_validated_profiles(self):
         expected = {
-            "spectacularAnimeILXL_10.safetensors": (30, 5.0, "dpmpp_2m_sde", "simple"),
-            "milmuAnimeIllustriousXL_vPred01.safetensors": (30, 5.5, "dpmpp_2m_sde", "karras"),
+            "spectacularAnimeILXL_10.safetensors": (24, 7.0, "euler_ancestral", "beta"),
+            "milmuAnimeIllustriousXL_vPred01.safetensors": (30, 6.0, "euler", "normal"),
             "gockSoAnimeLoveSong_gocksoanimeLoveSong.safetensors": (30, 7.0, "dpmpp_2m_sde", "karras"),
             "anima-base-v1.0.safetensors": (34, 4.8, "er_sde", "simple"),
             "krea2TurboOfficialComfy_krea2TurboFp8.safetensors": (8, 1.0, "euler", "simple"),
+            "reedXXXIllustrious_v150.safetensors": (30, 7.0, "euler_ancestral", "normal"),
+            "plantMilkModelSuite_walnut.safetensors": (28, 3.0, "euler", "normal"),
         }
         for model, values in expected.items():
             with self.subTest(model=model):
@@ -121,8 +123,45 @@ class SamplingProfileTests(unittest.TestCase):
         model_sampling = self.nodes_of(nodes, "ModelSamplingDiscrete")
         self.assertEqual("v_prediction", model_sampling[0]["inputs"]["sampling"])
         sampler = self.nodes_of(nodes, "KSampler")[0]["inputs"]
-        self.assertEqual(("dpmpp_2m_sde", "karras"),
+        self.assertEqual(("euler", "normal"),
                          (sampler["sampler_name"], sampler["scheduler"]))
+
+    def test_tiled_vae_decode_is_a_real_workflow_option(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["vae"] = {"mode": "tiled", "tileSize": 512, "overlap": 64}
+        nodes = self.build(data)
+        tiled = self.nodes_of(nodes, "VAEDecodeTiled")
+        self.assertEqual(1, len(tiled))
+        self.assertEqual((512, 64),
+                         (tiled[0]["inputs"]["tile_size"], tiled[0]["inputs"]["overlap"]))
+        self.assertFalse(self.nodes_of(nodes, "VAEDecode"))
+
+    def test_freeu_and_vpred_cfg_rescale_are_capability_guarded(self):
+        freeu = payload("waiIllustriousSDXL_v140.safetensors")
+        freeu["modelEnhancement"] = {"mode": "freeu_v2"}
+        self.assertEqual(1, len(self.nodes_of(self.build(freeu), "FreeU_V2")))
+
+        krea = payload("krea2TurboOfficialComfy_krea2TurboFp8.safetensors")
+        krea["modelEnhancement"] = {"mode": "freeu_v2"}
+        with self.assertRaisesRegex(ValueError, "不支持 FreeU"):
+            self.build(krea)
+
+        milmu = payload("milmuAnimeIllustriousXL_vPred01.safetensors")
+        milmu["modelEnhancement"] = {"mode": "cfg_rescale", "multiplier": 0.65}
+        rescale = self.nodes_of(self.build(milmu), "RescaleCFG")
+        self.assertEqual(0.65, rescale[0]["inputs"]["multiplier"])
+
+        eps = payload("waiIllustriousSDXL_v140.safetensors")
+        eps["modelEnhancement"] = {"mode": "cfg_rescale"}
+        with self.assertRaisesRegex(ValueError, "仅对.*v-pred"):
+            self.build(eps)
+
+    def test_krea2_accepts_official_2k_aligned_resolution(self):
+        data = payload("krea2TurboOfficialComfy_krea2TurboFp8.safetensors")
+        data.update({"width": 2048, "height": 2048})
+        nodes = self.build(data)
+        latent = self.nodes_of(nodes, "EmptyLatentImage")[0]["inputs"]
+        self.assertEqual((2048, 2048), (latent["width"], latent["height"]))
 
 
 class BatchQueueTests(unittest.TestCase):

@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "id": "krea2-turbo",
+      "match": ["krea2", "krea 2"],
+      "family": "krea2",
+      "label": "Krea 2 Turbo",
+      "locked": true,
+      "prediction": "flow",
+      "guidance_supported": false,
+      "guidance_note": "8 步蒸馏免引导模型；SAG/PAG 和手动采样覆盖均禁用。",
+      "source": "Krea 2 官方开源仓库",
+      "source_url": "https://github.com/krea-ai/krea-2",
+      "resolution": {"min": 512, "max": 2048, "alignment": 16, "recommended": [[1024, 1024], [832, 1216], [1216, 832], [2048, 2048]]},
+      "capabilities": {"prompt_mode": "natural_language", "negative_prompt": false, "regional_prompting": false, "hires_fix": false, "tiled_vae": true, "quoted_text": true},
+      "combos": [
+        {"key": "recommended", "label": "官方 Turbo", "steps": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "guidance": "off", "note": "KSampler 的 CFG 1 等价于官方所述关闭 CFG；模型内置 shift 1.15。"}
+      ]
+    },
+    {
+      "id": "anima-hoseki-lustrousmix",
+      "match": ["hosekilustrousmixanima"],
+      "family": "anima",
+      "label": "Hoseki LustrousMix Anima",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/941345",
+      "combos": [
+        {"key": "recommended", "label": "作者推荐", "steps": 24, "cfg": 4.5, "sampler": "er_sde", "scheduler": "beta", "guidance": "off", "note": "作者推荐 ER SDE / Euler a、24 步、CFG 4–5。"},
+        {"key": "fast", "label": "快速", "steps": 20, "cfg": 4.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "快速检查构图和 LoRA。"},
+        {"key": "detail", "label": "细节", "steps": 30, "cfg": 4.5, "sampler": "er_sde", "scheduler": "beta", "guidance": "off", "note": "增加收敛但保持作者 CFG 范围。"}
+      ]
+    },
+    {
+      "id": "anima-nova-v3",
+      "match": ["novaanime"],
+      "family": "anima",
+      "label": "Nova Anime AM (Anima)",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/2604424",
+      "combos": [
+        {"key": "recommended", "label": "作者推荐", "steps": 24, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围：Euler a / Normal、20–30 步、CFG 4–6。"},
+        {"key": "fast", "label": "快速", "steps": 20, "cfg": 4.5, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围下限。"},
+        {"key": "detail", "label": "细节", "steps": 30, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围上限。"}
+      ]
+    },
+    {
+      "id": "anima-base",
+      "match": ["anima-base"],
+      "family": "anima",
+      "label": "Anima Base",
+      "source": "CircleStone Labs 官方模型卡",
+      "source_url": "https://huggingface.co/circlestone-labs/Anima",
+      "combos": [
+        {"key": "recommended", "label": "官方均衡", "steps": 34, "cfg": 4.8, "sampler": "er_sde", "scheduler": "simple", "guidance": "off", "note": "官方推荐 30–50 步、CFG 4–5；ER-SDE 为作者默认选择。"},
+        {"key": "fast", "label": "快速", "steps": 30, "cfg": 4.5, "sampler": "euler", "scheduler": "simple", "guidance": "off", "note": "保持在 Base 官方步数范围内。"},
+        {"key": "detail", "label": "细节", "steps": 42, "cfg": 5.0, "sampler": "er_sde", "scheduler": "simple", "guidance": "off", "note": "提高细节，仍在官方范围内。"}
+      ]
+    },
+    {
+      "id": "illustrious-spectacular-anime",
+      "match": ["spectacularanimeilxl"],
+      "family": "illustrious",
+      "label": "Spectacular Anime ILXL",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/1696158",
+      "combos": [
+        {"key": "recommended", "label": "作者推荐", "steps": 24, "cfg": 7.0, "sampler": "euler_ancestral", "scheduler": "beta", "guidance": "off", "note": "作者明确要求 Simple 或 Beta，禁止 Normal。"},
+        {"key": "fast", "label": "内置低步", "steps": 8, "cfg": 2.0, "sampler": "euler_ancestral", "scheduler": "beta", "guidance": "off", "note": "作者提供的低步组合；先用固定种子对比画风。"},
+        {"key": "detail", "label": "双阶段细节", "steps": 30, "cfg": 7.0, "sampler": "dpmpp_2m_sde", "scheduler": "beta", "guidance": "off", "note": "作者建议正式图使用二次采样。"}
+      ]
+    },
+    {
+      "id": "illustrious-milmu-vpred",
+      "match": ["milmuanimeillustriousxl", "milmu", "vpred"],
+      "family": "illustrious",
+      "label": "Milmu Anime Illustrious v-pred",
+      "prediction": "v_prediction",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/1077987",
+      "combos": [
+        {"key": "recommended", "label": "作者推荐", "steps": 30, "cfg": 6.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "作者推荐 30 步、CFG 5–7、Euler；保留 v-pred 模型采样。"},
+        {"key": "fast", "label": "快速", "steps": 24, "cfg": 5.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "低 CFG 快速构图。"},
+        {"key": "detail", "label": "细节", "steps": 34, "cfg": 6.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "增加收敛但不改变作者采样器。"}
+      ]
+    },
+    {
+      "id": "illustrious-wai-v14",
+      "match": ["waiillustrioussdxl"],
+      "family": "illustrious",
+      "label": "WAI Illustrious SDXL v14",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/827184",
+      "combos": [
+        {"key": "recommended", "label": "作者范围均衡", "steps": 28, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "v14 作者范围：25–40 步、CFG 5–7、Euler a。"},
+        {"key": "fast", "label": "快速", "steps": 25, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围下限。"},
+        {"key": "detail", "label": "细节", "steps": 36, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "正式图与 LoRA 细节。"}
+      ]
+    },
+    {
+      "id": "illustrious-reed-v15",
+      "match": ["reedxxxillustrious"],
+      "family": "illustrious",
+      "label": "REED XXX Illustrious v15",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/1717562",
+      "combos": [
+        {"key": "recommended", "label": "作者推荐", "steps": 30, "cfg": 7.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者最佳点约 30 步、CFG 7、Euler a。"},
+        {"key": "fast", "label": "快速", "steps": 20, "cfg": 5.5, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围内快速预览。"},
+        {"key": "detail", "label": "高清", "steps": 36, "cfg": 7.0, "sampler": "dpmpp_2m", "scheduler": "normal", "guidance": "off", "note": "作者支持 DPM++ 2M；适合二次采样。"}
+      ]
+    },
+    {
+      "id": "illustrious-plantmilk-walnut",
+      "match": ["plantmilkmodelsuite"],
+      "family": "illustrious",
+      "label": "PlantMilk Walnut (Illustrious)",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/1162518",
+      "combos": [
+        {"key": "recommended", "label": "作者推荐", "steps": 28, "cfg": 3.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "Walnut 作者推荐 Euler、CFG 3 起步、约 28 步。"},
+        {"key": "creative", "label": "变化", "steps": 28, "cfg": 4.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者允许 Euler a 与 CFG 3–6。"},
+        {"key": "detail", "label": "细节", "steps": 32, "cfg": 4.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "轻度增加步数，避免高 CFG。"}
+      ]
+    },
+    {
+      "id": "illustrious-base",
+      "match": ["illustriousxl_v01"],
+      "family": "illustrious",
+      "label": "Illustrious XL Base",
+      "source": "OnomaAI 官方模型卡",
+      "source_url": "https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0",
+      "combos": [
+        {"key": "recommended", "label": "官方均衡", "steps": 24, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "官方推荐 Euler a、20–28 步、CFG 5–7.5。"},
+        {"key": "fast", "label": "快速", "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "官方步数范围下限。"},
+        {"key": "detail", "label": "细节", "steps": 28, "cfg": 6.5, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "官方步数范围上限。"}
+      ]
+    },
+    {
+      "id": "sdxl-gockso-love-song",
+      "match": ["gocksoanimelovesong", "gockso"],
+      "family": "sdxl",
+      "label": "Gock So Anime Love Song (SDXL)",
+      "source": "模型作者 CivitAI 页面 / 本地材质测试",
+      "source_url": "https://civitai.com/models/768580",
+      "combos": [
+        {"key": "recommended", "label": "推荐", "steps": 30, "cfg": 7.0, "sampler": "dpmpp_2m_sde", "scheduler": "karras", "guidance": "off", "note": "当前本机材质基线。"},
+        {"key": "fast", "label": "快速", "steps": 24, "cfg": 6.5, "sampler": "dpmpp_2m", "scheduler": "karras", "guidance": "off", "note": "快速构图预览。"},
+        {"key": "detail", "label": "材质细节", "steps": 34, "cfg": 6.5, "sampler": "dpmpp_2m_sde", "scheduler": "karras", "guidance": "off", "note": "本机皮肤与材质测试配置。"}
+      ]
+    }
+  ]
+}
