@@ -52,7 +52,7 @@
 
 核心安装器不再改写 Python 源码中的路径。它会在 `启动面板.cmd` 中设置 `EASY_PANEL_COMFY_ROOT`、`EASY_PANEL_COMFY_INPUT`、`EASY_PANEL_OUTPUT` 和 `EASY_PANEL_LORA_DIR`，所以以后更新模块不会覆盖本机路径配置。
 
-核心安装后还会生成 `生成-LoRA同名TXT.cmd` 和 `智能导入-LoRA-TXT到JSON.cmd`。这两个入口写入安装时发现的 Python、ComfyUI 和 LoRA 路径，因此自定义安装位置也可以直接双击使用。生成器默认不覆盖已有 TXT；导入器默认先分析、要求输入 `YES`，并在写入前备份 `lora_notes.json`。
+核心安装后还会生成推荐入口 `生成-LoRA同名TXT.bat` 和 `智能导入-LoRA-TXT到JSON.bat`，并保留同名 `.cmd` 兼容旧快捷方式。这些入口写入安装时发现的 Python、ComfyUI 和 LoRA 路径，因此自定义安装位置也可以直接双击使用。生成器默认不覆盖已有 TXT；导入器默认先分析、要求输入 `YES`，并在写入前备份 `lora_notes.json`。
 
 ## 维护者：重新生成全部 ZIP
 

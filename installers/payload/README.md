@@ -648,13 +648,13 @@ LoRA 选择和权重会在当前浏览器会话刷新后恢复。移除 LoRA 或
 
 | 工具 | 双击入口 | 作用 | 默认安全行为 |
 | --- | --- | --- | --- |
-| LoRA 同名 TXT 生成器 | `生成-LoRA同名TXT.cmd` | 从 `.safetensors` 的 JSON 头部元数据生成结构化同名 TXT | 只生成缺失 TXT，已有 TXT 一律跳过 |
-| TXT 智能分区 JSON 导入器 | `智能导入-LoRA-TXT到JSON.cmd` | 理解现有 TXT，把各类标签分别合并进 `lora_notes.json` | 先完整分析，必须输入 `YES`；写入前自动备份；不覆盖手写非空字段 |
+| LoRA 同名 TXT 生成器 | `生成-LoRA同名TXT.bat` | 从 `.safetensors` 的 JSON 头部元数据生成结构化同名 TXT | 只生成缺失 TXT，已有 TXT 一律跳过 |
+| TXT 智能分区 JSON 导入器 | `智能导入-LoRA-TXT到JSON.bat` | 理解现有 TXT，把各类标签分别合并进 `lora_notes.json` | 先完整分析，必须输入 `YES`；写入前自动备份；不覆盖手写非空字段 |
 
 #### 7.6.1 一键生成缺失的同名 TXT
 
 1. 先关闭正在编辑 LoRA TXT 的记事本，避免文件占用。
-2. 双击面板目录中的 `生成-LoRA同名TXT.cmd`。
+2. 双击面板目录中的 `生成-LoRA同名TXT.bat`。
 3. 查看“扫描到 LoRA”“准备生成”和“保护并跳过已有 TXT”数量。
 4. 确认目标正确后输入大写 `YES`。
 5. 工具会在每个 LoRA 旁创建同名 `.txt`。
@@ -665,7 +665,7 @@ LoRA 选择和权重会在当前浏览器会话刷新后恢复。移除 LoRA 或
 
 ```powershell
 Set-Location G:\ComfyUI\ComfyUI_Easy_Panel
-.\生成-LoRA同名TXT.cmd --dry-run
+.\生成-LoRA同名TXT.bat --dry-run
 ```
 
 常用参数：
@@ -676,13 +676,13 @@ Set-Location G:\ComfyUI\ComfyUI_Easy_Panel
 | `--max-tags 120` | 每个模型最多保留 120 个训练标签；默认 80，允许 10–300 |
 | `--overwrite-generated` | 只覆盖带 `Easy Panel LoRA Sidecar v2` 标记的旧自动生成 TXT，并先备份 |
 | `--force` | 覆盖任意已有同名 TXT，并先备份；可能替换手写说明，非必要不要使用 |
-| 路径参数 | 可把单个 LoRA 或文件夹拖到 `.cmd` 上，也可在命令后写多个路径 |
+| 路径参数 | 可把单个 LoRA 或文件夹拖到 `.bat` 上，也可在命令后写多个路径 |
 
 被允许覆盖的旧 TXT 会按原相对目录备份到 `backup\lora-txt-generator-日期_时间\`。
 
 #### 7.6.2 智能识别 TXT 并分区保存 JSON
 
-1. 双击 `智能导入-LoRA-TXT到JSON.cmd`。
+1. 双击 `智能导入-LoRA-TXT到JSON.bat`。
 2. 程序扫描 LoRA 目录中的全部 TXT，只处理旁边存在同名 `.safetensors`、`.pt` 或 `.ckpt` 的文件。
 3. 它先完成全部识别并显示统计，此时尚未修改 JSON。
 4. 检查“成功识别”“会改变 JSON 条目”“无有效内容”“无同名 LoRA”和“错误”。
@@ -722,10 +722,12 @@ backup\lora-smart-import-report-日期_时间.json
 
 ```powershell
 Set-Location G:\ComfyUI\ComfyUI_Easy_Panel
-.\智能导入-LoRA-TXT到JSON.cmd --dry-run
+.\智能导入-LoRA-TXT到JSON.bat --dry-run
 ```
 
-只处理一个 TXT、一个 LoRA 或一个子目录，可以把目标拖到 `.cmd` 上，或写在命令末尾。`--replace` 会以 TXT 结果替换同名预设，适合明确要重建自动数据时使用，但它会改变原预设，建议先运行 `--dry-run` 并确认备份。
+只处理一个 TXT、一个 LoRA 或一个子目录，可以把目标拖到 `.bat` 上，或写在命令末尾。`--replace` 会以 TXT 结果替换同名预设，适合明确要重建自动数据时使用，但它会改变原预设，建议先运行 `--dry-run` 并确认备份。
+
+`.bat` 是推荐的双击入口；同名 `.cmd` 仅为旧版本和已有快捷方式保留，功能完全相同。
 
 #### 7.6.3 推荐的 TXT 写法
 
@@ -1441,8 +1443,10 @@ ComfyUI_Easy_Panel\
 ├── tests\                    # 自动测试
 ├── lora_txt_generator.py     # 从 safetensors 头部生成缺失的同名 TXT
 ├── lora_txt_to_json.py       # 智能分区并安全合并 lora_notes.json
-├── 生成-LoRA同名TXT.cmd      # TXT 生成器双击入口
-├── 智能导入-LoRA-TXT到JSON.cmd # 智能导入器双击入口
+├── 生成-LoRA同名TXT.bat      # TXT 生成器推荐双击入口
+├── 智能导入-LoRA-TXT到JSON.bat # 智能导入器推荐双击入口
+├── 生成-LoRA同名TXT.cmd      # 旧快捷方式兼容入口
+├── 智能导入-LoRA-TXT到JSON.cmd # 旧快捷方式兼容入口
 ├── classify_tags.py          # 新分类器的旧脚本兼容入口
 ├── import_all_sidecars.py    # 新导入器的旧脚本兼容入口
 ├── pose_editor_workflow.json # 空白 OpenPose 编辑工作流

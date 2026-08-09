@@ -42,7 +42,8 @@ function Sync-CorePayload {
     New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
     foreach ($file in "easy_panel.py", "index.html", "pose_editor_workflow.json", "README.md",
                       "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
-                      "import_all_sidecars.py", "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
+                      "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
+                      "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
         $source = Join-Path $repositoryRoot $file
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
             throw "核心源文件不存在：$source"

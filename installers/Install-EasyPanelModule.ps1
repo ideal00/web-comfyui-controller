@@ -222,6 +222,7 @@ function Install-PythonRequirements([string]$RepositoryPath) {
 
 function Write-LoraToolLaunchers([string]$Target, [string]$InputPath,
                                   [string]$OutputPath, [string]$LoraPath) {
+    $launcherEncoding = New-Object System.Text.UTF8Encoding($false)
     $toolEnvironment = @(
         "set `"EASY_PANEL_ROOT=$Target`"",
         "set `"EASY_PANEL_COMFY_ROOT=$script:ResolvedComfyRoot`"",
@@ -229,8 +230,7 @@ function Write-LoraToolLaunchers([string]$Target, [string]$InputPath,
         "set `"EASY_PANEL_OUTPUT=$OutputPath`"",
         "set `"EASY_PANEL_LORA_DIR=$LoraPath`""
     )
-    $txtGeneratorLauncher = Join-Path $Target "生成-LoRA同名TXT.cmd"
-    @(
+    $generatorContent = @(
         "@echo off",
         "chcp 65001 >nul",
         "setlocal",
@@ -241,9 +241,13 @@ function Write-LoraToolLaunchers([string]$Target, [string]$InputPath,
         "echo.",
         "pause",
         "exit /b %EXIT_CODE%"
-    ) | Set-Content -LiteralPath $txtGeneratorLauncher -Encoding UTF8
-    $txtImporterLauncher = Join-Path $Target "智能导入-LoRA-TXT到JSON.cmd"
-    @(
+    )
+    $txtGeneratorLauncher = Join-Path $Target "生成-LoRA同名TXT.bat"
+    $txtGeneratorLegacy = Join-Path $Target "生成-LoRA同名TXT.cmd"
+    foreach ($launcher in @($txtGeneratorLauncher, $txtGeneratorLegacy)) {
+        [IO.File]::WriteAllLines($launcher, $generatorContent, $launcherEncoding)
+    }
+    $importerContent = @(
         "@echo off",
         "chcp 65001 >nul",
         "setlocal",
@@ -254,7 +258,12 @@ function Write-LoraToolLaunchers([string]$Target, [string]$InputPath,
         "echo.",
         "pause",
         "exit /b %EXIT_CODE%"
-    ) | Set-Content -LiteralPath $txtImporterLauncher -Encoding UTF8
+    )
+    $txtImporterLauncher = Join-Path $Target "智能导入-LoRA-TXT到JSON.bat"
+    $txtImporterLegacy = Join-Path $Target "智能导入-LoRA-TXT到JSON.cmd"
+    foreach ($launcher in @($txtImporterLauncher, $txtImporterLegacy)) {
+        [IO.File]::WriteAllLines($launcher, $importerContent, $launcherEncoding)
+    }
     return @($txtGeneratorLauncher, $txtImporterLauncher)
 }
 
@@ -263,7 +272,8 @@ function Install-CoreModule {
     $payload = Join-Path $PSScriptRoot "payload"
     foreach ($required in "easy_panel.py", "index.html", "pose_editor_workflow.json", "README.md",
                            "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
-                           "import_all_sidecars.py", "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
+                           "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
+                           "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
         if (-not (Test-Path -LiteralPath (Join-Path $payload $required) -PathType Leaf)) {
             throw "核心安装包不完整，缺少 payload\$required。"
         }
@@ -278,7 +288,8 @@ function Install-CoreModule {
     $coreItems = @(
         "easy_panel.py", "index.html", "pose_editor_workflow.json", "README.md",
         "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
-        "import_all_sidecars.py", "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd",
+        "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
+        "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd",
         "easy_panel_app", "web"
     )
     $existingCore = @($coreItems | Where-Object { Test-Path -LiteralPath (Join-Path $target $_) })
@@ -349,6 +360,8 @@ function Install-LoraToolsModule {
         "lora_txt_to_json.py",
         "classify_tags.py",
         "import_all_sidecars.py",
+        "生成-LoRA同名TXT.bat",
+        "智能导入-LoRA-TXT到JSON.bat",
         "生成-LoRA同名TXT.cmd",
         "智能导入-LoRA-TXT到JSON.cmd",
         "easy_panel_app\__init__.py",
