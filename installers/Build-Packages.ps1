@@ -52,6 +52,7 @@ function Sync-CorePayload {
     }
     Copy-CleanDirectory (Join-Path $repositoryRoot "easy_panel_app") (Join-Path $payloadRoot "easy_panel_app")
     Copy-CleanDirectory (Join-Path $repositoryRoot "web") (Join-Path $payloadRoot "web")
+    Copy-CleanDirectory (Join-Path $repositoryRoot "launchers") (Join-Path $payloadRoot "launchers")
 }
 
 function New-Package([string]$Name, [string]$CommandFile, [switch]$Core, [switch]$Tags) {

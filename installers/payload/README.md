@@ -271,7 +271,7 @@ ComfyUI_Easy_Panel\vendor\anima-tags\anima-1.0.csv
 G:\ComfyUI\Start_ComfyUI_and_EasyPanel.bat
 ```
 
-它会检查模块化后端、模型配置目录和前端 JS 是否完整，设置新版所需环境变量，启动 ComfyUI 与 Easy Panel，并打开 `http://127.0.0.1:8190`。对应快捷方式仍可直接使用。
+它会检查模块化后端、模型配置目录和前端 JS 是否完整，设置新版所需环境变量，启动 ComfyUI 与 Easy Panel，并自动打开 Easy Panel（`http://127.0.0.1:8190`）和 ComfyUI（`http://127.0.0.1:8188`）两个网页。首次启动 ComfyUI 较慢时，脚本会等待 8188 就绪后再打开，不会提前显示连接失败页。
 
 全部使用结束后双击：
 
@@ -1104,6 +1104,8 @@ bobette, 1girl, red hair, green eyes, black uniform
 - 种子为 `-1` 时，每张图独立随机。
 - 固定种子时，后续图片按 `种子 + 1` 递增。
 - 面板单个 prompt 最长等待 60 分钟。
+- 点击生成后会显示实时进度条：包含当前第几张、已经完成几张以及 ComfyUI 当前采样步数。
+- 实时采样步数通过 ComfyUI WebSocket 获取；连接暂时中断时，进度条仍会按每张图片完成情况更新，不影响生成任务。
 
 ### 13.2 暂存任务队列
 
@@ -1200,7 +1202,7 @@ http://127.0.0.1:8188
 
 ### 15.3 判断卡死还是仍在运行
 
-- ComfyUI 有实时进度条：仍在运行。
+- Easy Panel 或 ComfyUI 的实时进度条仍在更新：任务仍在运行。
 - GPU 有占用，终端持续更新：通常仍在运行。
 - Easy Panel 显示运行 1：任务仍在 ComfyUI。
 - ComfyUI 终端出现 traceback / `error`：查看最后一个节点错误。
@@ -1441,6 +1443,7 @@ ComfyUI_Easy_Panel\
 ├── README.md                 # 本说明
 ├── installers\              # 各模块的一键安装器、构建脚本和 ZIP
 ├── tests\                    # 自动测试
+├── launchers\                # 标准便携版的一键启动 / 关闭 BAT 模板
 ├── lora_txt_generator.py     # 从 safetensors 头部生成缺失的同名 TXT
 ├── lora_txt_to_json.py       # 智能分区并安全合并 lora_notes.json
 ├── 生成-LoRA同名TXT.bat      # TXT 生成器推荐双击入口

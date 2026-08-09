@@ -278,7 +278,7 @@ function Install-CoreModule {
             throw "核心安装包不完整，缺少 payload\$required。"
         }
     }
-    foreach ($requiredDirectory in "easy_panel_app", "web") {
+    foreach ($requiredDirectory in "easy_panel_app", "web", "launchers") {
         if (-not (Test-Path -LiteralPath (Join-Path $payload $requiredDirectory) -PathType Container)) {
             throw "核心安装包不完整，缺少 payload\$requiredDirectory。"
         }
@@ -313,6 +313,25 @@ function Install-CoreModule {
             Copy-Item -LiteralPath $sourceItem -Destination $destinationItem -Force
         }
     }
+    $comfyDirectory = Get-Item -LiteralPath $script:ResolvedComfyRoot
+    if ($comfyDirectory.Parent.Name -like "ComfyUI_windows_portable*") {
+        $workspaceRoot = $comfyDirectory.Parent.Parent.FullName
+        if ([System.IO.Path]::GetFullPath((Split-Path -Parent $target)).TrimEnd('\') -eq
+            [System.IO.Path]::GetFullPath($workspaceRoot).TrimEnd('\')) {
+            $launcherBackup = Join-Path $target ("backup\installer-launchers-" + (Get-Date -Format "yyyy-MM-dd_HHmmss"))
+            foreach ($launcherName in "Start_ComfyUI_and_EasyPanel.bat", "Stop_ComfyUI_and_EasyPanel.bat") {
+                $existingLauncher = Join-Path $workspaceRoot $launcherName
+                if (Test-Path -LiteralPath $existingLauncher -PathType Leaf) {
+                    New-Item -ItemType Directory -Path $launcherBackup -Force | Out-Null
+                    Copy-Item -LiteralPath $existingLauncher -Destination (Join-Path $launcherBackup $launcherName) -Force
+                }
+                Copy-Item -LiteralPath (Join-Path $payload "launchers\$launcherName") -Destination $existingLauncher -Force
+            }
+            Write-Step "一键启动/关闭脚本已更新到 $workspaceRoot（启动时会打开 8190 和 8188）"
+        } else {
+            Write-Notice "使用了自定义面板目录，未覆盖工作目录中的相对路径启动脚本。"
+        }
+    }
     $panelScript = Join-Path $target "easy_panel.py"
     $outputPath = Join-Path $script:ResolvedComfyRoot "output"
     $inputPath = Join-Path $script:ResolvedComfyRoot "input"
@@ -341,12 +360,13 @@ function Install-CoreModule {
         "set `"EASY_PANEL_COMFY_INPUT=$inputPath`"",
         "set `"EASY_PANEL_OUTPUT=$outputPath`"",
         "set `"EASY_PANEL_LORA_DIR=$loraPath`"",
+        "start `"`" powershell.exe -NoProfile -WindowStyle Hidden -Command `"`$deadline=(Get-Date).AddSeconds(30); while ((Get-Date) -lt `$deadline) { if (Get-NetTCPConnection -LocalPort 8190 -State Listen -ErrorAction SilentlyContinue) { Start-Process 'http://127.0.0.1:8190'; Start-Process 'http://127.0.0.1:8188'; exit }; Start-Sleep -Milliseconds 300 }`"",
         "`"$script:ComfyPython`" easy_panel.py",
         "pause"
     ) | Set-Content -LiteralPath $launcher -Encoding ascii
     $toolLaunchers = Write-LoraToolLaunchers $target $inputPath $outputPath $loraPath
     Write-Step "核心面板已安装到 $target"
-    Write-Step "以后先启动 ComfyUI，再双击：$launcher"
+    Write-Step "以后先启动 ComfyUI，再双击：$launcher（会同时打开 Easy Panel 与 ComfyUI 网页）"
     Write-Step "LoRA TXT 工具：$($toolLaunchers[0])"
     Write-Step "LoRA JSON 工具：$($toolLaunchers[1])"
 }

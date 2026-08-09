@@ -1591,6 +1591,22 @@ def build_workflow(data: dict) -> dict:
 
 
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+
+
+def comfy_websocket_url() -> str:
+    comfy_address = urllib.parse.urlparse(COMFY)
+    websocket_scheme = "wss" if comfy_address.scheme == "https" else "ws"
+    websocket_path = comfy_address.path.rstrip("/") + "/ws"
+    return urllib.parse.urlunparse((
+        websocket_scheme,
+        comfy_address.netloc,
+        websocket_path,
+        "",
+        "",
+        "",
+    ))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -1609,6 +1625,50 @@ class Handler(BaseHTTPRequestHandler):
             # Reloading the panel or cancelling fetch() closes the browser socket.
             # This is normal and must not be converted into a second error response.
             return False
+
+    def stream_comfy_progress(self):
+        """Relay ComfyUI WebSocket JSON as same-origin server-sent events."""
+        try:
+            import asyncio
+            import aiohttp
+        except ImportError:
+            self.send_json({"error": "当前 Python 缺少 aiohttp，无法读取实时采样进度。"},
+                           HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        async def relay():
+            # build_workflow() submits prompts with this client_id. ComfyUI
+            # routes execution/progress events only to the matching socket.
+            client_id = "easy-panel"
+            separator = "&" if "?" in comfy_websocket_url() else "?"
+            target = comfy_websocket_url() + separator + urllib.parse.urlencode({"clientId": client_id})
+            timeout = aiohttp.ClientTimeout(total=None, connect=10, sock_read=None)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.ws_connect(target, heartbeat=30) as websocket:
+                    self.wfile.write(b": connected\n\n")
+                    self.wfile.flush()
+                    async for message in websocket:
+                        if message.type == aiohttp.WSMsgType.TEXT:
+                            encoded = ("data: " + message.data.replace("\n", "") + "\n\n").encode("utf-8")
+                            self.wfile.write(encoded)
+                            self.wfile.flush()
+                        elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                            break
+
+        try:
+            asyncio.run(relay())
+        except CLIENT_DISCONNECT_ERRORS:
+            return
+        except Exception:
+            # EventSource reconnects automatically. Avoid writing a second HTTP
+            # response after the stream headers have already been sent.
+            return
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -1643,6 +1703,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
+            elif parsed.path == "/api/progress-stream":
+                self.stream_comfy_progress()
             elif parsed.path == "/api/models":
                 info = comfy_json("/object_info")
                 all_checkpoints = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
@@ -1672,7 +1734,11 @@ class Handler(BaseHTTPRequestHandler):
                                 "samplingProfiles": sampling_profiles})
             elif parsed.path == "/api/status":
                 queue = comfy_json("/queue")
-                self.send_json({"running": len(queue.get("queue_running", [])), "pending": len(queue.get("queue_pending", []))})
+                self.send_json({
+                    "running": len(queue.get("queue_running", [])),
+                    "pending": len(queue.get("queue_pending", [])),
+                    "progress_stream": "/api/progress-stream",
+                })
             elif parsed.path == "/api/tags":
                 query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0]
                 self.send_json({"tags": search_tags(query[:100]), "total": len(TAG_INDEX)})

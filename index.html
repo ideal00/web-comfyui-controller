@@ -80,6 +80,11 @@
       </div><div class="switch"><input id="colorLive" type="checkbox" onchange="toggleColorLive()" disabled><div><b>实时预览调色效果</b><div class="small">仅生成单张时可用；开启后拖动滑块即时预览，无需重新生成。</div></div></div><div class="actions"><button type="button" class="secondary" onclick="resetColorCorrection()">重置调色值</button></div></div></details>
       <details style="margin:6px 0"><summary>整图重绘（img2img，二次元化）</summary><div class="switch"><input id="img2imgEnabled" type="checkbox" onchange="toggleImg2img()"><div><b>启用整图重绘</b><div class="small">以底图整图重绘为当前模型画风：先用 Krea 2 出真实底图，再切到 Illustrious / Anima 做二次元化。成图尺寸以原图为准。</div></div></div><div id="img2imgControls" style="display:none"><div class="two"><div><div class="field-title"><span>上传底图</span><span class="small">PNG / JPG / WEBP</span></div><input id="img2imgFile" type="file" accept="image/png,image/jpeg,image/webp" onchange="uploadImg2img()"></div><div><div class="field-title"><span>或从最近输出选择</span></div><select id="img2imgOutput" onchange="selectImg2imgOutput()"><option value="">— 选择已生成图（含 Krea 2 底图）—</option></select></div></div><div id="img2imgPreview" class="small" style="margin:6px 0"></div><div class="field-title"><span>重绘幅度</span><span class="small" title="整图重绘强度：0.3–0.5 微调细节/风格；0.6–0.8 明显改画风（转二次元常用 0.6 左右）；越接近 1 越接近全新生成。">低=微调，高=大改画风</span></div><input id="img2imgDenoise" type="number" min="0.1" max="1" step="0.05" value="0.6"></div></details>
       <div class="status" id="status">正在读取 ComfyUI 模型…</div>
+      <div class="generation-progress" id="generationProgress" data-connection="offline" hidden>
+        <div class="generation-progress-heading"><b id="generationProgressLabel">生成进度</b><span id="generationProgressPercent">0%</span></div>
+        <progress id="generationProgressBar" max="100" value="0">0%</progress>
+        <div class="small" id="generationProgressDetail">等待提交任务…</div>
+      </div>
       <button class="primary" id="generate" onclick="generate()">生成图片</button>
       <div class="actions" style="margin-top:6px"><button class="secondary" type="button" onclick="enqueueJob()">＋ 加入任务队列</button><button class="secondary" type="button" onclick="sendJobQueue()">发送队列（<span id="jobQueueCount">0</span>）</button><button class="secondary" type="button" onclick="clearJobQueue()">清空队列</button></div>
       <div id="jobQueueList" class="small" style="margin-top:6px"></div>
