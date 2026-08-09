@@ -17,6 +17,36 @@ DEFAULT_RESOLUTION = {
     "recommended": [[1024, 1024], [832, 1216], [1216, 832]],
 }
 DEFAULT_HIRES = {"scale": 1.25, "denoise": 0.30, "steps": 18, "cfg": 4.5}
+DEFAULT_FREEU = {
+    "key": "sdxl_official",
+    "label": "官方 SDXL / ComfyUI V2",
+    "b1": 1.3,
+    "b2": 1.4,
+    "s1": 0.9,
+    "s2": 0.2,
+    "source": "FreeU 作者 SDXL 推荐 + ComfyUI FreeU_V2 默认值",
+    "source_url": "https://github.com/ChenyangSi/FreeU#parameters",
+    "presets": [
+        {
+            "key": "sdxl_official",
+            "label": "官方 SDXL / ComfyUI V2（推荐）",
+            "b1": 1.3,
+            "b2": 1.4,
+            "s1": 0.9,
+            "s2": 0.2,
+            "note": "适用于本面板的 SDXL 与 Illustrious；FreeU 作者和 ComfyUI V2 节点数值一致。",
+        },
+        {
+            "key": "sdxl_gentle",
+            "label": "SDXL 柔和参考（Diffusers）",
+            "b1": 1.1,
+            "b2": 1.2,
+            "s1": 0.6,
+            "s2": 0.4,
+            "note": "增强更柔和；画面对比过重、暗部压黑或风格变化太大时可试。",
+        },
+    ],
+}
 DEFAULT_CAPABILITIES = {
     "prompt_mode": "tags",
     "negative_prompt": True,
@@ -156,6 +186,7 @@ def model_sampling_profile(model_name: str) -> dict:
         "locked": bool(profile.get("locked", False)),
         "prediction": prediction,
         "hires": copy.deepcopy(profile.get("hires") or DEFAULT_HIRES),
+        "freeu": copy.deepcopy(profile.get("freeu") or DEFAULT_FREEU),
         "resolution": resolution,
         "capabilities": capabilities,
         "guidance_supported": bool(profile.get("guidance_supported", family != "krea2")),

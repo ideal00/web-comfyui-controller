@@ -2,6 +2,19 @@
   "use strict";
 
   const byId = (id) => document.getElementById(id);
+  const FALLBACK_FREEU = {
+    key: "sdxl_official",
+    label: "官方 SDXL / ComfyUI V2",
+    b1: 1.3,
+    b2: 1.4,
+    s1: 0.9,
+    s2: 0.2,
+    source: "FreeU 作者 SDXL 推荐 + ComfyUI FreeU_V2 默认值",
+    presets: [
+      { key: "sdxl_official", label: "官方 SDXL / ComfyUI V2（推荐）", b1: 1.3, b2: 1.4, s1: 0.9, s2: 0.2, note: "适用于 SDXL 与 Illustrious。" },
+      { key: "sdxl_gentle", label: "SDXL 柔和参考（Diffusers）", b1: 1.1, b2: 1.2, s1: 0.6, s2: 0.4, note: "增强更柔和，适合官方值效果过重时。" },
+    ],
+  };
 
   function profile() {
     return typeof window.currentSamplingProfile === "function"
@@ -32,9 +45,12 @@
           </div>
         </div>
         <div id="freeuControls" style="display:none">
-          <div class="field-title"><span>FreeU V2 参数</span><span class="small">ComfyUI 原生默认值，建议先固定种子 A/B 对比</span></div>
-          <div class="two"><input id="freeuB1" type="number" min="0" max="10" step="0.01" value="1.3" title="Backbone stage 1"><input id="freeuB2" type="number" min="0" max="10" step="0.01" value="1.4" title="Backbone stage 2"></div>
-          <div class="two" style="margin-top:6px"><input id="freeuS1" type="number" min="0" max="10" step="0.01" value="0.9" title="Skip stage 1"><input id="freeuS2" type="number" min="0" max="10" step="0.01" value="0.2" title="Skip stage 2"></div>
+          <div class="field-title"><span>FreeU V2 推荐组合</span><span class="small">开启默认使用 SDXL / Illustrious 官方组合</span></div>
+          <select id="freeuPreset" onchange="freeuPresetChanged(this.value)"><option value="sdxl_official">官方 SDXL / ComfyUI V2（推荐）</option><option value="sdxl_gentle">SDXL 柔和参考（Diffusers）</option><option value="custom">自定义</option></select>
+          <div id="freeuPresetInfo" class="small" style="margin-top:6px"></div>
+          <div class="two" style="margin-top:8px"><div><div class="field-title"><span>b1 · 主干阶段 1</span></div><input id="freeuB1" type="number" min="0" max="10" step="0.01" value="1.3" title="放大第一阶段 backbone 特征" oninput="freeuValueChanged()"></div><div><div class="field-title"><span>b2 · 主干阶段 2</span></div><input id="freeuB2" type="number" min="0" max="10" step="0.01" value="1.4" title="放大第二阶段 backbone 特征" oninput="freeuValueChanged()"></div></div>
+          <div class="two"><div><div class="field-title"><span>s1 · 跳连阶段 1</span></div><input id="freeuS1" type="number" min="0" max="10" step="0.01" value="0.9" title="衰减第一阶段 skip 特征" oninput="freeuValueChanged()"></div><div><div class="field-title"><span>s2 · 跳连阶段 2</span></div><input id="freeuS2" type="number" min="0" max="10" step="0.01" value="0.2" title="衰减第二阶段 skip 特征" oninput="freeuValueChanged()"></div></div>
+          <div class="small" style="margin-top:6px">b1/b2 增强主干语义；s1/s2 抑制跳连造成的过度平滑或异常细节。建议固定种子，与关闭状态 A/B 对比。</div>
         </div>
         <div id="cfgRescaleControls" style="display:none">
           <div class="field-title"><span>CFG Rescale 强度</span><span class="small">降低高 CFG 的过曝与色彩烧灼</span></div>
@@ -83,6 +99,59 @@
     }
   }
 
+  function freeuConfig() {
+    const configured = profile().freeu;
+    return configured && Array.isArray(configured.presets) ? configured : FALLBACK_FREEU;
+  }
+
+  function updateFreeuInfo() {
+    const select = byId("freeuPreset");
+    const info = byId("freeuPresetInfo");
+    if (!select || !info) return;
+    const preset = freeuConfig().presets.find((item) => item.key === select.value);
+    info.textContent = preset
+      ? `${preset.note} 当前：b1 ${preset.b1} · b2 ${preset.b2} · s1 ${preset.s1} · s2 ${preset.s2}`
+      : "自定义参数；数值 1 表示该通道不缩放。";
+  }
+
+  window.applyFreeuPreset = function (key, silent) {
+    const config = freeuConfig();
+    const preset = config.presets.find((item) => item.key === key) ||
+      config.presets.find((item) => item.key === config.key) || config;
+    [["freeuB1", "b1"], ["freeuB2", "b2"], ["freeuS1", "s1"], ["freeuS2", "s2"]]
+      .forEach(([id, field]) => { if (byId(id)) byId(id).value = preset[field]; });
+    if (byId("freeuPreset")) byId("freeuPreset").value = preset.key;
+    updateFreeuInfo();
+    if (!silent && byId("status")) {
+      byId("status").textContent = `已应用 ${preset.label}：b1 ${preset.b1} / b2 ${preset.b2} / s1 ${preset.s1} / s2 ${preset.s2}。`;
+    }
+  };
+
+  window.freeuPresetChanged = function (key) {
+    if (key === "custom") updateFreeuInfo();
+    else window.applyFreeuPreset(key, false);
+  };
+
+  window.freeuValueChanged = function () {
+    if (byId("freeuPreset")) byId("freeuPreset").value = "custom";
+    updateFreeuInfo();
+  };
+
+  function syncFreeuPresets() {
+    const select = byId("freeuPreset");
+    if (!select) return;
+    const config = freeuConfig();
+    const previous = select.value || config.key;
+    select.innerHTML = config.presets.map((preset) =>
+      `<option value="${preset.key}">${preset.label}</option>`
+    ).join("") + '<option value="custom">自定义</option>';
+    select.value = previous === "custom" || config.presets.some((preset) => preset.key === previous)
+      ? previous
+      : config.key;
+    if (select.value !== "custom") window.applyFreeuPreset(select.value, true);
+    else updateFreeuInfo();
+  }
+
   function syncCapabilities() {
     const current = profile();
     const caps = current.capabilities || {};
@@ -120,6 +189,7 @@
       }
     }
     syncSourceLink();
+    syncFreeuPresets();
     window.modelAdvancedChanged(true);
     window.vaeModeChanged(true);
   }
@@ -132,7 +202,7 @@
       byId("status").textContent = mode === "off"
         ? "模型增强已关闭，保持原始模型基线。"
         : mode === "freeu_v2"
-          ? "FreeU V2 已启用；建议固定种子与关闭状态对比，效果不佳时直接关闭。"
+          ? `FreeU V2 已启用：${byId("freeuPreset")?.selectedOptions[0]?.textContent || "当前推荐组合"}；建议固定种子与关闭状态对比。`
           : "CFG Rescale 已启用，仅用于当前 v-pred 模型。";
     }
   };

@@ -139,7 +139,24 @@ class SamplingProfileTests(unittest.TestCase):
     def test_freeu_and_vpred_cfg_rescale_are_capability_guarded(self):
         freeu = payload("waiIllustriousSDXL_v140.safetensors")
         freeu["modelEnhancement"] = {"mode": "freeu_v2"}
-        self.assertEqual(1, len(self.nodes_of(self.build(freeu), "FreeU_V2")))
+        freeu_nodes = self.nodes_of(self.build(freeu), "FreeU_V2")
+        self.assertEqual(1, len(freeu_nodes))
+        self.assertEqual((1.3, 1.4, 0.9, 0.2),
+                         tuple(freeu_nodes[0]["inputs"][key]
+                               for key in ("b1", "b2", "s1", "s2")))
+
+        configured = easy_panel.model_sampling_profile(
+            "waiIllustriousSDXL_v140.safetensors")["freeu"]
+        self.assertEqual("sdxl_official", configured["key"])
+        self.assertEqual(2, len(configured["presets"]))
+
+        gentle = payload("waiIllustriousSDXL_v140.safetensors")
+        gentle["modelEnhancement"] = {
+            "mode": "freeu_v2", "b1": 1.1, "b2": 1.2, "s1": 0.6, "s2": 0.4,
+        }
+        gentle_node = self.nodes_of(self.build(gentle), "FreeU_V2")[0]["inputs"]
+        self.assertEqual((1.1, 1.2, 0.6, 0.4),
+                         tuple(gentle_node[key] for key in ("b1", "b2", "s1", "s2")))
 
         krea = payload("krea2TurboOfficialComfy_krea2TurboFp8.safetensors")
         krea["modelEnhancement"] = {"mode": "freeu_v2"}

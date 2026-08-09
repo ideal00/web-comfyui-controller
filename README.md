@@ -948,7 +948,8 @@ Krea 2 是蒸馏免引导模型，面板锁定：
 
 ### 10.3 模型增强与显存选项
 
-- **FreeU V2**：无需额外模型的结构增强；SDXL / Illustrious 可试，默认关闭。面板默认值对应 ComfyUI 节点推荐：`b1 1.3`、`b2 1.4`、`s1 0.9`、`s2 0.2`。
+- **FreeU V2**：无需额外模型的结构增强；SDXL / Illustrious 可试，功能默认关闭。开启时默认选择“官方 SDXL / ComfyUI V2”：`b1 1.3`、`b2 1.4`、`s1 0.9`、`s2 0.2`。这组数值同时来自 [FreeU 作者给出的 SDXL 参数](https://github.com/ChenyangSi/FreeU#parameters)和 [ComfyUI FreeU_V2 官方节点默认值](https://docs.comfy.org/built-in-nodes/FreeU_V2)。
+- 如果官方组合让画面对比过重、暗部压黑或风格变化太大，可一键切换“SDXL 柔和参考（Diffusers）”：`b1 1.1`、`b2 1.2`、`s1 0.6`、`s2 0.4`。此组合来自 [Hugging Face Diffusers 的 SDXL FreeU 示例](https://huggingface.co/docs/diffusers/v0.22.0/en/using-diffusers/freeu)，它作为备选，不取代与本项目实际 ComfyUI V2 节点完全一致的默认组合。
 - **CFG Rescale**：只对 v-pred 模型开放，例如 Milmu；建议从 `0.7` 起步。普通 eps 模型会被后端拒绝，避免“看似生效、实际不适用”。
 - **Tiled VAE**：大图或显存紧张时选择，默认 tile `512`、overlap `64`。它降低 VAE 峰值显存，但编码/解码会变慢；显存足够时保持标准 VAE。
 - **Krea 2 Turbo 2K**：允许对齐后的最高 `2048 × 2048`；8 GB 显存不建议直接从 2K 起步。

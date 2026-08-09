@@ -1232,15 +1232,16 @@ def build_workflow(data: dict) -> dict:
     if enhancement_mode == "freeu_v2":
         if not capabilities.get("freeu_v2"):
             raise ValueError(f"{sampling_profile['label']} 不支持 FreeU V2。")
+        freeu_defaults = sampling_profile.get("freeu") or {}
         enhance_id = alloc()
         nodes[enhance_id] = {
             "class_type": "FreeU_V2",
             "inputs": {
                 "model": model_ref,
-                "b1": bounded(enhancement.get("b1"), 1.3, 0.0, 10.0, integer=False),
-                "b2": bounded(enhancement.get("b2"), 1.4, 0.0, 10.0, integer=False),
-                "s1": bounded(enhancement.get("s1"), 0.9, 0.0, 10.0, integer=False),
-                "s2": bounded(enhancement.get("s2"), 0.2, 0.0, 10.0, integer=False),
+                "b1": bounded(enhancement.get("b1"), freeu_defaults.get("b1", 1.3), 0.0, 10.0, integer=False),
+                "b2": bounded(enhancement.get("b2"), freeu_defaults.get("b2", 1.4), 0.0, 10.0, integer=False),
+                "s1": bounded(enhancement.get("s1"), freeu_defaults.get("s1", 0.9), 0.0, 10.0, integer=False),
+                "s2": bounded(enhancement.get("s2"), freeu_defaults.get("s2", 0.2), 0.0, 10.0, integer=False),
             },
         }
         model_ref = [enhance_id, 0]
