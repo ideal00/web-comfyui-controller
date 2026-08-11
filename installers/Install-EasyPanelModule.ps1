@@ -523,7 +523,11 @@ function Test-ModelComponents {
         @{ Name = "OpenPose ControlNet"; Path = (Join-Path $models "controlnet"); Pattern = "*openpose*"; Required = $false },
         @{ Name = "Anima 文本编码器"; Path = (Join-Path $models "text_encoders"); Pattern = "qwen_3_06b_base.safetensors"; Required = $false },
         @{ Name = "Krea 2 文本编码器"; Path = (Join-Path $models "text_encoders"); Pattern = "qwen3VL4BAbliteratedComfyui_v10.safetensors"; Required = $false },
-        @{ Name = "Anima / Krea 2 VAE"; Path = (Join-Path $models "vae"); Pattern = "qwen_image_vae.safetensors"; Required = $false }
+        @{ Name = "Anima / Krea 2 VAE"; Path = (Join-Path $models "vae"); Pattern = "qwen_image_vae.safetensors"; Required = $false },
+        @{ Name = "Anime6B 超分"; Path = (Join-Path $models "upscale_models"); Pattern = "RealESRGAN_x4plus_anime_6B.pth"; Required = $false },
+        @{ Name = "FaceDetailer 检测模型"; Path = (Join-Path $models "ultralytics\bbox"); Pattern = "face_yolov8m.pt"; Required = $false },
+        @{ Name = "SeedVR2 3B Int8"; Path = (Join-Path $models "diffusion_models"); Pattern = "seedvr2_3b_int8_convrot.safetensors"; Required = $false },
+        @{ Name = "SeedVR2 VAE"; Path = (Join-Path $models "vae"); Pattern = "seedvr2_ema_vae_fp16.safetensors"; Required = $false }
     )
     foreach ($check in $checks) {
         $matches = @()
@@ -544,6 +548,16 @@ function Test-ModelComponents {
     $krea = @($diffusionFiles | Where-Object { $_.Name -match "krea.?2" })
     Write-Host ("[{0}] Anima 扩散模型：{1}" -f $(if ($anima.Count) { "已找到" } else { "可选缺少" }), $(if ($anima.Count) { $anima[0].FullName } else { ($diffusionDirs -join " 或 ") }))
     Write-Host ("[{0}] Krea 2 扩散模型：{1}" -f $(if ($krea.Count) { "已找到" } else { "可选缺少" }), $(if ($krea.Count) { $krea[0].FullName } else { ($diffusionDirs -join " 或 ") }))
+    foreach ($node in @(
+        @{ Name = "Impact Subpack / Face detector"; Path = (Join-Path $script:ResolvedComfyRoot "custom_nodes\ComfyUI-Impact-Subpack") },
+        @{ Name = "Ultimate SD Upscale"; Path = (Join-Path $script:ResolvedComfyRoot "custom_nodes\ComfyUI_UltimateSDUpscale") }
+    )) {
+        $state = if (Test-Path -LiteralPath $node.Path -PathType Container) { "已找到" } else { "可选缺少" }
+        Write-Host ("[{0}] {1}：{2}" -f $state, $node.Name, $node.Path)
+    }
+    Write-Notice "SeedVR2 官方下载：https://huggingface.co/Comfy-Org/SeedVR2"
+    Write-Notice "FaceDetailer 节点：https://github.com/ltdrdata/ComfyUI-Impact-Subpack"
+    Write-Notice "Ultimate SD Upscale：https://github.com/ssitu/ComfyUI_UltimateSDUpscale"
     Write-Notice "模型权重没有随安装包分发。请从合法来源取得，并遵守各模型许可证。"
 }
 

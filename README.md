@@ -57,13 +57,15 @@ Easy Panel 预览区
 | 文生图 | 支持 | 支持 | 支持 | 支持 |
 | 普通 LoRA | 支持 | 支持 | 支持，使用模型侧加载 | 支持，使用模型侧加载 |
 | 中文转换 / 提示词编译 | 支持 | 支持 | 支持，额外提供分层提示词 | 支持，偏自然语言 |
-| 精准 / 高清模式 | 不显示 | 支持 | 不显示 | 不显示 |
-| 局部蒙版修复 | 不显示 | 支持 | 不显示 | 不显示 |
+| 精准 / 高清模式 | 支持，按模型参数 | 支持，按模型参数 | 不显示 | 不显示 |
+| 局部蒙版修复 | 支持 | 支持 | 不显示 | 不显示 |
 | OpenPose ControlNet | 支持 | 支持 | 不支持当前 SDXL ControlNet | 不支持当前 SDXL ControlNet |
 | 多人区域提示词 | 支持 | 支持 | 不支持 | 不支持 |
 | SAG / PAG | 支持 | 支持 | 支持，建议谨慎使用 | 不支持，自动锁定关闭 |
 | 整图 img2img | 支持 | 支持 | 支持 | 支持 |
 | 生成后调色 | 支持 | 支持 | 支持 | 支持 |
+| Anime6B / SeedVR2 后处理超分 | 支持 | 支持 | 支持 | 支持 |
+| Ultimate SD Upscale | 支持 | 支持 | 不支持 | 不支持 |
 | 读图还原参数 | 支持 | 支持 | 支持 | 支持 |
 
 主要功能包括：
@@ -840,20 +842,51 @@ Anima 和 Krea 2 会自动禁用当前 Xinsir SDXL OpenPose 链路。
 
 ### 9.2 Illustrious 高清模式
 
-高清模式先生成基础 latent，再执行 `LatentUpscaleBy` 和第二次低重绘采样。
+高清模式先解码第一次采样结果，使用 `RealESRGAN_x4plus_anime_6B` 在像素域执行动漫专用 AI 超分，再用 Lanczos 缩到目标尺寸，经 VAE 编码执行第二次低重绘采样。这能重建轮廓与纹理，避免 latent 插值造成的整体柔糊。
+
+所需模型：`ComfyUI/models/upscale_models/RealESRGAN_x4plus_anime_6B.pth`。缺少该文件时，ComfyUI 会在提交高清任务时报告模型不存在。
 
 默认思路：
 
 - 放大倍率：`1.25×`
-- 重绘幅度：`0.25–0.35`
-- 二次步数：`16–20`
+- 重绘幅度：`0.30–0.40`（默认 `0.35`）
+- 二次步数：`18–24`（默认 `20`）
 - 二次 CFG：`4.0–4.5`
 
 8 GB 显存建议：
 
 - 基础尺寸较小时使用 `1.25×`。
 - 基础尺寸已经较大时改为 `1.10–1.15×`。
+- 显存紧张时启用分块 VAE；高清链路的首次解码、重新编码和最终解码都会使用同一分块设置。
 - 若只是判断 LoRA 风格，继续用精准模式。
+
+#### 9.2.1 输出增强工作流
+
+“模型增强与低显存 VAE”面板提供与高清二次采样互斥的整图输出增强。面板会读取 `/api/models` 的真实节点与权重清单；依赖不完整的选项会直接禁用，不会提交一个必然缺节点的工作流。
+
+| 模式 | 适用场景 | 实际链路 |
+| --- | --- | --- |
+| Anime6B 后处理超分 | Anima、Krea 2 或不希望再次改变构图 | `RealESRGAN_x4plus_anime_6B` → Lanczos 精确目标尺寸；不做扩散重绘 |
+| SeedVR2 生成式超分 | 小图修复、轮廓与纹理重建 | 原生 SeedVR2 3B Int8，一步采样，支持 LAB / Wavelet / AdaIN 色彩回正 |
+| Ultimate SD Upscale | SDXL / Illustrious 的 2× 以上大图 | Anime6B 预放大后按 tile 扩散细化，默认 512 tile、20 步、denoise 0.2 |
+
+可选后级：
+
+- `FaceDetailer` 在超分后检测单人脸并局部重绘。多人分区与 Krea 2 会安全禁用，避免一条检测支路错误覆盖多个人物。
+- 原生 `ColorTransfer` 可在最终输出前把颜色匹配回第一次解码的基准图，默认 Reinhard LAB、强度 `0.7`。
+- 高清二次采样现在同时支持通用 SDXL / Gock 和 Illustrious，并按具体模型配置二次倍率、denoise、步数、CFG、采样器和调度器。
+
+本机依赖位置：
+
+```text
+ComfyUI/custom_nodes/ComfyUI_UltimateSDUpscale/
+ComfyUI/custom_nodes/ComfyUI-Impact-Subpack/
+ComfyUI/models/ultralytics/bbox/face_yolov8m.pt
+ComfyUI/models/diffusion_models/seedvr2_3b_int8_convrot.safetensors
+ComfyUI/models/vae/seedvr2_ema_vae_fp16.safetensors
+```
+
+安装或更新自定义节点后必须重启 ComfyUI。画质判断请固定 checkpoint、VAE、提示词、LoRA、seed 和基础尺寸，每次只切换一个增强模式做 GPU A/B；不要把高清二次采样、SeedVR2 和 Ultimate 同时叠加。
 
 ### 9.3 Illustrious 局部修复
 
@@ -1413,7 +1446,7 @@ Set-Location G:\ComfyUI\ComfyUI_Easy_Panel
 & "C:\Program Files\nodejs\node.exe" --check .\web\assets\js\panel.js
 ```
 
-测试覆盖模型推荐、高级参数、SAG/PAG、高清采样、多人区域隔离、任务队列展开、LoRA 标签分类、TXT 解析、safetensors 头部读取和 JSON 安全合并等核心逻辑。
+测试覆盖模型推荐、高级参数、SAG/PAG、模型级高清采样、Anime6B / SeedVR2 / Ultimate 输出增强、FaceDetailer、原生色彩匹配、元数据恢复、多人区域隔离、任务队列展开、LoRA 标签分类、TXT 解析、safetensors 头部读取和 JSON 安全合并等核心逻辑。真实 GPU 多模型画质 A/B 与外部翻译端到端测试仍分别需要显卡运行和有效 API Key。
 
 ### 18.2 目录结构
 

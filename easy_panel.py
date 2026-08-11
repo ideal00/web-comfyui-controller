@@ -92,6 +92,32 @@ ANIMA_VAE = "qwen_image_vae.safetensors"
 
 KREA2_TEXT_ENCODER = "qwen3VL4BAbliteratedComfyui_v10.safetensors"
 KREA2_VAE = ANIMA_VAE
+HIRES_UPSCALE_MODEL = "RealESRGAN_x4plus_anime_6B.pth"
+SEEDVR2_MODEL = "seedvr2_3b_int8_convrot.safetensors"
+SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
+FACE_DETECTOR_MODEL = "bbox/face_yolov8m.pt"
+
+
+def object_info_choices(info: dict, class_type: str, input_name: str) -> list[str]:
+    """Read old list combos and ComfyUI's newer dynamic COMBO schemas."""
+    spec = (info.get(class_type, {}).get("input", {}).get("required", {})
+            .get(input_name, []))
+    if not isinstance(spec, list) or not spec:
+        return []
+    if len(spec) > 1 and isinstance(spec[1], dict):
+        options = spec[1].get("options")
+        if isinstance(options, list):
+            return [str(item.get("key") if isinstance(item, dict) else item)
+                    for item in options
+                    if (item.get("key") if isinstance(item, dict) else item) is not None]
+    if isinstance(spec[0], list):
+        return [str(item) for item in spec[0]]
+    # Some loader inputs expose the choices directly without an option metadata dict.
+    if all(isinstance(item, str) for item in spec) and spec[0] not in {
+        "COMBO", "COMFY_DYNAMICCOMBO_V3",
+    }:
+        return list(spec)
+    return []
 
 
 # Compatibility exports now resolve through the data-driven model catalog.
@@ -1192,7 +1218,8 @@ def build_workflow(data: dict) -> dict:
         sampling_id = alloc()
         nodes[sampling_id] = {
             "class_type": "ModelSamplingDiscrete",
-            "inputs": {"model": model_ref, "sampling": "v_prediction", "zsnr": False},
+            "inputs": {"model": model_ref, "sampling": "v_prediction",
+                       "zsnr": bool(sampling_profile.get("zsnr", False))},
         }
         model_ref = [sampling_id, 0]
 
@@ -1378,6 +1405,7 @@ def build_workflow(data: dict) -> dict:
     # Whole-image redraw (img2img): encode a base image (e.g. a Krea 2 render) and
     # re-draw it with the current model at denoise < 1. Works for Anima / Krea 2 /
     # Illustrious alike, which is how the Krea 2 -> Illustrious/Anima anime pass works.
+    sampling_width, sampling_height = width, height
     img2img_data = data.get("img2img") or {}
     img2img = bool(isinstance(img2img_data, dict) and img2img_data.get("enabled"))
     repair = (not anima) and str(data.get("illustriousMode", "precision")) == "repair"
@@ -1392,6 +1420,11 @@ def build_workflow(data: dict) -> dict:
                 _iw, _ih = _probe.size
         except Exception:
             _iw = _ih = 0
+        if _iw > 0 and _ih > 0:
+            # VAEEncode crops to the model's spatial alignment. Keep the hires
+            # target based on the latent size that the first sampler really sees.
+            sampling_width = max(8, _iw - _iw % 8)
+            sampling_height = max(8, _ih - _ih % 8)
         if _iw * _ih > 2_500_000:
             raise ValueError(
                 f"底图 {_iw}×{_ih}（{_iw * _ih / 1e6:.2f} MP）过大，8GB 显存容易溢出；"
@@ -1507,25 +1540,85 @@ def build_workflow(data: dict) -> dict:
     }
 
     sample_ref = [sampler_id, 0]
-    hires_enabled = illustrious and str(data.get("illustriousMode", "precision")) == "hires"
+    color_reference_ref = None
+    hires_enabled = bool(capabilities.get("hires_fix")) and not anima and not krea2 and (
+        str(data.get("illustriousMode", "precision")) == "hires"
+    )
     if hires_enabled:
         hires_defaults = sampling_profile.get("hires") or {}
-        scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25), 1.1, 1.5, integer=False)
-        hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.30), 0.15, 0.45, integer=False)
-        hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 18), 8, 30)
-        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 3, 7, integer=False)
-        upscale_id, hires_sampler_id = alloc(), alloc()
-        nodes[upscale_id] = {
-            "class_type": "LatentUpscaleBy",
-            "inputs": {"samples": sample_ref, "upscale_method": "bislerp", "scale_by": scale},
+        scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25),
+                        hires_defaults.get("min_scale", 1.1),
+                        hires_defaults.get("max_scale", 1.5), integer=False)
+        hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.35),
+                                hires_defaults.get("min_denoise", 0.15),
+                                hires_defaults.get("max_denoise", 0.45), integer=False)
+        hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 8, 30)
+        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 1, 15, integer=False)
+        hires_sampler = str(hires_defaults.get("sampler", "auto") or "auto")
+        hires_scheduler = str(hires_defaults.get("scheduler", "auto") or "auto")
+        requested_hires_sampler = str(data.get("hiresSampler", "") or "").strip()
+        requested_hires_scheduler = str(data.get("hiresScheduler", "") or "").strip()
+        if requested_hires_sampler and requested_hires_sampler != "auto":
+            hires_sampler = requested_hires_sampler
+        if requested_hires_scheduler and requested_hires_scheduler != "auto":
+            hires_scheduler = requested_hires_scheduler
+        if hires_sampler == "auto":
+            hires_sampler = sampler_name
+        if hires_scheduler == "auto":
+            hires_scheduler = scheduler
+        # Match JavaScript Math.round used by the size preview. Python round()
+        # uses bankers' rounding and disagrees at exact .5 boundaries.
+        hires_width = max(8, int(sampling_width * scale / 8 + 0.5) * 8)
+        hires_height = max(8, int(sampling_height * scale / 8 + 0.5) * 8)
+        base_decode_id, upscale_loader_id, model_upscale_id, resize_id, hires_encode_id, hires_sampler_id = (
+            alloc(), alloc(), alloc(), alloc(), alloc(), alloc()
+        )
+
+        # Decode before resizing so the learned anime upscaler can reconstruct
+        # line art and texture in pixel space. Its native output is 4x; resize it
+        # back to the requested 1.10-1.50x target before VAE encoding/refinement.
+        if vae_mode == "tiled":
+            nodes[base_decode_id] = {"class_type": "VAEDecodeTiled", "inputs": {
+                "samples": sample_ref, "vae": vae_ref,
+                "tile_size": vae_tile_size, "overlap": vae_overlap,
+                "temporal_size": 64, "temporal_overlap": 8,
+            }}
+        else:
+            nodes[base_decode_id] = {"class_type": "VAEDecode", "inputs": {
+                "samples": sample_ref, "vae": vae_ref,
+            }}
+        color_reference_ref = [base_decode_id, 0]
+        nodes[upscale_loader_id] = {
+            "class_type": "UpscaleModelLoader",
+            "inputs": {"model_name": HIRES_UPSCALE_MODEL},
         }
+        nodes[model_upscale_id] = {
+            "class_type": "ImageUpscaleWithModel",
+            "inputs": {"upscale_model": [upscale_loader_id, 0],
+                       "image": [base_decode_id, 0]},
+        }
+        nodes[resize_id] = {
+            "class_type": "ImageScale",
+            "inputs": {"image": [model_upscale_id, 0], "upscale_method": "lanczos",
+                       "width": hires_width, "height": hires_height, "crop": "disabled"},
+        }
+        if vae_mode == "tiled":
+            nodes[hires_encode_id] = {"class_type": "VAEEncodeTiled", "inputs": {
+                "pixels": [resize_id, 0], "vae": vae_ref,
+                "tile_size": vae_tile_size, "overlap": vae_overlap,
+                "temporal_size": 64, "temporal_overlap": 8,
+            }}
+        else:
+            nodes[hires_encode_id] = {"class_type": "VAEEncode", "inputs": {
+                "pixels": [resize_id, 0], "vae": vae_ref,
+            }}
         nodes[hires_sampler_id] = {
             "class_type": "KSampler",
             "inputs": {"seed": seed, "steps": hires_steps, "cfg": hires_cfg,
-                       "sampler_name": sampler_name, "scheduler": scheduler,
+                       "sampler_name": hires_sampler, "scheduler": hires_scheduler,
                        "denoise": hires_denoise, "model": model_ref,
                        "positive": positive_ref, "negative": negative_ref,
-                       "latent_image": [upscale_id, 0]},
+                       "latent_image": [hires_encode_id, 0]},
         }
         sample_ref = [hires_sampler_id, 0]
 
@@ -1540,10 +1633,148 @@ def build_workflow(data: dict) -> dict:
         nodes[decode_id] = {"class_type": "VAEDecode",
                             "inputs": {"samples": sample_ref, "vae": vae_ref}}
 
-    # Optional post-processing uses the single installed ComfyUI_LayerStyle pack.
+    image_ref = [decode_id, 0]
+
+    # Output enhancement is separate from generative hires. This gives Anima and
+    # Krea 2 a safe post-only upscale path and reserves tiled diffusion for large
+    # SDXL/Illustrious exports. Combining both would multiply pixels twice and is
+    # almost always an accidental OOM, so the API rejects it explicitly.
+    output_enhancement = data.get("outputEnhancement") or {}
+    if not isinstance(output_enhancement, dict):
+        raise ValueError("输出增强设置格式无效。")
+    post_mode = str(output_enhancement.get("mode", "off") or "off")
+    if post_mode not in {"off", "anime6b", "seedvr2", "ultimate"}:
+        raise ValueError("未知的输出增强模式。")
+    if hires_enabled and post_mode != "off":
+        raise ValueError("高清二次采样与输出超分不能同时开启；请选择其中一种，避免重复放大和显存溢出。")
+    if repair and post_mode != "off":
+        raise ValueError("局部修复不能同时执行整图输出超分；请先完成修复，再把结果作为底图放大。")
+    post_scale = bounded(output_enhancement.get("scale"), 1.5, 1.1, 4.0, integer=False)
+    post_width = max(8, int(sampling_width * post_scale / 8 + 0.5) * 8)
+    post_height = max(8, int(sampling_height * post_scale / 8 + 0.5) * 8)
+    if post_mode != "off" and color_reference_ref is None:
+        color_reference_ref = image_ref
+
+    if post_mode == "anime6b":
+        loader_id, upscale_id, resize_id = alloc(), alloc(), alloc()
+        nodes[loader_id] = {"class_type": "UpscaleModelLoader",
+                            "inputs": {"model_name": HIRES_UPSCALE_MODEL}}
+        nodes[upscale_id] = {"class_type": "ImageUpscaleWithModel", "inputs": {
+            "upscale_model": [loader_id, 0], "image": image_ref,
+        }}
+        nodes[resize_id] = {"class_type": "ImageScale", "inputs": {
+            "image": [upscale_id, 0], "upscale_method": "lanczos",
+            "width": post_width, "height": post_height, "crop": "disabled",
+        }}
+        image_ref = [resize_id, 0]
+    elif post_mode == "seedvr2":
+        resize_id, preprocess_id, seed_model_id, seed_vae_id = [alloc() for _ in range(4)]
+        seed_encode_id, seed_cond_id, seed_sampler_id, seed_decode_id, seed_post_id = [alloc() for _ in range(5)]
+        nodes[resize_id] = {"class_type": "ImageScale", "inputs": {
+            "image": image_ref, "upscale_method": "lanczos",
+            "width": post_width, "height": post_height, "crop": "disabled",
+        }}
+        nodes[preprocess_id] = {"class_type": "SeedVR2Preprocess",
+                                "inputs": {"resized_images": [resize_id, 0]}}
+        nodes[seed_model_id] = {"class_type": "UNETLoader",
+                                "inputs": {"unet_name": SEEDVR2_MODEL, "weight_dtype": "default"}}
+        nodes[seed_vae_id] = {"class_type": "VAELoader", "inputs": {"vae_name": SEEDVR2_VAE}}
+        nodes[seed_encode_id] = {"class_type": "VAEEncodeTiled", "inputs": {
+            "pixels": [preprocess_id, 0], "vae": [seed_vae_id, 0],
+            "tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8,
+        }}
+        nodes[seed_cond_id] = {"class_type": "SeedVR2Conditioning", "inputs": {
+            "model": [seed_model_id, 0], "vae_conditioning": [seed_encode_id, 0],
+        }}
+        nodes[seed_sampler_id] = {"class_type": "KSampler", "inputs": {
+            "seed": seed, "steps": 1, "cfg": 1.0, "sampler_name": "euler",
+            "scheduler": "simple", "denoise": 1.0, "model": [seed_model_id, 0],
+            "positive": [seed_cond_id, 0], "negative": [seed_cond_id, 1],
+            "latent_image": [seed_encode_id, 0],
+        }}
+        nodes[seed_decode_id] = {"class_type": "VAEDecodeTiled", "inputs": {
+            "samples": [seed_sampler_id, 0], "vae": [seed_vae_id, 0],
+            "tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8,
+        }}
+        seed_color_method = str(output_enhancement.get("seedvrColor", "lab") or "lab")
+        if seed_color_method not in {"lab", "wavelet", "adain", "none"}:
+            seed_color_method = "lab"
+        nodes[seed_post_id] = {"class_type": "SeedVR2PostProcessing", "inputs": {
+            "images": [seed_decode_id, 0], "original_resized_images": [resize_id, 0],
+            "color_correction_method": seed_color_method,
+        }}
+        image_ref = [seed_post_id, 0]
+    elif post_mode == "ultimate":
+        if anima or krea2:
+            raise ValueError("Ultimate SD Upscale 仅对 SDXL / Illustrious 开放；Anima / Krea 2 请使用后处理超分。")
+        loader_id, ultimate_id = alloc(), alloc()
+        nodes[loader_id] = {"class_type": "UpscaleModelLoader",
+                            "inputs": {"model_name": HIRES_UPSCALE_MODEL}}
+        nodes[ultimate_id] = {"class_type": "UltimateSDUpscale", "inputs": {
+            "image": image_ref, "model": model_ref, "positive": positive_ref,
+            "negative": negative_ref, "vae": vae_ref, "upscale_by": post_scale,
+            "seed": seed, "steps": bounded(output_enhancement.get("steps"), 20, 8, 40),
+            "cfg": bounded(output_enhancement.get("cfg"), sampling_profile.get("hires", {}).get("cfg", cfg),
+                           1, 15, integer=False),
+            "sampler_name": sampler_name, "scheduler": scheduler,
+            "denoise": bounded(output_enhancement.get("denoise"), 0.2, 0.05, 0.6, integer=False),
+            "upscale_model": [loader_id, 0], "mode_type": "Linear",
+            "tile_width": bounded(output_enhancement.get("tileSize"), 512, 256, 1024),
+            "tile_height": bounded(output_enhancement.get("tileSize"), 512, 256, 1024),
+            "mask_blur": 8, "tile_padding": 32, "seam_fix_mode": "None",
+            "seam_fix_denoise": 1.0, "seam_fix_width": 64,
+            "seam_fix_mask_blur": 8, "seam_fix_padding": 16,
+            "force_uniform_tiles": True, "tiled_decode": vae_mode == "tiled", "batch_size": 1,
+        }}
+        image_ref = [ultimate_id, 0]
+
+    detailer = output_enhancement.get("faceDetailer") or {}
+    detailer_enabled = bool(isinstance(detailer, dict) and detailer.get("enabled"))
+    if detailer_enabled:
+        if krea2:
+            raise ValueError("Krea 2 Turbo 不启用 FaceDetailer；请使用参考图或后处理超分保持五官。")
+        if regional_mode:
+            raise ValueError("多人分区不能自动运行单路 FaceDetailer；请生成后使用局部修复逐人处理。")
+        detector_id, detailer_id = alloc(), alloc()
+        nodes[detector_id] = {"class_type": "UltralyticsDetectorProvider",
+                              "inputs": {"model_name": FACE_DETECTOR_MODEL}}
+        nodes[detailer_id] = {"class_type": "FaceDetailer", "inputs": {
+            "image": image_ref, "model": model_ref, "clip": clip_ref, "vae": vae_ref,
+            "guide_size": bounded(detailer.get("guideSize"), 512, 256, 1024),
+            "guide_size_for": True, "max_size": 1024, "seed": seed,
+            "steps": bounded(detailer.get("steps"), 12, 6, 30),
+            "cfg": bounded(detailer.get("cfg"), sampling_profile.get("hires", {}).get("cfg", cfg),
+                           1, 15, integer=False),
+            "sampler_name": sampler_name, "scheduler": scheduler,
+            "positive": positive_ref, "negative": negative_ref,
+            "denoise": bounded(detailer.get("denoise"), 0.35, 0.15, 0.65, integer=False),
+            "feather": 5, "noise_mask": True, "force_inpaint": True,
+            "bbox_threshold": 0.3, "bbox_dilation": 10, "bbox_crop_factor": 3.0,
+            "sam_detection_hint": "center-1", "sam_dilation": 0, "sam_threshold": 0.93,
+            "sam_bbox_expansion": 0, "sam_mask_hint_threshold": 0.7,
+            "sam_mask_hint_use_negative": "False", "drop_size": 10,
+            "bbox_detector": [detector_id, 0], "wildcard": "", "cycle": 1,
+            "noise_mask_feather": 20, "tiled_encode": vae_mode == "tiled",
+            "tiled_decode": vae_mode == "tiled",
+        }}
+        image_ref = [detailer_id, 0]
+
+    auto_color = output_enhancement.get("colorMatch") or {}
+    if isinstance(auto_color, dict) and auto_color.get("enabled") and color_reference_ref:
+        color_method = str(auto_color.get("method", "reinhard_lab") or "reinhard_lab")
+        if color_method not in {"reinhard_lab", "mkl_lab", "histogram"}:
+            color_method = "reinhard_lab"
+        color_match_id = alloc()
+        nodes[color_match_id] = {"class_type": "ColorTransfer", "inputs": {
+            "image_target": image_ref, "image_ref": color_reference_ref,
+            "method": color_method, "source_stats": "per_frame",
+            "strength": bounded(auto_color.get("strength"), 0.7, 0.0, 1.0, integer=False),
+        }}
+        image_ref = [color_match_id, 0]
+
+    # Optional manual post-processing uses the installed ComfyUI_LayerStyle pack.
     # The chain is deliberately absent when disabled, so the default workflow stays unchanged.
     color = data.get("colorCorrection", {})
-    image_ref = [decode_id, 0]
     if isinstance(color, dict) and bool(color.get("enabled")):
         brightness = bounded(color.get("brightness"), 1.0, 0.0, 3.0, integer=False)
         contrast = bounded(color.get("contrast"), 1.0, 0.0, 3.0, integer=False)
@@ -1708,7 +1939,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.stream_comfy_progress()
             elif parsed.path == "/api/models":
                 info = comfy_json("/object_info")
-                all_checkpoints = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+                all_checkpoints = object_info_choices(info, "CheckpointLoaderSimple", "ckpt_name")
                 checkpoints, unavailable_checkpoints = [], []
                 for checkpoint in all_checkpoints:
                     issue = checkpoint_issue(checkpoint)
@@ -1716,15 +1947,45 @@ class Handler(BaseHTTPRequestHandler):
                         unavailable_checkpoints.append({"name": checkpoint, "reason": issue})
                     else:
                         checkpoints.append(checkpoint)
-                loras = info["LoraLoader"]["input"]["required"]["lora_name"][0]
-                controlnets = info.get("ControlNetLoader", {}).get("input", {}).get("required", {}).get("control_net_name", [[]])[0]
-                diffusion_models = info.get("UNETLoader", {}).get("input", {}).get("required", {}).get("unet_name", [[]])[0]
+                loras = object_info_choices(info, "LoraLoader", "lora_name")
+                controlnets = object_info_choices(info, "ControlNetLoader", "control_net_name")
+                diffusion_models = object_info_choices(info, "UNETLoader", "unet_name")
                 anima_models = [name for name in diffusion_models if is_anima_model(name)]
                 krea2_models = [name for name in diffusion_models if is_krea2_model(name)]
-                text_encoders = info.get("CLIPLoader", {}).get("input", {}).get("required", {}).get("clip_name", [[]])[0]
-                vaes = info.get("VAELoader", {}).get("input", {}).get("required", {}).get("vae_name", [[]])[0]
+                text_encoders = object_info_choices(info, "CLIPLoader", "clip_name")
+                vaes = object_info_choices(info, "VAELoader", "vae_name")
+                upscale_models = object_info_choices(info, "UpscaleModelLoader", "model_name")
+                detector_models = object_info_choices(info, "UltralyticsDetectorProvider", "model_name")
+                clip_vision_models = object_info_choices(info, "CLIPVisionLoader", "clip_name")
                 anima_ready = ANIMA_TEXT_ENCODER in text_encoders and ANIMA_VAE in vaes
                 krea2_ready = KREA2_TEXT_ENCODER in text_encoders and KREA2_VAE in vaes
+                seedvr_nodes = all(name in info for name in (
+                    "SeedVR2Preprocess", "SeedVR2Conditioning", "SeedVR2PostProcessing",
+                ))
+                workflow_features = {
+                    "anime6b": HIRES_UPSCALE_MODEL in upscale_models,
+                    "color_transfer": "ColorTransfer" in info,
+                    "ultimate": "UltimateSDUpscale" in info,
+                    "face_detailer_node": "FaceDetailer" in info,
+                    "face_detector_provider": "UltralyticsDetectorProvider" in info,
+                    "face_detector_model": FACE_DETECTOR_MODEL in detector_models,
+                    "face_detailer": (
+                        "FaceDetailer" in info
+                        and "UltralyticsDetectorProvider" in info
+                        and FACE_DETECTOR_MODEL in detector_models
+                    ),
+                    "seedvr2_nodes": seedvr_nodes,
+                    "seedvr2_model": SEEDVR2_MODEL in diffusion_models,
+                    "seedvr2_vae": SEEDVR2_VAE in vaes,
+                    "seedvr2": seedvr_nodes and SEEDVR2_MODEL in diffusion_models and SEEDVR2_VAE in vaes,
+                    "ipadapter": (
+                        "IPAdapterAdvanced" in info
+                        and any("ip-adapter-plus_sdxl" in str(name).lower() for name in object_info_choices(
+                            info, "IPAdapterModelLoader", "ipadapter_file"
+                        ))
+                        and bool(clip_vision_models)
+                    ),
+                }
                 sampling_profiles = {name: model_sampling_profile(name)
                                      for name in checkpoints + anima_models + krea2_models}
                 self.send_json({"checkpoints": checkpoints, "unavailable_checkpoints": unavailable_checkpoints,
@@ -1732,6 +1993,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "krea2_models": krea2_models, "krea2_ready": krea2_ready,
                                 "anima_tag_count": len(ANIMA_TAG_INDEX), "loras": loras,
                                 "loraMeta": lora_meta_map(loras), "controlnets": controlnets,
+                                "upscaleModels": upscale_models, "detectorModels": detector_models,
+                                "workflowFeatures": workflow_features,
                                 "samplingProfiles": sampling_profiles})
             elif parsed.path == "/api/status":
                 queue = comfy_json("/queue")
@@ -1803,6 +2066,7 @@ class Handler(BaseHTTPRequestHandler):
                 if safe_name != name or not file.is_file():
                     raise ValueError("找不到该输出图片。")
                 self.send_json(parse_generation_info(file.read_bytes()))
+                return
             if self.path == "/api/preview-color":
                 name = str(data.get("name", "") or "").strip()
                 safe_name = Path(name).name

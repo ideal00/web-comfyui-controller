@@ -524,7 +524,9 @@ def _metadata_tag_counter(metadata: dict[str, str]) -> Counter:
     for key in ("modelspec.tags", "modelspec.trigger_phrase", "trigger_words", "activation text"):
         raw = metadata.get(key, "")
         for tag in split_prompt_tags(raw):
-            counter[tag] += max(1, counter.total() // 100)
+            # Counter.total() was added in Python 3.10, while bundled
+            # ComfyUI environments can still use older Python releases.
+            counter[tag] += max(1, sum(counter.values()) // 100)
     return counter
 
 

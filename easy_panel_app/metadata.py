@@ -30,6 +30,21 @@ def _num(value):
     return None
 
 
+def _seed(value):
+    """Return seeds as decimal strings so JSON never loses 64-bit precision."""
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else None
+    if isinstance(value, str):
+        value = value.strip()
+        if re.fullmatch(r"[+-]?\d+", value):
+            return value.lstrip("+")
+    return None
+
+
 def _resolve_clip_text(nodes: dict, ref) -> str:
     """Trace a node reference back to the CLIPTextEncode text it originates from."""
     queue = [ref]
@@ -58,7 +73,11 @@ def _resolve_clip_text(nodes: dict, ref) -> str:
 def _empty_image_result(source: str) -> dict:
     return {"source": source, "model": "", "family": "sdxl", "positive": "",
             "negative": "", "steps": None, "cfg": None, "sampler": "", "scheduler": "",
-            "seed": None, "width": None, "height": None, "loras": [], "prediction": ""}
+            "seed": None, "width": None, "height": None,
+            "base_width": None, "base_height": None, "hires": {"enabled": False},
+            "output_enhancement": {"mode": "off"}, "face_detailer": False,
+            "color_match": False,
+            "loras": [], "prediction": ""}
 
 
 def parse_comfyui_prompt(workflow: dict) -> dict:
@@ -66,18 +85,32 @@ def parse_comfyui_prompt(workflow: dict) -> dict:
     result = _empty_image_result("comfyui")
     nodes = workflow if isinstance(workflow, dict) else {}
     ksamplers: list[dict] = []
+    has_model_upscale = False
+    hires_scale = None
+    hires_method = ""
     for node in nodes.values():
         if not isinstance(node, dict):
             continue
         class_type = str(node.get("class_type", ""))
         inputs = node.get("inputs", {}) or {}
         if class_type == "KSampler":
-            ksamplers.append(node)
+            model_input = inputs.get("model")
+            model_node = nodes.get(str(model_input[0])) if isinstance(model_input, list) and model_input else None
+            model_inputs = model_node.get("inputs", {}) if isinstance(model_node, dict) else {}
+            is_seedvr_sampler = (
+                isinstance(model_node, dict)
+                and model_node.get("class_type") == "UNETLoader"
+                and "seedvr2" in str(model_inputs.get("unet_name", "")).lower()
+            )
+            if not is_seedvr_sampler:
+                ksamplers.append(node)
         elif class_type == "CheckpointLoaderSimple":
             result["model"] = str(inputs.get("ckpt_name", "") or "")
         elif class_type == "UNETLoader":
-            result["model"] = str(inputs.get("unet_name", "") or "")
-            result["family"] = "anima"
+            unet_name = str(inputs.get("unet_name", "") or "")
+            if "seedvr2" not in unet_name.lower():
+                result["model"] = unet_name
+                result["family"] = "anima"
         elif class_type in ("LoraLoader", "LoraLoaderModelOnly"):
             name = str(inputs.get("lora_name", "") or "")
             if name:
@@ -86,17 +119,62 @@ def parse_comfyui_prompt(workflow: dict) -> dict:
         elif class_type == "EmptyLatentImage":
             result["width"] = _num(inputs.get("width"))
             result["height"] = _num(inputs.get("height"))
+            result["base_width"] = result["width"]
+            result["base_height"] = result["height"]
+        elif class_type == "LatentUpscaleBy":
+            hires_scale = _num(inputs.get("scale_by"))
+            hires_method = str(inputs.get("upscale_method", "") or "")
+        elif class_type == "ImageScale":
+            result["width"] = _num(inputs.get("width")) or result["width"]
+            result["height"] = _num(inputs.get("height")) or result["height"]
+            hires_method = str(inputs.get("upscale_method", "") or "")
+        elif class_type == "ImageUpscaleWithModel":
+            has_model_upscale = True
+        elif class_type in ("SeedVR2Conditioning", "SeedVR2PostProcessing"):
+            result["output_enhancement"]["mode"] = "seedvr2"
+        elif class_type == "UltimateSDUpscale":
+            result["output_enhancement"] = {
+                "mode": "ultimate",
+                "scale": _num(inputs.get("upscale_by")),
+                "denoise": _num(inputs.get("denoise")),
+                "steps": _num(inputs.get("steps")),
+            }
+        elif class_type == "FaceDetailer":
+            result["face_detailer"] = True
+        elif class_type == "ColorTransfer":
+            result["color_match"] = True
         elif class_type == "ModelSamplingDiscrete":
             result["prediction"] = str(inputs.get("sampling", "") or "")
     if ksamplers:
         inputs = ksamplers[0].get("inputs", {}) or {}
-        result["seed"] = _num(inputs.get("seed"))
+        result["seed"] = _seed(inputs.get("seed"))
         result["steps"] = _num(inputs.get("steps"))
         result["cfg"] = _num(inputs.get("cfg"))
         result["sampler"] = str(inputs.get("sampler_name", "") or "")
         result["scheduler"] = str(inputs.get("scheduler", "") or "")
         result["positive"] = _resolve_clip_text(nodes, inputs.get("positive"))
         result["negative"] = _resolve_clip_text(nodes, inputs.get("negative"))
+        if len(ksamplers) > 1:
+            second = ksamplers[-1].get("inputs", {}) or {}
+            if hires_scale is None and result["base_width"] and result["width"]:
+                inferred = result["width"] / result["base_width"]
+                hires_scale = round(round(inferred / 0.05) * 0.05, 2)
+            result["hires"] = {
+                "enabled": True,
+                "scale": hires_scale,
+                "denoise": _num(second.get("denoise")),
+                "steps": _num(second.get("steps")),
+                "cfg": _num(second.get("cfg")),
+                "sampler": str(second.get("sampler_name", "") or ""),
+                "scheduler": str(second.get("scheduler", "") or ""),
+                "upscale_method": hires_method,
+            }
+        elif has_model_upscale and result["output_enhancement"]["mode"] == "off":
+            result["output_enhancement"] = {
+                "mode": "anime6b",
+                "scale": (round(result["width"] / result["base_width"], 2)
+                          if result["width"] and result["base_width"] else None),
+            }
     return result
 
 
@@ -161,7 +239,7 @@ def parse_comfyui_ui_workflow(data: dict) -> dict:
         ntype = str(node.get("type", ""))
         widgets = node.get("widgets_values", []) or []
         if ntype == "KSampler":
-            result["seed"] = _num(widgets[0] if len(widgets) > 0 else None)
+            result["seed"] = _seed(widgets[0] if len(widgets) > 0 else None)
             result["steps"] = _num(widgets[2] if len(widgets) > 2 else None)
             result["cfg"] = _num(widgets[3] if len(widgets) > 3 else None)
             result["sampler"] = str(widgets[4] or "") if len(widgets) > 4 else ""
@@ -182,6 +260,8 @@ def parse_comfyui_ui_workflow(data: dict) -> dict:
             if len(widgets) >= 2:
                 result["width"] = _num(widgets[0])
                 result["height"] = _num(widgets[1])
+                result["base_width"] = result["width"]
+                result["base_height"] = result["height"]
     if ksamplers:
         result["positive"] = resolve_text(ksamplers[0], "positive")
         result["negative"] = resolve_text(ksamplers[0], "negative")
@@ -215,7 +295,7 @@ def parse_a1111_parameters(text: str) -> dict:
             elif key == "scheduler":
                 result["scheduler"] = value
             elif key == "seed":
-                result["seed"] = _num(value)
+                result["seed"] = _seed(value)
             elif key == "model":
                 result["model"] = value
             elif key == "size":
@@ -244,7 +324,7 @@ def parse_novelai_comment(text: str) -> dict:
         result["steps"] = _num(params.get("steps"))
         result["cfg"] = _num(params.get("scale"))
         result["sampler"] = str(params.get("sampler", "") or "")
-        result["seed"] = _num(params.get("seed"))
+        result["seed"] = _seed(params.get("seed"))
         result["model"] = str(params.get("model", "") or "")
     return result
 
@@ -319,6 +399,9 @@ def parse_generation_info(content: bytes) -> dict:
         result = parse_a1111_parameters(chunks["Description"])
     else:
         raise ValueError("未在图片中找到 AI 生成参数。请使用未经二次压缩的原始 PNG / WebP（ComfyUI、WebUI 或 NovelAI 生成）。")
+    # The encoded workflow may describe the base latent rather than the saved
+    # image after a hires pass. The file dimensions are the authoritative output.
+    result["width"], result["height"] = image.size
     model = result.get("model", "")
     if is_anima_model(model):
         result["family"] = "anima"

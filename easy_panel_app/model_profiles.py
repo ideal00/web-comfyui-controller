@@ -16,7 +16,18 @@ DEFAULT_RESOLUTION = {
     "alignment": 8,
     "recommended": [[1024, 1024], [832, 1216], [1216, 832]],
 }
-DEFAULT_HIRES = {"scale": 1.25, "denoise": 0.30, "steps": 18, "cfg": 4.5}
+DEFAULT_HIRES = {
+    "scale": 1.25,
+    "min_scale": 1.10,
+    "max_scale": 1.50,
+    "denoise": 0.35,
+    "min_denoise": 0.15,
+    "max_denoise": 0.45,
+    "steps": 20,
+    "cfg": 4.5,
+    "sampler": "auto",
+    "scheduler": "auto",
+}
 DEFAULT_FREEU = {
     "key": "sdxl_official",
     "label": "官方 SDXL / ComfyUI V2",
@@ -185,6 +196,7 @@ def model_sampling_profile(model_name: str) -> dict:
         "combos": combos,
         "locked": bool(profile.get("locked", False)),
         "prediction": prediction,
+        "zsnr": bool(profile.get("zsnr", False)),
         "hires": copy.deepcopy(profile.get("hires") or DEFAULT_HIRES),
         "freeu": copy.deepcopy(profile.get("freeu") or DEFAULT_FREEU),
         "resolution": resolution,

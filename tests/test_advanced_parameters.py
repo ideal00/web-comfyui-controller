@@ -38,6 +38,17 @@ class SamplingProfileTests(unittest.TestCase):
     def nodes_of(nodes: dict, class_type: str) -> list[dict]:
         return [node for node in nodes.values() if node["class_type"] == class_type]
 
+    def test_object_info_choices_support_old_and_dynamic_combo_schema(self):
+        old = {"Loader": {"input": {"required": {"name": [["a", "b"], {}]}}}}
+        dynamic = {"Loader": {"input": {"required": {"name": ["COMBO", {
+            "options": ["a", "b"], "multiselect": False,
+        }]}}}}
+        keyed = {"Loader": {"input": {"required": {"name": ["COMFY_DYNAMICCOMBO_V3", {
+            "options": [{"key": "a"}, {"key": "b"}],
+        }]}}}}
+        for info in (old, dynamic, keyed):
+            self.assertEqual(["a", "b"], easy_panel.object_info_choices(info, "Loader", "name"))
+
     def test_installed_model_recommendations_match_validated_profiles(self):
         expected = {
             "spectacularAnimeILXL_10.safetensors": (24, 7.0, "euler_ancestral", "beta"),
@@ -110,8 +121,118 @@ class SamplingProfileTests(unittest.TestCase):
         second = samplers[1]["inputs"]
         self.assertEqual((16, 4.0, 0.25),
                          (second["steps"], second["cfg"], second["denoise"]))
-        upscale = self.nodes_of(nodes, "LatentUpscaleBy")[0]["inputs"]
-        self.assertEqual(1.2, upscale["scale_by"])
+        self.assertFalse(self.nodes_of(nodes, "LatentUpscaleBy"))
+        loader_node = self.nodes_of(nodes, "UpscaleModelLoader")[0]
+        model_upscale_node = self.nodes_of(nodes, "ImageUpscaleWithModel")[0]
+        self.assertEqual("RealESRGAN_x4plus_anime_6B.pth",
+                         loader_node["inputs"]["model_name"])
+        upscale_node = self.nodes_of(nodes, "ImageScale")[0]
+        upscale = upscale_node["inputs"]
+        self.assertEqual(("lanczos", 920, 1232, "disabled"),
+                         (upscale["upscale_method"], upscale["width"],
+                          upscale["height"], upscale["crop"]))
+        first_decode = self.nodes_of(nodes, "VAEDecode")[0]
+        encode = self.nodes_of(nodes, "VAEEncode")[0]
+        node_id = lambda target: next(node_id for node_id, node in nodes.items()
+                                      if node is target)
+        self.assertEqual([node_id(loader_node), 0],
+                         model_upscale_node["inputs"]["upscale_model"])
+        self.assertEqual([node_id(first_decode), 0],
+                         model_upscale_node["inputs"]["image"])
+        self.assertEqual([node_id(model_upscale_node), 0], upscale["image"])
+        self.assertEqual([next(node_id for node_id, node in nodes.items()
+                               if node is upscale_node), 0], encode["inputs"]["pixels"])
+        self.assertEqual([next(node_id for node_id, node in nodes.items()
+                               if node is encode), 0], second["latent_image"])
+
+    def test_model_specific_hires_and_generic_sdxl_capability(self):
+        data = payload("gockSoAnimeLoveSong_gocksoanimeLoveSong.safetensors")
+        data.update({"illustriousMode": "hires", "hiresSampler": "euler",
+                     "hiresScheduler": "normal", "hiresScale": 1.25})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        self.assertEqual(2, len(samplers))
+        self.assertEqual(("euler", "normal"),
+                         (samplers[-1]["inputs"]["sampler_name"],
+                          samplers[-1]["inputs"]["scheduler"]))
+
+        wai = easy_panel.model_sampling_profile(
+            "waiIllustriousSDXL_v140.safetensors")
+        self.assertEqual(1.25, wai["hires"]["scale"])
+
+    def test_post_only_anime6b_supports_anima_and_krea(self):
+        for model in ("anima-base-v1.0.safetensors",
+                      "krea2TurboOfficialComfy_krea2TurboFp8.safetensors"):
+            with self.subTest(model=model):
+                data = payload(model)
+                data["outputEnhancement"] = {"mode": "anime6b", "scale": 2}
+                nodes = self.build(data)
+                self.assertEqual(1, len(self.nodes_of(nodes, "ImageUpscaleWithModel")))
+                scale = self.nodes_of(nodes, "ImageScale")[-1]["inputs"]
+                self.assertEqual((1536, 2048), (scale["width"], scale["height"]))
+
+    def test_seedvr2_graph_uses_dedicated_one_step_model(self):
+        data = payload("anima-base-v1.0.safetensors")
+        data["outputEnhancement"] = {"mode": "seedvr2", "scale": 2,
+                                     "seedvrColor": "wavelet"}
+        nodes = self.build(data)
+        self.assertEqual(1, len(self.nodes_of(nodes, "SeedVR2Preprocess")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "SeedVR2Conditioning")))
+        post = self.nodes_of(nodes, "SeedVR2PostProcessing")[0]["inputs"]
+        self.assertEqual("wavelet", post["color_correction_method"])
+        seed_sampler = [node for node in self.nodes_of(nodes, "KSampler")
+                        if node["inputs"]["steps"] == 1][0]["inputs"]
+        self.assertEqual((1.0, "euler", "simple", 1.0),
+                         (seed_sampler["cfg"], seed_sampler["sampler_name"],
+                          seed_sampler["scheduler"], seed_sampler["denoise"]))
+
+    def test_ultimate_detailer_and_native_color_transfer(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["outputEnhancement"] = {
+            "mode": "ultimate", "scale": 2, "steps": 18, "denoise": 0.2,
+            "tileSize": 512,
+            "faceDetailer": {"enabled": True, "guideSize": 512,
+                               "steps": 12, "denoise": 0.35},
+            "colorMatch": {"enabled": True, "method": "reinhard_lab", "strength": 0.7},
+        }
+        nodes = self.build(data)
+        ultimate = self.nodes_of(nodes, "UltimateSDUpscale")[0]["inputs"]
+        self.assertEqual((2.0, 18, 0.2, 512),
+                         (ultimate["upscale_by"], ultimate["steps"],
+                          ultimate["denoise"], ultimate["tile_width"]))
+        self.assertEqual(1, len(self.nodes_of(nodes, "UltralyticsDetectorProvider")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "FaceDetailer")))
+        color = self.nodes_of(nodes, "ColorTransfer")[0]["inputs"]
+        self.assertEqual(("reinhard_lab", 0.7), (color["method"], color["strength"]))
+
+    def test_hires_and_post_upscale_are_mutually_exclusive(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires",
+                     "outputEnhancement": {"mode": "anime6b", "scale": 2}})
+        with self.assertRaisesRegex(ValueError, "不能同时开启"):
+            self.build(data)
+
+    def test_hires_tiled_vae_uses_tiled_round_trip_and_final_decode(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.25,
+                     "vae": {"mode": "tiled", "tileSize": 512, "overlap": 64}})
+        nodes = self.build(data)
+        self.assertEqual(2, len(self.nodes_of(nodes, "VAEDecodeTiled")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "VAEEncodeTiled")))
+        self.assertFalse(self.nodes_of(nodes, "VAEDecode"))
+        self.assertFalse(self.nodes_of(nodes, "VAEEncode"))
+        self.assertEqual(1, len(self.nodes_of(nodes, "UpscaleModelLoader")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "ImageUpscaleWithModel")))
+        scale = self.nodes_of(nodes, "ImageScale")[0]["inputs"]
+        self.assertEqual((960, 1280), (scale["width"], scale["height"]))
+
+    def test_hires_size_rounding_matches_browser_preview_at_half_boundary(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "width": 720, "height": 1280,
+                     "hiresScale": 1.25})
+        nodes = self.build(data)
+        scale = self.nodes_of(nodes, "ImageScale")[0]["inputs"]
+        self.assertEqual((904, 1600), (scale["width"], scale["height"]))
 
     def test_milmu_keeps_v_prediction_node_with_new_sampler(self):
         data = payload("milmuAnimeIllustriousXL_vPred01.safetensors")
@@ -122,6 +243,7 @@ class SamplingProfileTests(unittest.TestCase):
         nodes = self.build(data)
         model_sampling = self.nodes_of(nodes, "ModelSamplingDiscrete")
         self.assertEqual("v_prediction", model_sampling[0]["inputs"]["sampling"])
+        self.assertTrue(model_sampling[0]["inputs"]["zsnr"])
         sampler = self.nodes_of(nodes, "KSampler")[0]["inputs"]
         self.assertEqual(("euler", "normal"),
                          (sampler["sampler_name"], sampler["scheduler"]))
@@ -179,6 +301,59 @@ class SamplingProfileTests(unittest.TestCase):
         nodes = self.build(data)
         latent = self.nodes_of(nodes, "EmptyLatentImage")[0]["inputs"]
         self.assertEqual((2048, 2048), (latent["width"], latent["height"]))
+
+    def test_img2img_and_repair_build_the_expected_vae_paths(self):
+        img2img = payload("waiIllustriousSDXL_v140.safetensors")
+        img2img.update({
+            "img2img": {"enabled": True, "image": "easy_panel/source.png", "denoise": 0.6},
+            "vae": {"mode": "tiled", "tileSize": 512, "overlap": 64},
+        })
+        with patch.object(easy_panel, "prepare_generation_image",
+                          return_value="easy_panel/source.png"):
+            nodes = self.build(img2img)
+        self.assertEqual(1, len(self.nodes_of(nodes, "LoadImage")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "VAEEncodeTiled")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "VAEDecodeTiled")))
+        self.assertEqual(0.6, self.nodes_of(nodes, "KSampler")[0]["inputs"]["denoise"])
+
+        repair = payload("waiIllustriousSDXL_v140.safetensors")
+        repair.update({
+            "illustriousMode": "repair",
+            "repair": {"image": "easy_panel/source.png", "mask": "easy_panel/mask.png",
+                       "grow": 6, "denoise": 0.5},
+        })
+        with patch.object(easy_panel, "validate_input_image", side_effect=lambda name: name):
+            nodes = self.build(repair)
+        encode = self.nodes_of(nodes, "VAEEncodeForInpaint")[0]["inputs"]
+        self.assertEqual(6, encode["grow_mask_by"])
+        self.assertEqual(0.5, self.nodes_of(nodes, "KSampler")[0]["inputs"]["denoise"])
+
+    def test_edited_pose_and_color_correction_create_real_nodes(self):
+        pose = payload("waiIllustriousSDXL_v140.safetensors")
+        pose["pose"] = {
+            "enabled": True,
+            "poseJson": '[{"people":[]}]',
+            "controlnet": "openpose.safetensors",
+            "strength": 0.82,
+            "end": 0.75,
+        }
+        nodes = self.build(pose)
+        self.assertEqual(1, len(self.nodes_of(nodes, "huchenlei.LoadOpenposeJSON")))
+        self.assertEqual(1, len(self.nodes_of(nodes, "EasyPanelRenderPoseXinsir")))
+        control = self.nodes_of(nodes, "ControlNetApplyAdvanced")[0]["inputs"]
+        self.assertEqual((0.82, 0.75), (control["strength"], control["end_percent"]))
+
+        color = payload("waiIllustriousSDXL_v140.safetensors")
+        color["colorCorrection"] = {
+            "enabled": True, "brightness": 1.05, "contrast": 1.05,
+            "saturation": 1.05, "gamma": 1, "red": 0, "green": 0, "blue": 0,
+            "hue": 0, "hsvSaturation": 0, "value": 0,
+            "blackPoint": 0, "whitePoint": 255, "grayPoint": 1,
+        }
+        nodes = self.build(color)
+        for class_type in ("LayerColor: Brightness & Contrast", "LayerColor: RGB",
+                           "LayerColor: HSV", "LayerColor: Gamma", "LayerColor: Levels"):
+            self.assertEqual(1, len(self.nodes_of(nodes, class_type)))
 
 
 class BatchQueueTests(unittest.TestCase):
