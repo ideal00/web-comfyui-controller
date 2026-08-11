@@ -873,6 +873,8 @@ Anima 和 Krea 2 会自动禁用当前 Xinsir SDXL OpenPose 链路。
 可选后级：
 
 - `FaceDetailer` 在超分后检测单人脸并局部重绘。多人分区与 Krea 2 会安全禁用，避免一条检测支路错误覆盖多个人物。
+- “自动修复手指”和“自动修复脚趾/鞋形”默认开启，分别用专用 YOLO 检测器定位局部，再以 `512` 引导尺寸、`16` 步、`0.45` 重绘幅度串行重绘。它们对原图直出和输出增强都生效；裸足提示会强调五趾，穿鞋提示会强调正确鞋形。
+- 手脚局部修复在多人分区、Krea 2 和手绘蒙版修复模式下自动禁用，避免检测到错误人物或与现有蒙版链路冲突。检测器没有命中时图像保持不变；遮挡严重、手脚太小或原始结构完全错误时仍可能需要手工蒙版修复。
 - 原生 `ColorTransfer` 可在最终输出前把颜色匹配回第一次解码的基准图，默认 Reinhard LAB、强度 `0.7`。
 - 高清二次采样现在同时支持通用 SDXL / Gock 和 Illustrious，并按具体模型配置二次倍率、denoise、步数、CFG、采样器和调度器。
 
@@ -882,9 +884,13 @@ Anima 和 Krea 2 会自动禁用当前 Xinsir SDXL OpenPose 链路。
 ComfyUI/custom_nodes/ComfyUI_UltimateSDUpscale/
 ComfyUI/custom_nodes/ComfyUI-Impact-Subpack/
 ComfyUI/models/ultralytics/bbox/face_yolov8m.pt
+ComfyUI/models/ultralytics/bbox/hand_yolov8s.pt
+ComfyUI/models/ultralytics/bbox/foot_yolov8x.pt
 ComfyUI/models/diffusion_models/seedvr2_3b_int8_convrot.safetensors
 ComfyUI/models/vae/seedvr2_ema_vae_fp16.safetensors
 ```
+
+检测模型来源：[`hand_yolov8s.pt`](https://huggingface.co/Bingsu/adetailer) 与 [`foot_yolov8x.pt`](https://huggingface.co/MonetEinsley/ADetailer_CM)。请分别阅读模型卡与许可证；权重不随 Easy Panel 安装包分发。
 
 安装或更新自定义节点后必须重启 ComfyUI。画质判断请固定 checkpoint、VAE、提示词、LoRA、seed 和基础尺寸，每次只切换一个增强模式做 GPU A/B；不要把高清二次采样、SeedVR2 和 Ultimate 同时叠加。
 

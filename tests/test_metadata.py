@@ -148,6 +148,23 @@ class MetadataSeedTests(unittest.TestCase):
         self.assertTrue(result["face_detailer"])
         self.assertTrue(result["color_match"])
 
+    def test_hand_and_foot_detailer_metadata_are_not_misreported_as_faces(self):
+        data = {
+            "model": "waiIllustriousSDXL_v140.safetensors",
+            "promptSections": {"subject": "1girl, full body, barefoot"},
+            "negative": "", "width": 768, "height": 1024,
+            "outputEnhancement": {
+                "mode": "off",
+                "faceDetailer": {"enabled": True},
+                "limbDetailer": {"hands": True, "feet": True},
+            },
+        }
+        with patch.object(easy_panel, "checkpoint_issue", return_value=None):
+            result = parse_comfyui_prompt(easy_panel.build_workflow(data)["prompt"])
+        self.assertTrue(result["face_detailer"])
+        self.assertTrue(result["hand_detailer"])
+        self.assertTrue(result["foot_detailer"])
+
 
 if __name__ == "__main__":
     unittest.main()

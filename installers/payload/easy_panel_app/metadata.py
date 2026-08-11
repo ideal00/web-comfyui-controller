@@ -76,6 +76,7 @@ def _empty_image_result(source: str) -> dict:
             "seed": None, "width": None, "height": None,
             "base_width": None, "base_height": None, "hires": {"enabled": False},
             "output_enhancement": {"mode": "off"}, "face_detailer": False,
+            "hand_detailer": False, "foot_detailer": False,
             "color_match": False,
             "loras": [], "prediction": ""}
 
@@ -140,7 +141,18 @@ def parse_comfyui_prompt(workflow: dict) -> dict:
                 "steps": _num(inputs.get("steps")),
             }
         elif class_type == "FaceDetailer":
-            result["face_detailer"] = True
+            detector_model = ""
+            detector_ref = inputs.get("bbox_detector")
+            if isinstance(detector_ref, list) and detector_ref:
+                detector_node = nodes.get(str(detector_ref[0])) or nodes.get(detector_ref[0])
+                if isinstance(detector_node, dict):
+                    detector_model = str((detector_node.get("inputs") or {}).get("model_name", "")).lower()
+            if "hand_" in detector_model or "/hand" in detector_model:
+                result["hand_detailer"] = True
+            elif "foot_" in detector_model or "/foot" in detector_model:
+                result["foot_detailer"] = True
+            else:
+                result["face_detailer"] = True
         elif class_type == "ColorTransfer":
             result["color_match"] = True
         elif class_type == "ModelSamplingDiscrete":

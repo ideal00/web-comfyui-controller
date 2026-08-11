@@ -205,6 +205,80 @@ class SamplingProfileTests(unittest.TestCase):
         color = self.nodes_of(nodes, "ColorTransfer")[0]["inputs"]
         self.assertEqual(("reinhard_lab", 0.7), (color["method"], color["strength"]))
 
+    def test_direct_output_hand_and_foot_detailers_use_local_detectors(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["promptSections"] = {
+            "subject": "1girl, full body, standing, barefoot",
+            "composition": "both hands visible, both feet visible",
+        }
+        data["outputEnhancement"] = {
+            "mode": "off",
+            "limbDetailer": {
+                "hands": True, "feet": True, "guideSize": 512,
+                "steps": 16, "denoise": 0.45,
+            },
+        }
+        nodes = self.build(data)
+        detector_nodes = self.nodes_of(nodes, "UltralyticsDetectorProvider")
+        self.assertEqual(
+            {easy_panel.HAND_DETECTOR_MODEL, easy_panel.FOOT_DETECTOR_MODEL},
+            {node["inputs"]["model_name"] for node in detector_nodes},
+        )
+        detailers = self.nodes_of(nodes, "FaceDetailer")
+        self.assertEqual(2, len(detailers))
+        for detailer in detailers:
+            self.assertEqual((512, 16, 0.45, True), (
+                detailer["inputs"]["guide_size"], detailer["inputs"]["steps"],
+                detailer["inputs"]["denoise"], detailer["inputs"]["force_inpaint"],
+            ))
+
+        detailer_ids = [node_id for node_id, node in nodes.items()
+                        if node["class_type"] == "FaceDetailer"]
+        self.assertEqual([detailer_ids[0], 0], detailers[1]["inputs"]["image"])
+        encoded_text = [node["inputs"]["text"] for node in
+                        self.nodes_of(nodes, "CLIPTextEncode")]
+        self.assertTrue(any("five fingers on each hand" in text for text in encoded_text))
+        self.assertTrue(any("five toes on each foot" in text for text in encoded_text))
+
+        base_sampler = self.nodes_of(nodes, "KSampler")[0]
+        negative_ref = base_sampler["inputs"]["negative"]
+        negative_text = nodes[str(negative_ref[0])]["inputs"]["text"]
+        self.assertIn("extra fingers", negative_text)
+        self.assertIn("extra toes", negative_text)
+
+    def test_limb_detailers_are_safely_skipped_for_krea_and_repair(self):
+        krea = payload("krea2TurboOfficialComfy_krea2TurboFp8.safetensors")
+        krea["outputEnhancement"] = {
+            "mode": "off", "limbDetailer": {"hands": True, "feet": True},
+        }
+        self.assertFalse(self.nodes_of(self.build(krea), "FaceDetailer"))
+
+        repair = payload("waiIllustriousSDXL_v140.safetensors")
+        repair.update({
+            "illustriousMode": "repair",
+            "repair": {"image": "easy_panel/source.png", "mask": "easy_panel/mask.png"},
+            "outputEnhancement": {
+                "mode": "off", "limbDetailer": {"hands": True, "feet": True},
+            },
+        })
+        with patch.object(easy_panel, "validate_input_image", side_effect=lambda name: name):
+            repair_nodes = self.build(repair)
+        self.assertFalse(self.nodes_of(repair_nodes, "FaceDetailer"))
+
+        regional = payload("waiIllustriousSDXL_v140.safetensors")
+        regional.update({
+            "regions": [
+                {"prompt": "alice, blue hair", "subject": "1girl",
+                 "x": 0, "y": 0, "width": 0.54, "height": 1},
+                {"prompt": "bob, red hair", "subject": "1girl",
+                 "x": 0.46, "y": 0, "width": 0.54, "height": 1},
+            ],
+            "outputEnhancement": {
+                "mode": "off", "limbDetailer": {"hands": True, "feet": True},
+            },
+        })
+        self.assertFalse(self.nodes_of(self.build(regional), "FaceDetailer"))
+
     def test_hires_and_post_upscale_are_mutually_exclusive(self):
         data = payload("waiIllustriousSDXL_v140.safetensors")
         data.update({"illustriousMode": "hires",

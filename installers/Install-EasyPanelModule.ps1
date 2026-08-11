@@ -526,6 +526,8 @@ function Test-ModelComponents {
         @{ Name = "Anima / Krea 2 VAE"; Path = (Join-Path $models "vae"); Pattern = "qwen_image_vae.safetensors"; Required = $false },
         @{ Name = "Anime6B 超分"; Path = (Join-Path $models "upscale_models"); Pattern = "RealESRGAN_x4plus_anime_6B.pth"; Required = $false },
         @{ Name = "FaceDetailer 检测模型"; Path = (Join-Path $models "ultralytics\bbox"); Pattern = "face_yolov8m.pt"; Required = $false },
+        @{ Name = "手部局部修复检测模型"; Path = (Join-Path $models "ultralytics\bbox"); Pattern = "hand_yolov8s.pt"; Required = $false },
+        @{ Name = "足部局部修复检测模型"; Path = (Join-Path $models "ultralytics\bbox"); Pattern = "foot_yolov8x.pt"; Required = $false },
         @{ Name = "SeedVR2 3B Int8"; Path = (Join-Path $models "diffusion_models"); Pattern = "seedvr2_3b_int8_convrot.safetensors"; Required = $false },
         @{ Name = "SeedVR2 VAE"; Path = (Join-Path $models "vae"); Pattern = "seedvr2_ema_vae_fp16.safetensors"; Required = $false }
     )
@@ -557,6 +559,8 @@ function Test-ModelComponents {
     }
     Write-Notice "SeedVR2 官方下载：https://huggingface.co/Comfy-Org/SeedVR2"
     Write-Notice "FaceDetailer 节点：https://github.com/ltdrdata/ComfyUI-Impact-Subpack"
+    Write-Notice "手部检测模型：https://huggingface.co/Bingsu/adetailer"
+    Write-Notice "足部检测模型：https://huggingface.co/MonetEinsley/ADetailer_CM"
     Write-Notice "Ultimate SD Upscale：https://github.com/ssitu/ComfyUI_UltimateSDUpscale"
     Write-Notice "模型权重没有随安装包分发。请从合法来源取得，并遵守各模型许可证。"
 }

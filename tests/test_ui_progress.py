@@ -57,9 +57,12 @@ class GenerationProgressUiTests(unittest.TestCase):
         panel = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(encoding="utf-8")
 
         for token in ("anime6b", "seedvr2", "ultimate", "faceDetailerEnabled",
-                      "autoColorMatchEnabled", "workflowFeatures"):
+                      "handDetailerEnabled", "footDetailerEnabled",
+                      "limbDetailer", "autoColorMatchEnabled", "workflowFeatures"):
             self.assertIn(token, advanced)
         self.assertIn("data.outputEnhancement", advanced)
+        self.assertIn("data.hand_detailer", panel)
+        self.assertIn("data.foot_detailer", panel)
         self.assertIn("hiresSampler", panel)
         self.assertIn("hiresScheduler", panel)
 
@@ -75,6 +78,12 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn('seedvr2: { scale: 1.25', advanced)
         self.assertIn('ultimate: { scale: 1.5', advanced)
         self.assertIn('value="1.5"', advanced)
+        self.assertIn('id="handDetailerEnabled" type="checkbox" checked', advanced)
+        self.assertIn('id="footDetailerEnabled" type="checkbox" checked', advanced)
+        self.assertIn('id="limbDetailerDenoise"', advanced)
+        self.assertIn('value="0.45"', advanced)
+        self.assertIn("features.hand_detailer === false", advanced)
+        self.assertIn("features.foot_detailer === false", advanced)
 
 
 if __name__ == "__main__":

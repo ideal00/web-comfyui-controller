@@ -91,6 +91,9 @@
         <div id="seedvrControls" style="display:none"><div class="field-title"><span>SeedVR2 色彩修正</span>${help("生成式超分后把颜色拉回原图。LAB 是默认推荐；Wavelet 更柔和，AdaIN 风格影响更明显，关闭可能出现色偏。")}</div><select id="seedvrColor"><option value="lab" selected>LAB（推荐）</option><option value="wavelet">Wavelet</option><option value="adain">AdaIN</option><option value="none">关闭</option></select></div>
         <div class="two" style="margin-top:8px"><label><input id="faceDetailerEnabled" type="checkbox" onchange="outputEnhancementChanged(true)"> 输出后自动修脸（FaceDetailer） ${help("检测并局部重绘脸部。单人大图可选；默认关闭，因为它可能改变身份和五官。推荐：引导 512、12 步、重绘 0.35。")}</label><label><input id="autoColorMatchEnabled" type="checkbox" onchange="outputEnhancementChanged(true)"> 自动匹配原图色彩 ${help("将增强结果的颜色匹配回增强前原图。出现色偏时开启；默认关闭，开启时推荐 Reinhard LAB、强度 0.70。")}</label></div>
         <div id="faceDetailerControls" style="display:none" class="three"><div><div class="field-title"><span>引导尺寸</span>${help("脸部局部处理分辨率。推荐 512；远景小脸可用 640，过高会更慢且可能改变五官。")}</div><input id="faceDetailerGuideSize" type="number" min="256" max="1024" step="64" value="512"></div><div><div class="field-title"><span>步数</span>${help("脸部局部重绘步数。推荐 12；通常 10–16 已足够。")}</div><input id="faceDetailerSteps" type="number" min="6" max="30" value="12"></div><div><div class="field-title"><span>重绘幅度</span>${help("脸部改动强度。推荐 0.35；降低可保身份，提高会修更多缺陷但可能换脸。")}</div><input id="faceDetailerDenoise" type="number" min="0.15" max="0.65" step="0.05" value="0.35"></div></div>
+        <div class="field-title"><span>手脚局部修复</span>${help("整图增强只会放大已有手脚，不能可靠重建指趾。本功能用专用 YOLO 检测器定位后局部重绘；原图直出也会生效，检测不到时不改图。")}</div>
+        <div class="two"><label><input id="handDetailerEnabled" type="checkbox" checked onchange="outputEnhancementChanged(true)"> 自动修复手指（推荐） ${help("默认开启。使用 hand_yolov8s 定位手部并局部重绘，补救模糊、粘连、缺指或多指；手被遮挡严重时仍可能无法检测。")}</label><label><input id="footDetailerEnabled" type="checkbox" checked onchange="outputEnhancementChanged(true)"> 自动修复脚趾/鞋形（推荐） ${help("默认开启。裸足时强调五趾，穿鞋时改用正确鞋形提示，避免把脚趾画到鞋面上。")}</label></div>
+        <div id="limbDetailerControls" class="three"><div><div class="field-title"><span>引导尺寸</span>${help("手脚局部重绘分辨率。推荐 512；远景小手脚可试 640，但会更慢。")}</div><input id="limbDetailerGuideSize" type="number" min="256" max="1024" step="64" value="512"></div><div><div class="field-title"><span>步数</span>${help("手脚局部重绘步数。推荐 16；比修脸略高，以便重建指趾结构。")}</div><input id="limbDetailerSteps" type="number" min="8" max="30" value="16"></div><div><div class="field-title"><span>重绘幅度</span>${help("推荐 0.45。低于 0.35 往往只会保留原有模糊；高于 0.60 容易改变手势、鞋形或产生新指趾。")}</div><input id="limbDetailerDenoise" type="number" min="0.2" max="0.7" step="0.05" value="0.45"></div></div>
         <div id="autoColorControls" style="display:none" class="two"><div><div class="field-title"><span>匹配算法</span>${help("Reinhard LAB 是稳妥默认；MKL LAB 匹配更强，Histogram 适合明显色阶差异但可能压缩层次。")}</div><select id="autoColorMethod"><option value="reinhard_lab">Reinhard LAB（推荐）</option><option value="mkl_lab">MKL LAB</option><option value="histogram">Histogram</option></select></div><div><div class="field-title"><span>强度</span>${help("颜色回匹配强度。推荐 0.70；色偏仍明显可提高，颜色变平则降低。")}</div><input id="autoColorStrength" type="number" min="0" max="1" step="0.05" value="0.7"></div></div>
         <div id="outputEnhancementAvailability" class="small" style="margin-top:8px"></div>
       </div>`;
@@ -263,11 +266,25 @@
       color.disabled = !features.color_transfer;
       if (color.disabled) color.checked = false;
     }
+    const hand = byId("handDetailerEnabled");
+    if (hand) {
+      hand.disabled = features.hand_detailer !== true || profile().family === "krea2";
+      // Before /api/models finishes, capability is undefined. Keep the checked
+      // default so it becomes active as soon as the installed detector is known.
+      if (features.hand_detailer === false || profile().family === "krea2") hand.checked = false;
+    }
+    const foot = byId("footDetailerEnabled");
+    if (foot) {
+      foot.disabled = features.foot_detailer !== true || profile().family === "krea2";
+      if (features.foot_detailer === false || profile().family === "krea2") foot.checked = false;
+    }
     const missing = [];
     if (!features.anime6b) missing.push("Anime6B 模型");
     if (!features.seedvr2) missing.push("SeedVR2 节点/权重");
     if (!features.ultimate) missing.push("Ultimate SD Upscale 节点");
     if (!features.face_detailer) missing.push("FaceDetailer 检测器");
+    if (!features.hand_detailer) missing.push("手部检测模型");
+    if (!features.foot_detailer) missing.push("足部检测模型");
     if (!features.color_transfer) missing.push("ColorTransfer 节点");
     const status = byId("outputEnhancementAvailability");
     if (status) status.textContent = missing.length
@@ -296,6 +313,13 @@
     if (byId("ultimateControls")) byId("ultimateControls").style.display = mode === "ultimate" ? "grid" : "none";
     if (byId("seedvrControls")) byId("seedvrControls").style.display = mode === "seedvr2" ? "block" : "none";
     if (byId("faceDetailerControls")) byId("faceDetailerControls").style.display = byId("faceDetailerEnabled")?.checked ? "grid" : "none";
+    const limbBlocked = profile().family === "krea2" || !!byId("regionsEnabled")?.checked || byId("illustriousMode")?.value === "repair";
+    for (const id of ["handDetailerEnabled", "footDetailerEnabled"]) {
+      const control = byId(id);
+      if (control) control.disabled = limbBlocked || (id === "handDetailerEnabled" ? !workflowFeatures().hand_detailer : !workflowFeatures().foot_detailer);
+    }
+    const activeLimbDetailer = ["handDetailerEnabled", "footDetailerEnabled"].some((id) => byId(id)?.checked && !byId(id)?.disabled);
+    if (byId("limbDetailerControls")) byId("limbDetailerControls").style.display = activeLimbDetailer ? "grid" : "none";
     if (byId("autoColorControls")) byId("autoColorControls").style.display = byId("autoColorMatchEnabled")?.checked ? "grid" : "none";
     if (byId("outputEnhancementRecommendation")) byId("outputEnhancementRecommendation").textContent = defaults.note;
     if (!silent && byId("status")) {
@@ -358,6 +382,13 @@
           steps: byId("faceDetailerSteps")?.value || 12,
           denoise: byId("faceDetailerDenoise")?.value || 0.35,
         },
+        limbDetailer: {
+          hands: !!byId("handDetailerEnabled")?.checked && !byId("handDetailerEnabled")?.disabled,
+          feet: !!byId("footDetailerEnabled")?.checked && !byId("footDetailerEnabled")?.disabled,
+          guideSize: byId("limbDetailerGuideSize")?.value || 512,
+          steps: byId("limbDetailerSteps")?.value || 16,
+          denoise: byId("limbDetailerDenoise")?.value || 0.45,
+        },
         colorMatch: {
           enabled: !!byId("autoColorMatchEnabled")?.checked,
           method: byId("autoColorMethod")?.value || "reinhard_lab",
@@ -391,7 +422,9 @@
         byId("outputEnhancementMode").value = "off";
         window.outputEnhancementChanged(true);
       }
-      return original.apply(this, args);
+      const result = original.apply(this, args);
+      window.outputEnhancementChanged(true);
+      return result;
     };
     wrapped.__outputConflictWrapped = true;
     window.applyIllustriousMode = wrapped;
@@ -402,6 +435,7 @@
   wrapProfileRefresh("renderAdvancedRecommendation");
   wrapProfileRefresh("applySamplingProfileForModel");
   wrapProfileRefresh("modelChanged");
+  wrapProfileRefresh("toggleRegions");
   wrapHiresConflict();
   syncCapabilities();
 })();

@@ -96,6 +96,8 @@ HIRES_UPSCALE_MODEL = "RealESRGAN_x4plus_anime_6B.pth"
 SEEDVR2_MODEL = "seedvr2_3b_int8_convrot.safetensors"
 SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
 FACE_DETECTOR_MODEL = "bbox/face_yolov8m.pt"
+HAND_DETECTOR_MODEL = "bbox/hand_yolov8s.pt"
+FOOT_DETECTOR_MODEL = "bbox/foot_yolov8x.pt"
 
 
 def object_info_choices(info: dict, class_type: str, input_name: str) -> list[str]:
@@ -442,6 +444,23 @@ def compile_prompt(data: dict) -> dict:
     negative_terms = exact_unique_terms(", ".join(profile["negative"]), manual_negative)
     negative_terms = exact_unique_terms(", ".join(negative_terms),
                                         ", ".join(dynamic_negative_terms(positive)))
+    # The hand/foot detailer may be enabled even when the visible prompt does not
+    # literally mention limbs (for example a generic "1girl, standing" prompt).
+    # Seed the base sampler with matching failure prevention so the local pass is
+    # correcting a mostly sound structure instead of rebuilding it from scratch.
+    enhancement = data.get("outputEnhancement") or {}
+    limb_detailer = (enhancement.get("limbDetailer") or {}) if isinstance(enhancement, dict) else {}
+    if isinstance(limb_detailer, dict):
+        if limb_detailer.get("hands"):
+            negative_terms = exact_unique_terms(
+                ", ".join(negative_terms),
+                "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands",
+            )
+        if limb_detailer.get("feet"):
+            negative_terms = exact_unique_terms(
+                ", ".join(negative_terms),
+                "bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet",
+            )
     warnings = prompt_conflicts(ordered, natural_language, safety)
     warnings.extend(lora_compatibility_warnings(data, profile["family"]))
     style_count = len(split_prompt_terms(sections["style"], limit=180))
@@ -1730,6 +1749,18 @@ def build_workflow(data: dict) -> dict:
 
     detailer = output_enhancement.get("faceDetailer") or {}
     detailer_enabled = bool(isinstance(detailer, dict) and detailer.get("enabled"))
+    limb_detailer = output_enhancement.get("limbDetailer") or {}
+    if not isinstance(limb_detailer, dict):
+        raise ValueError("手脚修复设置格式无效。")
+    hand_detailer_enabled = bool(limb_detailer.get("hands"))
+    foot_detailer_enabled = bool(limb_detailer.get("feet"))
+    limb_detailer_allowed = not krea2 and not regional_mode and not repair
+    auto_color = output_enhancement.get("colorMatch") or {}
+    if (isinstance(auto_color, dict) and auto_color.get("enabled")
+            and color_reference_ref is None
+            and (detailer_enabled or (limb_detailer_allowed
+                                      and (hand_detailer_enabled or foot_detailer_enabled)))):
+        color_reference_ref = image_ref
     if detailer_enabled:
         if krea2:
             raise ValueError("Krea 2 Turbo 不启用 FaceDetailer；请使用参考图或后处理超分保持五官。")
@@ -1759,7 +1790,66 @@ def build_workflow(data: dict) -> dict:
         }}
         image_ref = [detailer_id, 0]
 
-    auto_color = output_enhancement.get("colorMatch") or {}
+    def apply_limb_detailer(current_image: list, detector_model: str,
+                            positive_suffix: str, negative_suffix: str) -> list:
+        positive_encode_id, negative_encode_id, detector_id, detailer_id = [alloc() for _ in range(4)]
+        nodes[positive_encode_id] = {"class_type": "CLIPTextEncode", "inputs": {
+            "text": unique_prompt_terms(prompt, positive_suffix), "clip": clip_ref,
+        }}
+        nodes[negative_encode_id] = {"class_type": "CLIPTextEncode", "inputs": {
+            "text": unique_prompt_terms(negative, negative_suffix), "clip": clip_ref,
+        }}
+        nodes[detector_id] = {"class_type": "UltralyticsDetectorProvider",
+                              "inputs": {"model_name": detector_model}}
+        nodes[detailer_id] = {"class_type": "FaceDetailer", "inputs": {
+            "image": current_image, "model": model_ref, "clip": clip_ref, "vae": vae_ref,
+            "guide_size": bounded(limb_detailer.get("guideSize"), 512, 256, 1024),
+            "guide_size_for": True, "max_size": 1024, "seed": seed,
+            "steps": bounded(limb_detailer.get("steps"), 16, 8, 30),
+            "cfg": bounded(limb_detailer.get("cfg"),
+                           sampling_profile.get("hires", {}).get("cfg", cfg),
+                           1, 15, integer=False),
+            "sampler_name": sampler_name, "scheduler": scheduler,
+            "positive": [positive_encode_id, 0], "negative": [negative_encode_id, 0],
+            "denoise": bounded(limb_detailer.get("denoise"), 0.45, 0.2, 0.7,
+                               integer=False),
+            "feather": 8, "noise_mask": True, "force_inpaint": True,
+            "bbox_threshold": 0.25, "bbox_dilation": 16, "bbox_crop_factor": 2.5,
+            "sam_detection_hint": "center-1", "sam_dilation": 0, "sam_threshold": 0.93,
+            "sam_bbox_expansion": 0, "sam_mask_hint_threshold": 0.7,
+            "sam_mask_hint_use_negative": "False", "drop_size": 5,
+            "bbox_detector": [detector_id, 0], "wildcard": "", "cycle": 1,
+            "noise_mask_feather": 16, "tiled_encode": vae_mode == "tiled",
+            "tiled_decode": vae_mode == "tiled",
+        }}
+        return [detailer_id, 0]
+
+    if limb_detailer_allowed and hand_detailer_enabled:
+        hand_positive = ("anatomically correct hands, detailed gloves, correct finger shapes, "
+                         "sharp hand details, clean lineart") if "glove" in prompt.lower() else (
+            "anatomically correct hands, five fingers on each hand, separated fingers, "
+            "natural hand pose, sharp hand details, clean lineart"
+        )
+        image_ref = apply_limb_detailer(
+            image_ref, HAND_DETECTOR_MODEL, hand_positive,
+            "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands",
+        )
+    if limb_detailer_allowed and foot_detailer_enabled:
+        normalized_positive = prompt.lower().replace("_", " ")
+        toes_visible = any(token in normalized_positive for token in
+                           ("barefoot", "bare feet", "toe", "sandals", "open toe"))
+        foot_positive = (
+            "anatomically correct feet, five toes on each foot, separated toes, natural foot pose, "
+            "sharp foot details, clean lineart"
+        ) if toes_visible else (
+            "anatomically correct feet, detailed footwear, correct shoe shape, "
+            "sharp foot details, clean lineart"
+        )
+        image_ref = apply_limb_detailer(
+            image_ref, FOOT_DETECTOR_MODEL, foot_positive,
+            "bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet",
+        )
+
     if isinstance(auto_color, dict) and auto_color.get("enabled") and color_reference_ref:
         color_method = str(auto_color.get("method", "reinhard_lab") or "reinhard_lab")
         if color_method not in {"reinhard_lab", "mkl_lab", "histogram"}:
@@ -1969,10 +2059,22 @@ class Handler(BaseHTTPRequestHandler):
                     "face_detailer_node": "FaceDetailer" in info,
                     "face_detector_provider": "UltralyticsDetectorProvider" in info,
                     "face_detector_model": FACE_DETECTOR_MODEL in detector_models,
+                    "hand_detector_model": HAND_DETECTOR_MODEL in detector_models,
+                    "foot_detector_model": FOOT_DETECTOR_MODEL in detector_models,
                     "face_detailer": (
                         "FaceDetailer" in info
                         and "UltralyticsDetectorProvider" in info
                         and FACE_DETECTOR_MODEL in detector_models
+                    ),
+                    "hand_detailer": (
+                        "FaceDetailer" in info
+                        and "UltralyticsDetectorProvider" in info
+                        and HAND_DETECTOR_MODEL in detector_models
+                    ),
+                    "foot_detailer": (
+                        "FaceDetailer" in info
+                        and "UltralyticsDetectorProvider" in info
+                        and FOOT_DETECTOR_MODEL in detector_models
                     ),
                     "seedvr2_nodes": seedvr_nodes,
                     "seedvr2_model": SEEDVR2_MODEL in diffusion_models,
