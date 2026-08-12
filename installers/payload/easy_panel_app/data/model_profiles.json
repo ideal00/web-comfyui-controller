@@ -121,6 +121,21 @@
       ]
     },
     {
+      "id": "illustrious-wai-v17",
+      "match": ["waiillustrioussdxl_v170", "waiillustrioussdxl-v17", "waiillustrioussdxl_v17"],
+      "family": "illustrious",
+      "label": "WAI Illustrious SDXL v17",
+      "source": "模型作者 CivitAI 页面",
+      "source_url": "https://civitai.com/models/827184",
+      "resolution": {"min": 512, "max": 1920, "alignment": 8, "recommended": [[1024, 1024], [832, 1216], [1216, 832]]},
+      "hires": {"scale": 1.25, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal"},
+      "combos": [
+        {"key": "recommended", "label": "作者范围均衡", "steps": 28, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "v17 作者范围：15–30 步、CFG 5–7、Euler a；28 / 6 适合正式出图。"},
+        {"key": "fast", "label": "快速", "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围内的快速构图预览。"},
+        {"key": "detail", "label": "细节", "steps": 30, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者步数范围上限；适合复杂背景与 LoRA。"}
+      ]
+    },
+    {
       "id": "illustrious-wai-v14",
       "match": ["waiillustrioussdxl_v140", "waiillustrioussdxl-v14", "waiillustrioussdxl_v14"],
       "family": "illustrious",

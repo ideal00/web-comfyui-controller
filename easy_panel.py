@@ -406,6 +406,13 @@ def dynamic_negative_terms(positive: str) -> list[str]:
         additions += ["bad feet", "extra legs", "missing legs", "malformed limbs"]
     if any(token in normalized for token in ("2girls", "2boys", "multiple girls", "multiple people", "group", "crowd")):
         additions += ["duplicate person", "fused bodies", "merged limbs", "extra arms"]
+    if "solo" in normalized:
+        # Strong character/action LoRAs can paint hand-like training fragments or
+        # partial people into an otherwise unspecified background.  A solo prompt
+        # should explicitly reject those artifacts instead of relying on "solo"
+        # alone, which many anime checkpoints treat as a weak subject-count hint.
+        additions += ["multiple people", "background characters", "extra person",
+                      "duplicate person", "disembodied limbs", "floating limbs"]
     if any(token in normalized for token in ("low angle", "from above", "foreshortening", "dynamic pose", "dutch angle")):
         additions += ["bad perspective", "warped background", "distorted body"]
     return exact_unique_terms(", ".join(additions))
@@ -416,6 +423,12 @@ def compile_prompt(data: dict) -> dict:
     safety = normalized_safety_level(data)
     profile = model_prompt_profile(model, safety)
     sections = prompt_sections(data)
+    if isinstance(data.get("promptSections"), dict) and not sections["scene"]:
+        # The structured panel owns the scene field, so an empty scene means
+        # "use a safe neutral fallback".  This prevents stacked LoRAs from
+        # inventing dense background props and figures.  Callers that want a
+        # detailed setting can still provide one explicitly.
+        sections["scene"] = "simple background, uncluttered background, subject focus"
     trigger_terms = exact_unique_terms(", ".join(selected_lora_triggers(data)))
     ordered: list[str] = []
     seen: set[str] = set()
@@ -444,6 +457,10 @@ def compile_prompt(data: dict) -> dict:
     negative_terms = exact_unique_terms(", ".join(profile["negative"]), manual_negative)
     negative_terms = exact_unique_terms(", ".join(negative_terms),
                                         ", ".join(dynamic_negative_terms(positive)))
+    if isinstance(data.get("promptSections"), dict) and not str(
+            data["promptSections"].get("scene", "") or "").strip():
+        negative_terms = exact_unique_terms(
+            ", ".join(negative_terms), "busy background, cluttered background")
     # The hand/foot detailer may be enabled even when the visible prompt does not
     # literally mention limbs (for example a generic "1girl, standing" prompt).
     # Seed the base sampler with matching failure prevention so the local pass is
@@ -470,11 +487,27 @@ def compile_prompt(data: dict) -> dict:
     user_term_count = sum(len(split_prompt_terms(sections[key], limit=360)) for key in PROMPT_SECTION_KEYS)
     region_term_count = sum(len(split_prompt_terms(item.get("prompt", ""), limit=180))
                             for item in (data.get("regions") or []) if isinstance(item, dict))
-    if not user_term_count and not trigger_terms and not natural_language and not region_term_count:
+    override = data.get("promptOverride") or {}
+    overridden = bool(isinstance(override, dict) and override.get("enabled"))
+    if overridden:
+        # Manual final-prompt mode is deliberately exact: do not reinsert model
+        # quality tags, LoRA triggers, safety negatives, scene fallbacks or
+        # dynamic anatomy terms after the user has edited the final text.
+        positive = str(override.get("positive", "") or "").strip()
+        negative = str(override.get("negative", "") or "").strip()
+        if len(positive) > 32_000 or len(negative) > 32_000:
+            errors.append("最终提示词单项不能超过 32000 个字符。")
+        ordered = split_prompt_terms(positive, limit=720)
+        negative_terms = split_prompt_terms(negative, limit=720)
+        warnings = prompt_conflicts(ordered, "", safety)
+        warnings.extend(lora_compatibility_warnings(data, profile["family"]))
+    elif not user_term_count and not trigger_terms and not natural_language and not region_term_count:
         errors.append("请至少填写人物、场景、姿势、其他标签或自然语言描述中的一项。")
-    return {"positive": positive, "negative": ", ".join(negative_terms),
+    return {"positive": positive,
+            "negative": negative if overridden else ", ".join(negative_terms),
             "errors": errors, "warnings": warnings, "sections": sections,
             "triggers": trigger_terms, "profile": profile,
+            "overridden": overridden,
             "positiveTerms": len(ordered), "negativeTerms": len(negative_terms)}
 
 
@@ -885,6 +918,8 @@ def regional_global_prompt(data: dict, compiled: dict, bound_loras: set[str]) ->
     """Build a character-free scene/style prompt shared by every region."""
     sections = compiled["sections"]
     explicit = str(data.get("regionGlobalPrompt", "") or "").strip()
+    if compiled.get("overridden"):
+        return unique_prompt_terms(compiled["positive"], explicit)
     regions = normalized_regions(data)
     return unique_prompt_terms(
         ", ".join(selected_lora_triggers(data, exclude_names=bound_loras)),
@@ -904,6 +939,13 @@ def regional_character_prompt(data: dict, compiled: dict, region: dict,
         wanted = normalized_lora_name(region["lora"])
         trigger = next((value for name, value in selected_lora_trigger_entries(data)
                         if normalized_lora_name(name) == wanted), "")
+    if compiled.get("overridden"):
+        # Region fields remain editable, but no hidden quality/trigger terms are
+        # reintroduced while the final-prompt override is active.
+        return unique_prompt_terms(
+            compiled["positive"], region["subject"],
+            regional_position_prompt(region), region["prompt"],
+        )
     global_triggers = selected_lora_triggers(data, exclude_names=bound_loras)
     global_prompt = regional_global_prompt(data, compiled, bound_loras)
     quality_keys = {normalize_prompt_key(term)
@@ -1182,7 +1224,7 @@ def build_workflow(data: dict) -> dict:
         family_name = "Anima" if anima else "Krea 2"
         raise ValueError(f"{family_name} 暂不支持区域提示词；请切回 SDXL / Illustrious，或关闭多人分区。")
     regional_mode = bool(regions and not anima and not krea2)
-    if regional_mode:
+    if regional_mode and not compiled.get("overridden"):
         negative = regional_negative_prompt(negative, regions)
     bound_lora_names = {region["lora"] for region in regions if region["lora"]}
     bound_lora_keys = {normalized_lora_name(name) for name in bound_lora_names}
@@ -1805,49 +1847,65 @@ def build_workflow(data: dict) -> dict:
             "image": current_image, "model": model_ref, "clip": clip_ref, "vae": vae_ref,
             "guide_size": bounded(limb_detailer.get("guideSize"), 512, 256, 1024),
             "guide_size_for": True, "max_size": 1024, "seed": seed,
-            "steps": bounded(limb_detailer.get("steps"), 16, 8, 30),
+            "steps": bounded(limb_detailer.get("steps"), 12, 8, 30),
             "cfg": bounded(limb_detailer.get("cfg"),
                            sampling_profile.get("hires", {}).get("cfg", cfg),
                            1, 15, integer=False),
             "sampler_name": sampler_name, "scheduler": scheduler,
             "positive": [positive_encode_id, 0], "negative": [negative_encode_id, 0],
-            "denoise": bounded(limb_detailer.get("denoise"), 0.45, 0.2, 0.7,
+            "denoise": bounded(limb_detailer.get("denoise"), 0.35, 0.15, 0.6,
                                integer=False),
             "feather": 8, "noise_mask": True, "force_inpaint": True,
-            "bbox_threshold": 0.25, "bbox_dilation": 16, "bbox_crop_factor": 2.5,
+            # Limb detectors are prone to mistaking ropes, lanterns and small
+            # background decorations for hands/feet.  Keep the pass local and
+            # require a confident, non-trivial detection before inpainting.
+            "bbox_threshold": 0.5, "bbox_dilation": 8, "bbox_crop_factor": 1.8,
             "sam_detection_hint": "center-1", "sam_dilation": 0, "sam_threshold": 0.93,
             "sam_bbox_expansion": 0, "sam_mask_hint_threshold": 0.7,
-            "sam_mask_hint_use_negative": "False", "drop_size": 5,
+            "sam_mask_hint_use_negative": "False", "drop_size": 32,
             "bbox_detector": [detector_id, 0], "wildcard": "", "cycle": 1,
-            "noise_mask_feather": 16, "tiled_encode": vae_mode == "tiled",
+            "noise_mask_feather": 12, "tiled_encode": vae_mode == "tiled",
             "tiled_decode": vae_mode == "tiled",
         }}
         return [detailer_id, 0]
 
+    def editable_limb_prompt(key: str, fallback: str) -> str:
+        return str(limb_detailer.get(key, fallback) or "").strip()
+
     if limb_detailer_allowed and hand_detailer_enabled:
-        hand_positive = ("anatomically correct hands, detailed gloves, correct finger shapes, "
+        default_hand_positive = ("anatomically correct hands, detailed gloves, correct finger shapes, "
                          "sharp hand details, clean lineart") if "glove" in prompt.lower() else (
             "anatomically correct hands, five fingers on each hand, separated fingers, "
             "natural hand pose, sharp hand details, clean lineart"
         )
+        hand_positive = editable_limb_prompt("handPositive", default_hand_positive)
+        hand_negative = editable_limb_prompt(
+            "handNegative",
+            "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands",
+        )
         image_ref = apply_limb_detailer(
             image_ref, HAND_DETECTOR_MODEL, hand_positive,
-            "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands",
+            hand_negative,
         )
     if limb_detailer_allowed and foot_detailer_enabled:
         normalized_positive = prompt.lower().replace("_", " ")
         toes_visible = any(token in normalized_positive for token in
                            ("barefoot", "bare feet", "toe", "sandals", "open toe"))
-        foot_positive = (
+        default_foot_positive = (
             "anatomically correct feet, five toes on each foot, separated toes, natural foot pose, "
             "sharp foot details, clean lineart"
         ) if toes_visible else (
             "anatomically correct feet, detailed footwear, correct shoe shape, "
             "sharp foot details, clean lineart"
         )
+        foot_positive = editable_limb_prompt("footPositive", default_foot_positive)
+        foot_negative = editable_limb_prompt(
+            "footNegative",
+            "bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet",
+        )
         image_ref = apply_limb_detailer(
             image_ref, FOOT_DETECTOR_MODEL, foot_positive,
-            "bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet",
+            foot_negative,
         )
 
     if isinstance(auto_color, dict) and auto_color.get("enabled") and color_reference_ref:

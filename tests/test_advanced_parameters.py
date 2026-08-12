@@ -74,6 +74,35 @@ class SamplingProfileTests(unittest.TestCase):
                          (sampler["steps"], sampler["cfg"],
                           sampler["sampler_name"], sampler["scheduler"]))
 
+    def test_lora_array_order_controls_loader_chain_and_trigger_order(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        names = ["characters/hero.safetensors", "poses/action.safetensors",
+                 "styles/ink.safetensors"]
+        data["loras"] = [{"name": name, "weight": 0.7} for name in names]
+        triggers = list(zip(names, ("hero_token", "action_token", "ink_token")))
+
+        with patch.object(easy_panel, "checkpoint_issue", return_value=None), \
+                patch.object(easy_panel, "selected_lora_trigger_entries",
+                             return_value=triggers):
+            result = easy_panel.build_workflow(data)
+            compiled = easy_panel.compile_prompt(data)
+
+        nodes = result["prompt"]
+        lora_items = [(node_id, node) for node_id, node in nodes.items()
+                      if node["class_type"] == "LoraLoader"]
+        self.assertEqual(names, [node["inputs"]["lora_name"]
+                                 for _, node in lora_items])
+        checkpoint_id = next(node_id for node_id, node in nodes.items()
+                             if node["class_type"] == "CheckpointLoaderSimple")
+        expected_model = [checkpoint_id, 0]
+        expected_clip = [checkpoint_id, 1]
+        for node_id, node in lora_items:
+            self.assertEqual(expected_model, node["inputs"]["model"])
+            self.assertEqual(expected_clip, node["inputs"]["clip"])
+            expected_model, expected_clip = [node_id, 0], [node_id, 1]
+        self.assertTrue(compiled["positive"].startswith(
+            "hero_token, action_token, ink_token,"))
+
     def test_krea2_locked_contract_ignores_manual_values(self):
         nodes = self.build(payload("krea2TurboOfficialComfy_krea2TurboFp8.safetensors"))
         sampler = self.nodes_of(nodes, "KSampler")[0]["inputs"]
@@ -231,6 +260,13 @@ class SamplingProfileTests(unittest.TestCase):
                 detailer["inputs"]["guide_size"], detailer["inputs"]["steps"],
                 detailer["inputs"]["denoise"], detailer["inputs"]["force_inpaint"],
             ))
+            self.assertEqual((0.5, 8, 1.8, 32, 12), (
+                detailer["inputs"]["bbox_threshold"],
+                detailer["inputs"]["bbox_dilation"],
+                detailer["inputs"]["bbox_crop_factor"],
+                detailer["inputs"]["drop_size"],
+                detailer["inputs"]["noise_mask_feather"],
+            ))
 
         detailer_ids = [node_id for node_id, node in nodes.items()
                         if node["class_type"] == "FaceDetailer"]
@@ -245,6 +281,76 @@ class SamplingProfileTests(unittest.TestCase):
         negative_text = nodes[str(negative_ref[0])]["inputs"]["text"]
         self.assertIn("extra fingers", negative_text)
         self.assertIn("extra toes", negative_text)
+
+    def test_limb_detailer_safe_defaults_and_empty_scene_background_guard(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["promptSections"] = {"subject": "1girl, solo"}
+        data["outputEnhancement"] = {
+            "mode": "off", "limbDetailer": {"hands": True, "feet": False},
+        }
+        nodes = self.build(data)
+        detailer = self.nodes_of(nodes, "FaceDetailer")[0]["inputs"]
+        self.assertEqual((12, 0.35, 0.5, 1.8), (
+            detailer["steps"], detailer["denoise"],
+            detailer["bbox_threshold"], detailer["bbox_crop_factor"],
+        ))
+        base_sampler = self.nodes_of(nodes, "KSampler")[0]["inputs"]
+        positive = nodes[str(base_sampler["positive"][0])]["inputs"]["text"]
+        negative = nodes[str(base_sampler["negative"][0])]["inputs"]["text"]
+        for term in ("simple background", "uncluttered background", "subject focus"):
+            self.assertIn(term, positive)
+        for term in ("busy background", "cluttered background", "background characters",
+                     "extra person", "disembodied limbs", "floating limbs"):
+            self.assertIn(term, negative)
+
+        explicit = payload("waiIllustriousSDXL_v140.safetensors")
+        explicit["promptSections"]["scene"] = "detailed shrine interior"
+        compiled = easy_panel.compile_prompt(explicit)
+        self.assertIn("detailed shrine interior", compiled["positive"])
+        self.assertNotIn("simple background", compiled["positive"])
+
+    def test_manual_final_prompt_override_is_used_verbatim(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["promptSections"] = {"subject": "1girl, solo", "scene": ""}
+        data["promptOverride"] = {
+            "enabled": True,
+            "positive": "custom positive only, no automatic prefix",
+            "negative": "custom negative only",
+        }
+        compiled = easy_panel.compile_prompt(data)
+        self.assertTrue(compiled["overridden"])
+        self.assertEqual("custom positive only, no automatic prefix", compiled["positive"])
+        self.assertEqual("custom negative only", compiled["negative"])
+        self.assertNotIn("masterpiece", compiled["positive"])
+        self.assertNotIn("cluttered background", compiled["negative"])
+
+        nodes = self.build(data)
+        sampler = self.nodes_of(nodes, "KSampler")[0]["inputs"]
+        self.assertEqual("custom positive only, no automatic prefix",
+                         nodes[str(sampler["positive"][0])]["inputs"]["text"])
+        self.assertEqual("custom negative only",
+                         nodes[str(sampler["negative"][0])]["inputs"]["text"])
+
+        data["promptOverride"] = {"enabled": True, "positive": "", "negative": ""}
+        blank = easy_panel.compile_prompt(data)
+        self.assertEqual([], blank["errors"])
+        self.assertEqual(("", ""), (blank["positive"], blank["negative"]))
+
+    def test_limb_detailer_prompts_are_editable(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["outputEnhancement"] = {
+            "mode": "off",
+            "limbDetailer": {
+                "hands": True, "feet": False,
+                "handPositive": "user hand repair positive",
+                "handNegative": "user hand repair negative",
+            },
+        }
+        nodes = self.build(data)
+        encoded = [node["inputs"]["text"] for node in self.nodes_of(nodes, "CLIPTextEncode")]
+        self.assertTrue(any("user hand repair positive" in text for text in encoded))
+        self.assertTrue(any("user hand repair negative" in text for text in encoded))
+        self.assertFalse(any("five fingers on each hand" in text for text in encoded))
 
     def test_limb_detailers_are_safely_skipped_for_krea_and_repair(self):
         krea = payload("krea2TurboOfficialComfy_krea2TurboFp8.safetensors")

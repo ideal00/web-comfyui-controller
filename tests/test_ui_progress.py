@@ -66,6 +66,31 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn("hiresSampler", panel)
         self.assertIn("hiresScheduler", panel)
 
+    def test_all_final_and_limb_prompts_are_editable_and_payload_backed(self):
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(
+            encoding="utf-8")
+        advanced = (ROOT / "web" / "assets" / "js" / "model-advanced.js").read_text(
+            encoding="utf-8")
+        backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+
+        self.assertIn('<textarea id="compiledPositive"', html)
+        self.assertIn('<textarea id="compiledNegative"', html)
+        self.assertIn('oninput="finalPromptChanged()"', html)
+        self.assertIn('onclick="rebuildFinalPrompt()"', html)
+        self.assertIn('onclick="clearFinalPrompt()"', html)
+        self.assertIn("promptOverride:finalPromptOverride()", javascript)
+        self.assertIn("data.promptOverride=finalPromptOverride()", javascript)
+        self.assertIn("手动原样提交", javascript)
+        self.assertIn("最终正负向已按图片原文恢复", javascript)
+        self.assertIn('id="handDetailerPositive"', advanced)
+        self.assertIn('id="handDetailerNegative"', advanced)
+        self.assertIn('id="footDetailerPositive"', advanced)
+        self.assertIn('id="footDetailerNegative"', advanced)
+        self.assertIn('handPositive: byId("handDetailerPositive")', advanced)
+        self.assertIn('override.get("positive", "")', backend)
+        self.assertIn('"overridden": overridden', backend)
+
     def test_advanced_functions_have_matching_help_and_recommended_defaults(self):
         advanced = (ROOT / "web" / "assets" / "js" / "model-advanced.js").read_text(
             encoding="utf-8")
@@ -78,12 +103,32 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn('seedvr2: { scale: 1.25', advanced)
         self.assertIn('ultimate: { scale: 1.5', advanced)
         self.assertIn('value="1.5"', advanced)
-        self.assertIn('id="handDetailerEnabled" type="checkbox" checked', advanced)
-        self.assertIn('id="footDetailerEnabled" type="checkbox" checked', advanced)
+        self.assertIn('id="handDetailerEnabled" type="checkbox" onchange=', advanced)
+        self.assertIn('id="footDetailerEnabled" type="checkbox" onchange=', advanced)
+        self.assertNotIn('id="handDetailerEnabled" type="checkbox" checked', advanced)
+        self.assertNotIn('id="footDetailerEnabled" type="checkbox" checked', advanced)
         self.assertIn('id="limbDetailerDenoise"', advanced)
-        self.assertIn('value="0.45"', advanced)
+        self.assertIn('id="limbDetailerDenoise" type="number" min="0.15" max="0.6" step="0.05" value="0.35"', advanced)
         self.assertIn("features.hand_detailer === false", advanced)
         self.assertIn("features.foot_detailer === false", advanced)
+
+    def test_lora_rows_support_buttons_and_drag_reordering(self):
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(
+            encoding="utf-8")
+        css = (ROOT / "web" / "assets" / "css" / "panel.css").read_text(
+            encoding="utf-8")
+
+        self.assertIn("可拖动“↕序号”", html)
+        self.assertIn("function moveLoraRow(row,direction)", javascript)
+        self.assertIn("handle.draggable=true", javascript)
+        self.assertIn("handle.ondragstart", javascript)
+        self.assertIn("row.ondragover", javascript)
+        self.assertIn("commitLoraOrder", javascript)
+        self.assertIn("saveLoraState();renderRegions();promptEditorChanged()", javascript)
+        self.assertIn("querySelectorAll('.lora-row')", javascript)
+        self.assertIn(".lora-drag-handle", css)
+        self.assertIn(".lora-row.dragging", css)
 
 
 if __name__ == "__main__":
