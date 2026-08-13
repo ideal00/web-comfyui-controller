@@ -13,6 +13,8 @@ __pycache__/
 
 # ===== 运行日志 =====
 *.log
+generation_snapshots.json
+generation_snapshots.tmp
 
 # ===== 本地截图 / 杂项 =====
 panel_layout_check.png

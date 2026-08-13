@@ -5,11 +5,13 @@ import json
 import html
 import csv
 import bisect
+import hashlib
 import mimetypes
 import os
 import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -230,6 +232,36 @@ PROMPT_SECTION_LABELS = {
 }
 MATURE_NEGATIVE_TERMS = ("nsfw", "nude", "nudity", "explicit", "sex", "sexual",
                          "porn", "hentai", "uncensored")
+PANEL_VERSION = "2.1.0-dev"
+SNAPSHOT_FILE = PROJECT_DIR / "generation_snapshots.json"
+_FILE_SIGNATURE_CACHE: dict[tuple[str, int, int], dict] = {}
+
+
+def prompt_automation(data: dict) -> dict[str, bool]:
+    """Return explicit switches for every prompt fragment inserted by the panel."""
+    supplied = data.get("promptAutomation")
+    defaults = {
+        "quality": True,
+        "loraTriggers": True,
+        "baseNegative": True,
+        "safetyNegative": True,
+        "dynamicNegative": True,
+        "sceneFallback": True,
+        "detailerNegative": True,
+    }
+    if isinstance(supplied, dict):
+        for key in defaults:
+            if key in supplied:
+                defaults[key] = bool(supplied[key])
+    return defaults
+
+
+def safety_negative_terms(level: str) -> list[str]:
+    if level == "safe":
+        return list(MATURE_NEGATIVE_TERMS)
+    if level == "sensitive":
+        return ["nude", "nudity", "explicit", "sex", "sexual", "porn", "hentai"]
+    return []
 
 
 def exact_unique_terms(*chunks: str, limit: int = 360) -> list[str]:
@@ -330,10 +362,6 @@ def model_prompt_profile(model_name: str, safety_level: str) -> dict:
         quality = ["masterpiece", "best quality", "highres"]
         negative = ["worst quality", "low quality", "lowres", "bad anatomy",
                     "bad hands", "text", "watermark", "signature", "blurry"]
-    if safety_level == "safe":
-        negative.extend(MATURE_NEGATIVE_TERMS)
-    elif safety_level == "sensitive":
-        negative.extend(("nude", "nudity", "explicit", "sex", "sexual", "porn", "hentai"))
     return {"family": family, "quality": quality, "negative": negative,
             "safety": safety_level, "aesthetic": "aesthetic" in name}
 
@@ -365,19 +393,50 @@ def prompt_sections(data: dict) -> dict[str, str]:
     return sections
 
 
-def prompt_conflicts(terms: list[str], natural_language: str, safety_level: str) -> list[str]:
-    keys = {normalize_prompt_key(term) for term in terms}
-    warnings: list[str] = []
+def prompt_term_info(term: str) -> dict:
+    """Parse common ComfyUI emphasis syntax without changing the submitted text."""
+    raw = str(term or "").strip()
+    weight = 1.0
+    match = re.fullmatch(r"\((.*):\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\)", raw)
+    if match:
+        raw = match.group(1).strip()
+        try:
+            weight = float(match.group(2))
+        except ValueError:
+            weight = 1.0
+    return {"text": str(term or "").strip(), "key": normalize_prompt_key(raw), "weight": weight}
+
+
+PROMPT_CONFLICT_GROUPS = (
+    ("画面范围", ("full body", "upper body", "cowboy shot", "portrait", "close-up")),
+    ("基础姿势", ("standing", "sitting", "lying")),
+    ("人物朝向", ("front view", "from behind", "side view")),
+    ("场景", ("indoors", "outdoors")),
+    ("发型", ("high ponytail", "ponytail", "twintails", "side ponytail", "low ponytail",
+              "hair down", "loose hair", "short hair", "bob cut", "single braid", "braided hair")),
+)
+
+
+def diagnose_prompt_conflicts(terms: list[str], negative_terms: list[str] | None,
+                              natural_language: str, safety_level: str) -> list[dict]:
+    positive = [prompt_term_info(term) for term in terms]
+    negative = [prompt_term_info(term) for term in (negative_terms or [])]
+    keys = {item["key"] for item in positive}
+    negative_keys = {item["key"] for item in negative}
+    issues: list[dict] = []
+
+    def add(code: str, severity: str, title: str, message: str, related: list[str]) -> None:
+        issues.append({"code": code, "severity": severity, "title": title,
+                       "message": message, "terms": related})
 
     def report(label: str, options: tuple[str, ...]) -> None:
         present = [option for option in options if normalize_prompt_key(option) in keys]
         if len(present) > 1:
-            warnings.append(f"{label}可能冲突：" + "、".join(present))
+            add("positive-conflict", "warning", label + "冲突",
+                f"{label}可能冲突：" + "、".join(present), present)
 
-    report("画面范围", ("full body", "upper body", "cowboy shot", "portrait", "close-up"))
-    report("基础姿势", ("standing", "sitting", "lying"))
-    report("人物朝向", ("front view", "from behind", "side view"))
-    report("场景", ("indoors", "outdoors"))
+    for label, options in PROMPT_CONFLICT_GROUPS:
+        report(label, options)
     report("头发颜色", tuple(f"{color} hair" for color in
                           ("black", "white", "silver", "grey", "gray", "blonde", "brown",
                            "red", "pink", "purple", "blue", "aqua", "green")))
@@ -388,13 +447,50 @@ def prompt_conflicts(terms: list[str], natural_language: str, safety_level: str)
                                              "group", "crowd", "multiple people"})
     mixed_pair = "1girl" in keys and "1boy" in keys
     if "solo" in keys and (multiple or mixed_pair):
-        warnings.append("人数可能冲突：solo 与多人标签同时存在。")
+        add("subject-count", "warning", "人数冲突", "人数可能冲突：solo 与多人标签同时存在。",
+            ["solo"])
     mature_positive = keys.intersection(MATURE_NEGATIVE_TERMS)
     if safety_level == "safe" and mature_positive:
-        warnings.append("安全等级为 SFW，但正向提示词含有：" + "、".join(sorted(mature_positive)))
+        add("safety", "warning", "安全等级冲突",
+            "安全等级为 SFW，但正向提示词含有：" + "、".join(sorted(mature_positive)),
+            sorted(mature_positive))
     if natural_language and len(natural_language) < 24:
-        warnings.append("自然语言描述较短；Anima 纯自然语言模式建议至少写两个具体句子。")
-    return warnings
+        add("short-natural-language", "info", "自然语言过短",
+            "自然语言描述较短；Anima 纯自然语言模式建议至少写两个具体句子。", [])
+    cross = sorted(keys.intersection(negative_keys))
+    for key in cross[:12]:
+        add("positive-negative", "warning", "正负向相互对抗",
+            f"“{key}”同时出现在正向和负向，可能改变构图或使生成不稳定。", [key])
+    for item in positive:
+        if item["weight"] > 1.25:
+            add("high-weight", "warning", "提示词权重过高",
+                f"“{item['text']}”权重为 {item['weight']:g}；叠加多个 LoRA 时建议先降到 1.05–1.15。",
+                [item["text"]])
+    hairstyle_sets = (
+        ({"high ponytail", "ponytail", "side ponytail", "low ponytail", "twintails"},
+         {"hair down", "loose hair"}),
+    )
+    for tied, loose in hairstyle_sets:
+        pos_tied = sorted(keys.intersection(tied))
+        pos_loose = sorted(keys.intersection(loose))
+        neg_tied = sorted(negative_keys.intersection(tied))
+        neg_loose = sorted(negative_keys.intersection(loose))
+        if pos_tied and (pos_loose or neg_loose):
+            related = pos_tied + pos_loose + neg_loose
+            add("hairstyle-pull", "warning", "发型注意力拉扯",
+                "束发/马尾与散发约束同时作用；这类正负向拉扯会在 LoRA 叠加时改变整体去噪轨迹。",
+                related)
+        elif pos_loose and neg_tied:
+            add("hairstyle-pull", "warning", "发型注意力拉扯",
+                "散发与负向束发约束同时作用，建议只保留正向目标发型。", pos_loose + neg_tied)
+    return issues
+
+
+def prompt_conflicts(terms: list[str], natural_language: str, safety_level: str,
+                     negative_terms: list[str] | None = None) -> list[str]:
+    return [item["message"] for item in diagnose_prompt_conflicts(
+        terms, negative_terms, natural_language, safety_level
+    )]
 
 
 def dynamic_negative_terms(positive: str) -> list[str]:
@@ -422,14 +518,28 @@ def compile_prompt(data: dict) -> dict:
     model = str(data.get("model", ""))
     safety = normalized_safety_level(data)
     profile = model_prompt_profile(model, safety)
+    automation = prompt_automation(data)
     sections = prompt_sections(data)
-    if isinstance(data.get("promptSections"), dict) and not sections["scene"]:
+    sources: list[dict] = []
+
+    def source(key: str, label: str, kind: str, enabled: bool, terms) -> None:
+        if isinstance(terms, str):
+            values = split_prompt_terms(terms, limit=720)
+        else:
+            values = [str(item) for item in (terms or []) if str(item).strip()]
+        sources.append({"key": key, "label": label, "kind": kind,
+                        "enabled": bool(enabled), "terms": values})
+
+    scene_fallback = bool(isinstance(data.get("promptSections"), dict)
+                          and not sections["scene"] and automation["sceneFallback"])
+    if scene_fallback:
         # The structured panel owns the scene field, so an empty scene means
         # "use a safe neutral fallback".  This prevents stacked LoRAs from
         # inventing dense background props and figures.  Callers that want a
         # detailed setting can still provide one explicitly.
         sections["scene"] = "simple background, uncluttered background, subject focus"
-    trigger_terms = exact_unique_terms(", ".join(selected_lora_triggers(data)))
+    all_trigger_terms = exact_unique_terms(", ".join(selected_lora_triggers(data)))
+    trigger_terms = all_trigger_terms if automation["loraTriggers"] else []
     ordered: list[str] = []
     seen: set[str] = set()
 
@@ -441,24 +551,47 @@ def compile_prompt(data: dict) -> dict:
                 seen.add(key)
                 ordered.append(term)
 
-    extend(trigger_terms)
-    extend(profile["quality"])
+    source("loraTriggers", "LoRA 自动触发词", "positive", automation["loraTriggers"],
+           all_trigger_terms)
+    source("quality", "模型质量词", "positive", automation["quality"], profile["quality"])
+    if automation["loraTriggers"]:
+        extend(trigger_terms)
+    if automation["quality"]:
+        extend(profile["quality"])
     for key in PROMPT_SECTION_KEYS:
         value = sections[key]
         if profile["family"] == "anima" and key == "manual":
             value = canonical_anima_hard_tags(value)
         extend(value)
+    user_positive_terms = []
+    original_sections = prompt_sections(data)
+    for key in PROMPT_SECTION_KEYS:
+        user_positive_terms.extend(split_prompt_terms(original_sections[key], limit=360))
+    source("userPositive", "用户正向分区", "positive", True, user_positive_terms)
+    source("sceneFallback", "空场景兜底", "positive", automation["sceneFallback"],
+           ["simple background", "uncluttered background", "subject focus"] if scene_fallback else [])
     natural_language = sections["naturalLanguage"].strip()
+    if natural_language:
+        source("naturalLanguage", "自然语言关系", "positive", True, [natural_language])
     positive = ", ".join(ordered)
     if natural_language:
         positive = positive.rstrip(" .") + ". " + natural_language
 
     manual_negative = str(data.get("negative", "") or "").strip()
-    negative_terms = exact_unique_terms(", ".join(profile["negative"]), manual_negative)
-    negative_terms = exact_unique_terms(", ".join(negative_terms),
-                                        ", ".join(dynamic_negative_terms(positive)))
-    if isinstance(data.get("promptSections"), dict) and not str(
-            data["promptSections"].get("scene", "") or "").strip():
+    base_negative = list(profile["negative"])
+    safety_negative = safety_negative_terms(safety)
+    dynamic_negative = dynamic_negative_terms(positive)
+    negative_terms: list[str] = []
+    if automation["baseNegative"]:
+        negative_terms = exact_unique_terms(", ".join(negative_terms), ", ".join(base_negative))
+    if automation["safetyNegative"]:
+        negative_terms = exact_unique_terms(", ".join(negative_terms), ", ".join(safety_negative))
+    negative_terms = exact_unique_terms(", ".join(negative_terms), manual_negative)
+    if automation["dynamicNegative"]:
+        negative_terms = exact_unique_terms(", ".join(negative_terms), ", ".join(dynamic_negative))
+    fallback_negative = []
+    if scene_fallback:
+        fallback_negative = ["busy background", "cluttered background"]
         negative_terms = exact_unique_terms(
             ", ".join(negative_terms), "busy background, cluttered background")
     # The hand/foot detailer may be enabled even when the visible prompt does not
@@ -467,18 +600,32 @@ def compile_prompt(data: dict) -> dict:
     # correcting a mostly sound structure instead of rebuilding it from scratch.
     enhancement = data.get("outputEnhancement") or {}
     limb_detailer = (enhancement.get("limbDetailer") or {}) if isinstance(enhancement, dict) else {}
-    if isinstance(limb_detailer, dict):
+    detailer_negative: list[str] = []
+    if isinstance(limb_detailer, dict) and automation["detailerNegative"]:
         if limb_detailer.get("hands"):
+            detailer_negative += ["bad hands", "malformed hands", "extra fingers", "missing fingers",
+                                  "fused fingers", "blurry hands"]
             negative_terms = exact_unique_terms(
                 ", ".join(negative_terms),
                 "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands",
             )
         if limb_detailer.get("feet"):
+            detailer_negative += ["bad feet", "malformed feet", "extra toes", "missing toes",
+                                  "fused toes", "blurry feet"]
             negative_terms = exact_unique_terms(
                 ", ".join(negative_terms),
                 "bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet",
             )
-    warnings = prompt_conflicts(ordered, natural_language, safety)
+    source("baseNegative", "模型基础负面词", "negative", automation["baseNegative"], base_negative)
+    source("safetyNegative", "安全等级负面词", "negative", automation["safetyNegative"], safety_negative)
+    source("userNegative", "用户额外负面词", "negative", True, manual_negative)
+    source("dynamicNegative", "动态结构保护词", "negative", automation["dynamicNegative"], dynamic_negative)
+    source("sceneFallbackNegative", "空场景负面兜底", "negative", automation["sceneFallback"],
+           fallback_negative)
+    source("detailerNegative", "局部修复保护词", "negative", automation["detailerNegative"],
+           detailer_negative)
+    diagnostics = diagnose_prompt_conflicts(ordered, negative_terms, natural_language, safety)
+    warnings = [item["message"] for item in diagnostics]
     warnings.extend(lora_compatibility_warnings(data, profile["family"]))
     style_count = len(split_prompt_terms(sections["style"], limit=180))
     if str(data.get("promptMode", "style_test")) == "style_test" and style_count:
@@ -499,14 +646,18 @@ def compile_prompt(data: dict) -> dict:
             errors.append("最终提示词单项不能超过 32000 个字符。")
         ordered = split_prompt_terms(positive, limit=720)
         negative_terms = split_prompt_terms(negative, limit=720)
-        warnings = prompt_conflicts(ordered, "", safety)
+        diagnostics = diagnose_prompt_conflicts(ordered, negative_terms, "", safety)
+        warnings = [item["message"] for item in diagnostics]
         warnings.extend(lora_compatibility_warnings(data, profile["family"]))
+        sources = [{"key": "manualOverride", "label": "手动最终文本", "kind": "both",
+                    "enabled": True, "terms": ordered + negative_terms}]
     elif not user_term_count and not trigger_terms and not natural_language and not region_term_count:
         errors.append("请至少填写人物、场景、姿势、其他标签或自然语言描述中的一项。")
     return {"positive": positive,
             "negative": negative if overridden else ", ".join(negative_terms),
             "errors": errors, "warnings": warnings, "sections": sections,
             "triggers": trigger_terms, "profile": profile,
+            "sources": sources, "diagnostics": diagnostics, "automation": automation,
             "overridden": overridden,
             "positiveTerms": len(ordered), "negativeTerms": len(negative_terms)}
 
@@ -1970,6 +2121,129 @@ def build_workflow(data: dict) -> dict:
     return {"prompt": nodes, "client_id": "easy-panel"}
 
 
+def _model_file(model_name: str) -> Path | None:
+    relative = Path(str(model_name or "").replace("\\", os.sep).replace("/", os.sep))
+    candidates = [CHECKPOINT_DIR / relative, COMFY_MODELS / "diffusion_models" / relative,
+                  COMFY_MODELS / "unet" / relative]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _lora_file(lora_name: str) -> Path | None:
+    relative = Path(str(lora_name or "").replace("\\", os.sep).replace("/", os.sep))
+    direct = LORA_DIR / relative
+    if direct.is_file():
+        return direct
+    basename = relative.name.casefold()
+    if LORA_DIR.is_dir():
+        return next((path for path in LORA_DIR.rglob("*")
+                     if path.is_file() and path.name.casefold() == basename), None)
+    return None
+
+
+def file_signature(path: Path | None) -> dict:
+    """Fast content fingerprint: size plus first/last 1 MiB, cached by stat."""
+    if path is None or not path.is_file():
+        return {"exists": False, "size": None, "mtime_ns": None, "fingerprint": ""}
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    cached = _FILE_SIGNATURE_CACHE.get(cache_key)
+    if cached:
+        return dict(cached)
+    digest = hashlib.sha256()
+    digest.update(str(stat.st_size).encode("ascii"))
+    with path.open("rb") as handle:
+        digest.update(handle.read(1024 * 1024))
+        if stat.st_size > 1024 * 1024:
+            handle.seek(max(0, stat.st_size - 1024 * 1024))
+            digest.update(handle.read(1024 * 1024))
+    result = {"exists": True, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+              "fingerprint": digest.hexdigest(), "path": str(path)}
+    _FILE_SIGNATURE_CACHE[cache_key] = result
+    return dict(result)
+
+
+def snapshot_environment(data: dict) -> dict:
+    return {
+        "panelVersion": PANEL_VERSION,
+        "model": {"name": str(data.get("model", "")),
+                  **file_signature(_model_file(str(data.get("model", ""))))},
+        "loras": [{"name": str(item.get("name", "")), "weight": item.get("weight"),
+                   **file_signature(_lora_file(str(item.get("name", ""))))}
+                  for item in (data.get("loras") or []) if isinstance(item, dict)],
+    }
+
+
+def load_snapshots() -> list[dict]:
+    if not SNAPSHOT_FILE.is_file():
+        return []
+    try:
+        parsed = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def write_snapshots(items: list[dict]) -> None:
+    SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp = SNAPSHOT_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(items[-200:], ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, SNAPSHOT_FILE)
+
+
+def create_generation_snapshot(data: dict, prompt_id: str = "") -> dict:
+    clean = json.loads(json.dumps(data, ensure_ascii=False))
+    compiled = compile_prompt(clean)
+    snapshot = {
+        "id": uuid.uuid4().hex,
+        "createdAt": int(time.time() * 1000),
+        "promptId": prompt_id,
+        "outputs": [],
+        "label": str((clean.get("experiment") or {}).get("label", "") or ""),
+        "experiment": clean.get("experiment") or None,
+        "payload": clean,
+        "compiled": {key: compiled.get(key) for key in
+                     ("positive", "negative", "sources", "diagnostics", "automation")},
+        "environment": snapshot_environment(clean),
+    }
+    items = load_snapshots()
+    items.append(snapshot)
+    write_snapshots(items)
+    return snapshot
+
+
+def attach_snapshot_outputs(snapshot_id: str, outputs) -> dict:
+    names = [Path(str(name)).name for name in (outputs or []) if Path(str(name)).name]
+    items = load_snapshots()
+    target = next((item for item in items if item.get("id") == snapshot_id), None)
+    if target is None:
+        raise ValueError("找不到生成快照。")
+    target["outputs"] = list(dict.fromkeys(names))[:16]
+    write_snapshots(items)
+    return target
+
+
+def compare_snapshot_environment(snapshot_id: str) -> dict:
+    target = next((item for item in load_snapshots() if item.get("id") == snapshot_id), None)
+    if target is None:
+        raise ValueError("找不到生成快照。")
+    current = snapshot_environment(target.get("payload") or {})
+    original = target.get("environment") or {}
+    differences: list[str] = []
+    for label, before, after in [("基础模型", original.get("model") or {}, current.get("model") or {})]:
+        if before.get("fingerprint") != after.get("fingerprint") or before.get("exists") != after.get("exists"):
+            differences.append(f"{label}文件已变化或缺失：{before.get('name', '')}")
+    before_loras = {item.get("name"): item for item in original.get("loras") or []}
+    after_loras = {item.get("name"): item for item in current.get("loras") or []}
+    for name, before in before_loras.items():
+        after = after_loras.get(name) or {}
+        if before.get("fingerprint") != after.get("fingerprint") or before.get("exists") != after.get("exists"):
+            differences.append("LoRA 文件已变化或缺失：" + str(name))
+    if original.get("panelVersion") != PANEL_VERSION:
+        differences.append(f"面板版本不同：{original.get('panelVersion')} → {PANEL_VERSION}")
+    return {"same": not differences, "differences": differences, "current": current,
+            "snapshot": target}
+
+
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 
 
@@ -2172,6 +2446,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"entries": load_lora_sidecars()})
             elif parsed.path == "/api/output-images":
                 self.send_json({"entries": list_output_images()})
+            elif parsed.path == "/api/snapshots":
+                items = load_snapshots()
+                self.send_json({"entries": list(reversed(items[-200:]))})
+            elif parsed.path == "/api/snapshot-compare":
+                snapshot_id = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
+                if not re.fullmatch(r"[0-9a-f]{32}", snapshot_id):
+                    raise ValueError("无效快照编号。")
+                self.send_json(compare_snapshot_environment(snapshot_id))
             elif parsed.path == "/api/history":
                 job = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
                 if not re.fullmatch(r"[0-9a-f-]{36}", job):
@@ -2200,7 +2482,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def do_POST(self):
-        if self.path not in {"/api/generate", "/api/generate-batch", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color"}:
+        if self.path not in {"/api/generate", "/api/generate-batch", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -2226,6 +2508,9 @@ class Handler(BaseHTTPRequestHandler):
                 if safe_name != name or not file.is_file():
                     raise ValueError("找不到该输出图片。")
                 self.send_json(parse_generation_info(file.read_bytes()))
+                return
+            if self.path == "/api/snapshot-outputs":
+                self.send_json(attach_snapshot_outputs(str(data.get("id", "")), data.get("outputs") or []))
                 return
             if self.path == "/api/preview-color":
                 name = str(data.get("name", "") or "").strip()
@@ -2272,14 +2557,20 @@ class Handler(BaseHTTPRequestHandler):
                             for item in expanded]
                 submitted = []
                 for index, item in enumerate(prepared):
+                    result = comfy_json("/prompt", "POST", item["workflow"])
+                    prompt_id = result.get("prompt_id")
+                    snapshot = create_generation_snapshot(item["payload"], str(prompt_id or ""))
                     submitted.append({"index": index, "task_index": item["task_index"],
                                       "image_index": item["image_index"],
                                       "image_count": item["image_count"],
-                                      "prompt_id": comfy_json("/prompt", "POST", item["workflow"]).get("prompt_id")})
+                                      "prompt_id": prompt_id, "snapshot_id": snapshot["id"],
+                                      "label": snapshot["label"]})
                 self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
                                 "total_images": len(submitted)})
             else:
-                self.send_json(comfy_json("/prompt", "POST", build_workflow(data)))
+                result = comfy_json("/prompt", "POST", build_workflow(data))
+                snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""))
+                self.send_json({**result, "snapshot_id": snapshot["id"]})
         except CLIENT_DISCONNECT_ERRORS:
             return
         except urllib.error.HTTPError as exc:
