@@ -37,3 +37,6 @@ panel_layout_check.png
 rpg_mobile_token.txt
 rpg_jobs.json
 rpg_jobs.json.tmp
+
+# ===== 跨设备浏览器共享状态（含用户自定义提示词和收藏）=====
+easy_panel_shared_state.json*

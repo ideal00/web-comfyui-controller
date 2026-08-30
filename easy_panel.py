@@ -98,6 +98,11 @@ from easy_panel_app.rpg_api import (
     save_rpg_profiles,
     token_required,
 )
+from easy_panel_app.shared_state import (
+    MAX_REQUEST_BYTES as SHARED_STATE_MAX_REQUEST_BYTES,
+    SHARED_STATE_FILENAME,
+    SharedStateStore,
+)
 
 TAG_CATEGORIES = {0: "通用", 1: "画师", 3: "作品", 4: "角色", 5: "元数据"}
 ANIMA_TEXT_ENCODER = "qwen_3_06b_base.safetensors"
@@ -114,6 +119,8 @@ HAND_DETECTOR_MODEL = "bbox/hand_yolov8s.pt"
 FOOT_DETECTOR_MODEL = "bbox/foot_yolov8x.pt"
 EMBEDDING_EXTENSIONS = {".safetensors", ".pt", ".bin"}
 EMBEDDING_NOTES_FILE = PROJECT_DIR / "embedding_notes.json"
+SHARED_STATE_FILE = PROJECT_DIR / SHARED_STATE_FILENAME
+SHARED_STATE_STORE = SharedStateStore(SHARED_STATE_FILE)
 ROUTE1_MAX_WORKING_PIXELS = 2_200_000
 
 
@@ -3241,7 +3248,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         try:
-            if parsed.path == "/api/rpg/ping":
+            if parsed.path == "/api/shared-state":
+                state, recovered = SHARED_STATE_STORE.read_with_metadata()
+                self.send_json({"ok": True, "state": state, "recovered": recovered})
+            elif parsed.path == "/api/rpg/ping":
                 self.send_json({
                     "ok": True,
                     "api_version": RPG_API_VERSION,
@@ -3468,13 +3478,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/profiles"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/profiles", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/rpg/") and not self.require_rpg_auth():
             return
         self.path = path
         try:
+            if self.path == "/api/shared-state":
+                size = bounded(self.headers.get("Content-Length"), 0, 0, SHARED_STATE_MAX_REQUEST_BYTES)
+                if not size:
+                    raise ValueError("共享数据请求为空。")
+                raw = self.rfile.read(size)
+                if len(raw) != size:
+                    raise ValueError("共享数据请求不完整。")
+                data = json.loads(raw.decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("共享数据请求必须是 JSON 对象。")
+                payload = data.get("state") if isinstance(data.get("state"), dict) else data
+                self.send_json(SHARED_STATE_STORE.merge(payload, data.get("baseRevision")))
+                return
             if self.path in {"/api/upload-pose", "/api/read-image", "/api/upload-inpaint"}:
                 size = bounded(self.headers.get("Content-Length"), 0, 0, 30_000_000)
                 if not size:

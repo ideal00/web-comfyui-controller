@@ -9,7 +9,7 @@
 ## 两种模式
 
 - **快速生图**：手机编辑正向提示词、负向提示词、Checkpoint、质量档位、宽高和轮询间隔；只有点击“生成图片”才提交任务。模型列表来自 Easy Panel 的 `/api/rpg/models`，任务通过 API v2 异步执行。
-- **高级面板**：打开电脑端正在运行的完整 Easy Panel 页面，继续使用角色、LoRA、ControlNet、OpenPose、多人区域、修复、透明背景、调色、历史和快照等原有功能。客户端没有复制这些工作流逻辑。
+- **高级面板**：打开电脑端正在运行的完整 Easy Panel 页面，继续使用角色、LoRA、ControlNet、OpenPose、多人区域、修复、透明背景、调色、历史和快照等原有功能。客户端没有复制这些工作流逻辑；同一地址下的提示词预设和角色/LoRA 收藏会由网页自动读取共享状态。
 
 Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、刷新、加载/错误提示、系统文件选择器和页面下载。手机快速页的图片保存到系统 `Downloads`。
 
@@ -24,9 +24,15 @@ Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、
 
 不要把 `8188` 或 `8190` 端口直接映射到公网。优先使用 Tailscale；如果必须跨网络暴露，应使用受控的 HTTPS 反向代理和额外访问控制。
 
+### 跨设备预设与收藏
+
+桌面浏览器首次打开新版 Easy Panel 会自动把已有的 `easyPanelPromptPresetsV1` 和 `easyPanelLoraFavoritesV1` 合并到服务器的 `easy_panel_shared_state.json`；高级面板在 Android 上打开同一个 Easy Panel 地址后会自动读取，也可以点击页面里的“立即同步”。同步不会把 Token 放进 URL。服务器文件位于 Easy Panel 项目目录，上一版成功内容在 `easy_panel_shared_state.json.bak`；主文件读取失败时优先用备份恢复，只有主文件与备份都不可用时才会把损坏主文件改名为 `.corrupt.*.json`。离线时本机数据不清除，revision 冲突时服务器较新的记录不被手机覆盖，空手机集合也不会清空服务器收藏。
+
+升级代码后请手动重启电脑端 Easy Panel 进程，再在 Android 高级面板刷新页面；不需要为这项同步重启 ComfyUI 8188。
+
 ## 安装与下载
 
-发布页：<https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.2.4>
+发布页：<https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.2.5>
 
 该发布物是 Debug / 测试签名 APK，不是 Google Play 发布签名。可直接下载 `app-debug.apk` 安装；卸载旧测试版或使用 `adb install -r` 覆盖安装。
 
@@ -91,8 +97,8 @@ Get-FileHash -Algorithm SHA256 .\app-debug.apk
 
 发布 APK 的 SHA256 以发布页附件旁的 `app-debug.apk.sha256` 为准。
 
-本次 `mobile-v1.2.4` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
+本次 `mobile-v1.2.5` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
 
 ```text
-994CA457622BE39AD0CC4A781953D93B927D974C7E0D8056B02A98EC98D29D82
+8368123CE0BF543AD7F2DAB9E12C739F4C0930E18EE57FA16D4B8C7038DF804A
 ```

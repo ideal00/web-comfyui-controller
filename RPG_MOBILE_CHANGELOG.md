@@ -1,5 +1,11 @@
 # RPG Mobile Bridge 修改说明
 
+## mobile-v1.2.5
+
+- Easy Panel 增加独立的跨设备浏览器共享状态 API，覆盖现有提示词预设和角色/LoRA 收藏。
+- 同步使用原子 JSON、备份/损坏恢复、大小与 schema 校验、revision 冲突保护；空客户端不会清空服务器数据。
+- Android 高级面板沿用同源网页入口，不复制同步业务逻辑；升级后需重启 Easy Panel 进程加载新后端。
+
 ## 本次完成
 
 - RPG API 升级到 v2。

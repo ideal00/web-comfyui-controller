@@ -1,5 +1,12 @@
 # Easy Panel 更新记录
 
+## Android 客户端 mobile-v1.2.5（2026-08-31）
+
+- 新增跨设备共享状态：把 Easy Panel 浏览器已有的提示词预设和角色/LoRA 收藏安全合并到独立的 `easy_panel_shared_state.json`。
+- 桌面浏览器首次升级后自动迁移；Android 高级面板进入同一 Easy Panel 地址时自动读取，页面也提供“立即同步”和冲突/离线状态提示。
+- 共享文件使用 schema/version 校验、4 MB 上限、原子写入、`.bak` 备份、损坏恢复和 revision 冲突保护；空手机数据不会清空电脑数据。
+- 共享状态不写入日志，不包含 Token；`lora_notes.json`、模型、API Key 和个人数据仍不进入仓库。
+
 ## Android 客户端 mobile-v1.2.4（2026-08-30）
 
 - 新增 `android-client/`，包含快速生图与电脑端完整高级面板入口。

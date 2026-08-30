@@ -1596,3 +1596,9 @@ vendor\anima-tags\
 手机与电脑在同一局域网时，使用电脑当前局域网 IP 加 `:8190`；跨网络时推荐使用 Tailscale 的 `100.x.x.x` 地址或 MagicDNS 主机名。Token 位于运行目录的 `rpg_mobile_token.txt`，只粘贴文件内容到客户端，不要放进 URL。
 
 Android 客户端源码、可复现构建、权限说明、下载位置、安全边界和已知限制见 [android-client/README.md](android-client/README.md)。不要把 `8190` 或 `8188` 直接暴露到公网。
+
+### 跨设备预设与角色收藏
+
+Easy Panel 网页原有的 `easyPanelPromptPresetsV1`（提示词预设）和 `easyPanelLoraFavoritesV1`（界面内 LoRA 收藏，其中包括角色 LoRA）会通过 `/api/shared-state` 合并到 Easy Panel 项目目录下的 `easy_panel_shared_state.json`。首次打开新版页面会自动尝试迁移本机数据；Android 高级面板使用同一个 `8190` 地址即可读取，页面内也可以点击“立即同步”。
+
+服务器保留 `easy_panel_shared_state.json.bak` 作为上一次成功写入的备份；主文件读取失败时优先用备份原子恢复，只有主文件与备份都不可用时才会把主文件改名为固定前缀的 `.corrupt.*.json`。文件、Token、模型和 API Key 均不会提交到 Git，也不会写入请求日志。同步是合并操作，离线时保留本机数据，revision 冲突时保留服务器已有记录；空手机集合不会清空电脑收藏。升级后需要手动重启 Easy Panel 进程，才能加载新的 API 和网页资源。

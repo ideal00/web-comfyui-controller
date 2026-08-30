@@ -18,7 +18,7 @@ class ImageViewerTests(unittest.TestCase):
             'id="panelImageViewerCount"',
             'id="panelImageViewerZoom"',
             'id="panelImageViewerZoomValue"',
-            'src="/assets/js/panel.js?v=54"',
+            'src="/assets/js/panel.js?v=55"',
         ):
             self.assertIn(marker, html)
         for marker in (
