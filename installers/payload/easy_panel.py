@@ -86,6 +86,18 @@ from easy_panel_app.queueing import (
     MAX_BATCH_TASKS,
     expand_generation_jobs,
 )
+from easy_panel_app.rpg_api import (
+    RPG_API_VERSION,
+    build_rpg_payload,
+    check_rpg_token,
+    find_rpg_job_by_request_id,
+    history_to_rpg_status,
+    load_rpg_profiles,
+    record_rpg_job,
+    rpg_quality_profiles,
+    save_rpg_profiles,
+    token_required,
+)
 
 TAG_CATEGORIES = {0: "通用", 1: "画师", 3: "作品", 4: "角色", 5: "元数据"}
 ANIMA_TEXT_ENCODER = "qwen_3_06b_base.safetensors"
@@ -272,7 +284,26 @@ def prepare_route1_environment_light(image_name: str, mask_name: str) -> tuple[s
         near_blur = image.filter(_PILImageFilter.GaussianBlur(radius=max(12, near_radius * 0.65)))
         middle_blur = image.filter(
             _PILImageFilter.GaussianBlur(radius=max(24, middle_radius * 0.55)))
-        light_field = _PILImage.blend(near_blur, middle_blur, 0.42)
+        blurred_field = _PILImage.blend(near_blur, middle_blur, 0.42)
+        # Soft-light treats 50% gray as neutral. Feeding it the background's
+        # absolute RGB projects large sky/wall colour blocks onto the character
+        # and can bleach hair or darken skin. Convert the blurred background to
+        # a restrained modulation field: spatial variation controls luminance,
+        # while only the robust global environment tint is retained.
+        field_rgb = np.asarray(blurred_field, dtype=np.float32) / 255.0
+        luma_weights = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        field_luma = field_rgb @ luma_weights
+        neutral_luma = float(np.median(field_luma))
+        luminance_delta = np.clip(field_luma - neutral_luma, -0.30, 0.30)
+        middle_luma = float(middle_rgb @ luma_weights)
+        global_tint = np.clip(middle_rgb - middle_luma, -0.12, 0.12)
+        modulation = (
+            0.5 + luminance_delta[..., None] * 0.28 + global_tint[None, None, :] * 0.12
+        )
+        modulation = np.clip(modulation, 0.40, 0.60)
+        light_field = _PILImage.fromarray(
+            np.rint(modulation * 255.0).astype(np.uint8), mode="RGB"
+        )
         working_dir = COMFY_INPUT / "easy_panel"
         working_dir.mkdir(parents=True, exist_ok=True)
         light_name = f"easy_panel/route1_light_{uuid.uuid4().hex}.png"
@@ -1158,6 +1189,30 @@ def normalized_lora_name(value: str) -> str:
     return str(value or "").replace("\\", "/").strip().casefold()
 
 
+def comfy_lora_name(value: str) -> str:
+    """Return a relative LoRA name in the separator format ComfyUI expects.
+
+    The RPG bridge and the SillyTavern catalog use forward slashes so the same
+    profile works across platforms.  ComfyUI's Windows object-info choices use
+    backslashes, however, and reject an otherwise valid catalog path.  Resolve
+    an existing file below the configured LoRA root and emit the exact relative
+    Windows form without allowing traversal outside that root.
+    """
+
+    raw = str(value or "").replace("\\", "/").lstrip("/")
+    if not raw:
+        return ""
+    root = LORA_DIR.resolve()
+    candidate = (root / Path(raw)).resolve()
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        return raw.replace("/", "\\")
+    if candidate.is_file():
+        return relative.as_posix().replace("/", "\\")
+    return raw.replace("/", "\\")
+
+
 def lora_note(notes: dict, lora_name: str) -> dict:
     """Resolve notes saved either by relative LoRA path or by basename."""
     raw = str(lora_name or "")
@@ -1643,6 +1698,15 @@ def build_pose_preview_workflow(data: dict) -> dict:
     return {"prompt": nodes, "client_id": "easy-panel-pose-preview"}
 
 
+def safe_generation_filename_prefix(data: dict, default: str = "EasyPanel") -> str:
+    """Return a flat, traversal-safe ComfyUI SaveImage prefix."""
+    raw = str(data.get("filenamePrefix", "") or "").strip()
+    if not raw:
+        return default
+    cleaned = re.sub(r"[^0-9A-Za-z_-]+", "_", raw).strip("_")
+    return cleaned[:96] or default
+
+
 def build_workflow(data: dict) -> dict:
     model = str(data.get("model", ""))
     if not model:
@@ -1750,6 +1814,7 @@ def build_workflow(data: dict) -> dict:
         name = str(lora.get("name", ""))
         if not name:
             continue
+        comfy_name = comfy_lora_name(name)
         # Character LoRAs assigned to a region are attached later as conditioning
         # hooks. Loading them here would patch the whole model and blend every
         # character's face, hair, outfit and body shape across all regions.
@@ -1761,13 +1826,13 @@ def build_workflow(data: dict) -> dict:
             # Official Anima/Krea 2 LoRAs are model-only; applying them to the
             # text encoder is neither required nor compatible.
             nodes[node_id] = {"class_type": "LoraLoaderModelOnly", "inputs": {
-                "model": model_ref, "lora_name": name, "strength_model": weight,
+                "model": model_ref, "lora_name": comfy_name, "strength_model": weight,
             }}
             model_ref = [node_id, 0]
         else:
             nodes[node_id] = {
                 "class_type": "LoraLoader",
-                "inputs": {"model": model_ref, "clip": clip_ref, "lora_name": name,
+                "inputs": {"model": model_ref, "clip": clip_ref, "lora_name": comfy_name,
                            "strength_model": weight, "strength_clip": weight},
             }
             model_ref, clip_ref = [node_id, 0], [node_id, 1]
@@ -1875,7 +1940,8 @@ def build_workflow(data: dict) -> dict:
                 weight = bounded(lora.get("weight"), 0.7, 0, 1.5, integer=False)
                 hook_id, hooked_clip_id = alloc(), alloc()
                 nodes[hook_id] = {"class_type": "CreateHookLora", "inputs": {
-                    "lora_name": r["lora"], "strength_model": weight, "strength_clip": weight,
+                    "lora_name": comfy_lora_name(r["lora"]),
+                    "strength_model": weight, "strength_clip": weight,
                 }}
                 nodes[hooked_clip_id] = {"class_type": "SetClipHooks", "inputs": {
                     "clip": clip_ref, "hooks": [hook_id, 0],
@@ -2838,7 +2904,7 @@ def build_workflow(data: dict) -> dict:
             original_save_id = alloc()
             nodes[original_save_id] = {
                 "class_type": "SaveImage",
-                "inputs": {"filename_prefix": "EasyPanel", "images": image_ref},
+                "inputs": {"filename_prefix": safe_generation_filename_prefix(data, "EasyPanel") + ("_RGB" if data.get("filenamePrefix") else ""), "images": image_ref},
             }
 
         detail_method = str(transparent.get("detailMethod", "GuidedFilter") or "GuidedFilter")
@@ -2866,7 +2932,10 @@ def build_workflow(data: dict) -> dict:
         image_ref = [rmbg_id, 0]
 
     save_id = alloc()
-    filename_prefix = "EasyPanel_Transparent" if transparent_mode != "off" else "EasyPanel"
+    default_prefix = "EasyPanel_Transparent" if transparent_mode != "off" else "EasyPanel"
+    filename_prefix = safe_generation_filename_prefix(data, default_prefix)
+    if transparent_mode != "off" and data.get("filenamePrefix"):
+        filename_prefix += "_Transparent"
     nodes[save_id] = {"class_type": "SaveImage", "inputs": {
         "filename_prefix": filename_prefix, "images": image_ref,
     }}
@@ -2946,6 +3015,10 @@ def snapshot_environment(data: dict) -> dict:
         "panelVersion": PANEL_VERSION,
         "model": {"name": str(data.get("model", "")),
                   **file_signature(_model_file(str(data.get("model", ""))))},
+        "characterLoras": [{"name": str(item.get("name", "")), "weight": item.get("weight")}
+                           for item in (data.get("characterLoras") or []) if isinstance(item, dict)],
+        "styleLoras": [{"name": str(item.get("name", "")), "weight": item.get("weight")}
+                       for item in (data.get("styleLoras") or []) if isinstance(item, dict)],
         "loras": [{"name": str(item.get("name", "")), "weight": item.get("weight"),
                    **file_signature(_lora_file(str(item.get("name", ""))))}
                   for item in (data.get("loras") or []) if isinstance(item, dict)],
@@ -3023,7 +3096,35 @@ def compare_snapshot_environment(snapshot_id: str) -> dict:
             "snapshot": target}
 
 
+def rpg_model_catalog() -> dict:
+    """Return only models that the existing Easy Panel workflow can submit."""
+    info = comfy_json("/object_info")
+    all_checkpoints = object_info_choices(info, "CheckpointLoaderSimple", "ckpt_name")
+    checkpoints = [name for name in all_checkpoints if not checkpoint_issue(name)]
+    diffusion_models = object_info_choices(info, "UNETLoader", "unet_name")
+    return {
+        "checkpoints": checkpoints,
+        "anima_models": [name for name in diffusion_models if is_anima_model(name)],
+        "krea2_models": [name for name in diffusion_models if is_krea2_model(name)],
+        "qualityProfiles": rpg_quality_profiles(),
+    }
+
+
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+
+
+def resolve_rpg_output_image(name: str, subfolder: str = "") -> Path:
+    """Resolve a ComfyUI output image without allowing traversal outside OUTPUT."""
+
+    safe_name = Path(str(name or "")).name
+    if not safe_name or safe_name != str(name or ""):
+        raise FileNotFoundError("invalid image name")
+    normalized_subfolder = str(subfolder or "").replace("\\", "/").strip("/")
+    root = OUTPUT.resolve()
+    candidate = (root / Path(normalized_subfolder) / safe_name).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        raise FileNotFoundError("image not found")
+    return candidate
 
 
 def comfy_websocket_url() -> str:
@@ -3044,12 +3145,37 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def is_rpg_request(self):
+        return urllib.parse.urlparse(self.path).path.startswith("/api/rpg/")
+
+    def add_rpg_cors_headers(self):
+        if self.is_rpg_request():
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-RPG-Token, Authorization")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+    def rpg_token_value(self):
+        direct = str(self.headers.get("X-RPG-Token", "") or "").strip()
+        if direct:
+            return direct
+        authorization = str(self.headers.get("Authorization", "") or "").strip()
+        if authorization.lower().startswith("bearer "):
+            return authorization[7:].strip()
+        return ""
+
+    def require_rpg_auth(self):
+        if check_rpg_token(self.rpg_token_value()):
+            return True
+        self.send_json({"error": "RPG API Token 不正确。"}, HTTPStatus.UNAUTHORIZED)
+        return False
+
     def send_json(self, body: dict, status=HTTPStatus.OK):
         encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store, max-age=0")
+            self.add_rpg_cors_headers()
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -3058,6 +3184,15 @@ class Handler(BaseHTTPRequestHandler):
             # Reloading the panel or cancelling fetch() closes the browser socket.
             # This is normal and must not be converted into a second error response.
             return False
+
+    def do_OPTIONS(self):
+        if not self.is_rpg_request():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.add_rpg_cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def stream_comfy_progress(self):
         """Relay ComfyUI WebSocket JSON as same-origin server-sent events."""
@@ -3106,7 +3241,73 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         try:
-            if parsed.path == "/":
+            if parsed.path == "/api/rpg/ping":
+                self.send_json({
+                    "ok": True,
+                    "api_version": RPG_API_VERSION,
+                    "service": "ComfyUI Easy Panel RPG Bridge",
+                    "token_required": token_required(),
+                })
+            elif parsed.path == "/api/rpg/capabilities":
+                if not self.require_rpg_auth():
+                    return
+                profiles = load_rpg_profiles()
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "async_jobs": True,
+                    "idempotent_request_id": True,
+                    "job_recovery": True,
+                    "image_subfolders": True,
+                    "regional_two_character": True,
+                    "poll_interval_ms": int(profiles.get("defaults", {}).get("pollIntervalMs", 1800)),
+                    "limits": {"characters_per_scene": 6, "width": [512, 1920], "height": [512, 1920]},
+                })
+            elif re.fullmatch(r"/api/rpg/jobs/by-request/[0-9A-Za-z_-]{1,48}", parsed.path):
+                if not self.require_rpg_auth():
+                    return
+                request_id = parsed.path.rsplit("/", 1)[-1]
+                metadata = find_rpg_job_by_request_id(request_id)
+                prompt_id = str(metadata.get("prompt_id") or "")
+                if not prompt_id:
+                    self.send_json({"error": "没有找到该 requestId 对应的任务。"}, HTTPStatus.NOT_FOUND)
+                    return
+                history = comfy_json("/history/" + prompt_id)
+                self.send_json(history_to_rpg_status(prompt_id, history))
+            elif parsed.path == "/api/rpg/profiles":
+                if not self.require_rpg_auth():
+                    return
+                self.send_json(load_rpg_profiles())
+            elif parsed.path == "/api/rpg/models":
+                if not self.require_rpg_auth():
+                    return
+                catalog = rpg_model_catalog()
+                self.send_json({"api_version": RPG_API_VERSION, **catalog})
+            elif re.fullmatch(r"/api/rpg/jobs/[0-9a-fA-F-]{36}", parsed.path):
+                if not self.require_rpg_auth():
+                    return
+                prompt_id = parsed.path.rsplit("/", 1)[-1].lower()
+                history = comfy_json("/history/" + prompt_id)
+                self.send_json(history_to_rpg_status(prompt_id, history))
+            elif parsed.path == "/api/rpg/image":
+                if not self.require_rpg_auth():
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                name = query.get("name", [""])[0]
+                subfolder = query.get("subfolder", [""])[0]
+                try:
+                    file = resolve_rpg_output_image(name, subfolder)
+                except FileNotFoundError:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                content = file.read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                self.send_header("Cache-Control", "private, max-age=86400")
+                self.add_rpg_cors_headers()
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            elif parsed.path == "/":
                 content = (ROOT / "index.html").read_bytes()
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -3266,9 +3467,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def do_POST(self):
-        if self.path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs"}:
+        path = urllib.parse.urlparse(self.path).path
+        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/profiles"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
+        if path.startswith("/api/rpg/") and not self.require_rpg_auth():
+            return
+        self.path = path
         try:
             if self.path in {"/api/upload-pose", "/api/read-image", "/api/upload-inpaint"}:
                 size = bounded(self.headers.get("Content-Length"), 0, 0, 30_000_000)
@@ -3285,6 +3490,39 @@ class Handler(BaseHTTPRequestHandler):
                 return
             size = bounded(self.headers.get("Content-Length"), 0, 0, 50_000_000)
             data = json.loads(self.rfile.read(size).decode("utf-8"))
+            if self.path == "/api/rpg/profiles":
+                document = data.get("profiles") if isinstance(data.get("profiles"), dict) else data
+                self.send_json(save_rpg_profiles(document))
+                return
+            if self.path == "/api/rpg/generate":
+                client = data.get("client") if isinstance(data.get("client"), dict) else {}
+                request_id = str(client.get("requestId") or data.get("requestId") or "").strip()
+                if request_id:
+                    existing = find_rpg_job_by_request_id(request_id)
+                    existing_prompt_id = str(existing.get("prompt_id") or "")
+                    if existing_prompt_id:
+                        history = comfy_json("/history/" + existing_prompt_id)
+                        status = history_to_rpg_status(existing_prompt_id, history)
+                        status["deduplicated"] = True
+                        status["status_url"] = "/api/rpg/jobs/" + existing_prompt_id
+                        self.send_json(status, HTTPStatus.OK)
+                        return
+                payload = build_rpg_payload(data, rpg_model_catalog())
+                result = comfy_json("/prompt", "POST", build_workflow(payload))
+                prompt_id = str(result.get("prompt_id") or "")
+                if not re.fullmatch(r"[0-9a-fA-F-]{36}", prompt_id):
+                    raise ValueError("ComfyUI 没有返回有效的任务编号。")
+                snapshot = create_generation_snapshot(payload, prompt_id)
+                record_rpg_job(prompt_id, data, payload, snapshot["id"])
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "job_id": prompt_id,
+                    "prompt_id": prompt_id,
+                    "status": "queued",
+                    "snapshot_id": snapshot["id"],
+                    "status_url": "/api/rpg/jobs/" + prompt_id,
+                }, HTTPStatus.ACCEPTED)
+                return
             if self.path == "/api/read-output":
                 name = str(data.get("name", "") or "").strip()
                 safe_name = Path(name).name

@@ -8,6 +8,7 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 
 ## 目录
 
+- [更新记录](CHANGELOG.md)
 - [1. 项目如何工作](#1-项目如何工作)
 - [2. 功能与模型兼容性](#2-功能与模型兼容性)
 - [3. 安装前准备](#3-安装前准备)
@@ -1580,3 +1581,9 @@ vendor\anima-tags\
 ---
 
 如果遇到问题，提交反馈时请附上：Easy Panel 页面错误文字、ComfyUI 终端最后 30–50 行、所选模型文件名、尺寸、生成模式以及启用的 LoRA / 姿势 / 多人 / 调色设置。不要附带 API Key。
+
+
+## RPGBox 手机生图接口
+
+本版本新增 `/api/rpg/*` 手机视觉 API，可把 Easy Panel 作为 RPGBox Android 的远程生图后端。
+运行 `launchers/Start_EasyPanel_Mobile_RPG.bat` 启动局域网模式；完整协议见 [RPG_MOBILE_API.md](RPG_MOBILE_API.md)。
