@@ -55,6 +55,11 @@ public class EasyPanelAdvancedPlugin extends Plugin {
             call.reject("下载内容为空，无法保存。");
             return;
         }
+        long maxBase64Length = ((DownloadSupport.MAX_DOWNLOAD_BYTES + 2) / 3) * 4 + 4;
+        if ((long) base64.length() > maxBase64Length) {
+            call.reject("文件过大，无法保存到下载目录。");
+            return;
+        }
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
             && getActivity().checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             call.getData().put("filename", filename);
@@ -88,15 +93,13 @@ public class EasyPanelAdvancedPlugin extends Plugin {
             call.reject("下载内容无效，无法保存。");
             return;
         }
-        if (bytes.length > 90 * 1024 * 1024) {
+        if (bytes.length > DownloadSupport.MAX_DOWNLOAD_BYTES) {
             call.reject("文件过大，无法保存到下载目录。");
             return;
         }
 
-        final String safeFilename = sanitizeFilename(filename);
-        final String safeMimeType = mimeType == null || mimeType.trim().isEmpty()
-            ? "application/octet-stream"
-            : mimeType.trim();
+        final String safeFilename = DownloadSupport.sanitizeFilename(filename);
+        final String safeMimeType = DownloadSupport.normalizeMimeType(mimeType);
         new Thread(() -> {
             UriResult result = null;
             try {
@@ -187,13 +190,6 @@ public class EasyPanelAdvancedPlugin extends Plugin {
             return filename.substring(0, dot) + " (" + suffix + ")" + filename.substring(dot);
         }
         return filename + " (" + suffix + ")";
-    }
-
-    private String sanitizeFilename(String filename) {
-        String safe = filename == null ? "easy-panel-download" : filename.trim();
-        safe = safe.replaceAll("[\\\\/:*?\"<>|]", "_");
-        if (safe.isEmpty() || ".".equals(safe) || "..".equals(safe)) safe = "easy-panel-download";
-        return safe.length() > 180 ? safe.substring(0, 180) : safe;
     }
 
     private static final class UriResult {

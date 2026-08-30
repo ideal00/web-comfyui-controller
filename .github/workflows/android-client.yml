@@ -58,7 +58,7 @@ jobs:
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon --max-workers=2
+        run: cd android && ./gradlew testDebugUnitTest assembleDebug --no-daemon --max-workers=2
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4

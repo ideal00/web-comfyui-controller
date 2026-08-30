@@ -5,6 +5,8 @@
 - 新增 `android-client/`，包含快速生图与电脑端完整高级面板入口。
 - 快速页支持 LAN / Tailscale / MagicDNS 地址、实际模型列表选择、异步任务恢复和显式生成。
 - Android 下载保存到系统 `Downloads`，兼容 MediaStore、旧版存储权限和重复文件名。
+- 高级面板当前图、历史/画廊原图、HTTP、Blob、data URL 与脚本下载统一接入同源校验、大小限制和安全文件名处理。
+- Android 客户端补充 Easy Panel 品牌图标、圆形/自适应密度资源与启动图；前景保持在安全区内。
 - 高级面板支持移动响应式布局、文件选择器、返回键、刷新、加载错误提示和页面下载。
 - 提供 Android Debug 构建 CI；Debug APK 仅用于测试，不代表商店签名版本。
 - 未提交 Token、API Key、模型权重、个人局域网地址、构建缓存或签名文件。

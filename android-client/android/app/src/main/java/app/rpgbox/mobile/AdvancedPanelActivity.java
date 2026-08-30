@@ -2,7 +2,6 @@ package app.rpgbox.mobile;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.DownloadManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.ActivityNotFoundException;
@@ -40,7 +39,11 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 /** Native container for the computer's full Easy Panel web UI. */
 @SuppressWarnings("deprecation")
@@ -59,6 +62,7 @@ public class AdvancedPanelActivity extends Activity {
     private String panelScheme;
     private String panelHost;
     private int panelPort;
+    private volatile String verifiedPageUrl;
     private ValueCallback<Uri[]> fileChooserCallback;
     private DownloadSpec pendingDownload;
     private JsDownloadSpec pendingJsDownload;
@@ -258,6 +262,7 @@ public class AdvancedPanelActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                verifiedPageUrl = null;
                 beginLoading();
             }
 
@@ -265,7 +270,10 @@ public class AdvancedPanelActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
                 errorView.setVisibility(View.GONE);
-                injectMobileEnhancements(view);
+                if (isPanelOriginUrl(url)) {
+                    verifiedPageUrl = url;
+                    injectMobileEnhancements(view);
+                }
             }
 
             @Override
@@ -339,7 +347,7 @@ public class AdvancedPanelActivity extends Activity {
         webView.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
-                beginDownload(new DownloadSpec(url, userAgent, contentDisposition, mimetype));
+                beginDownload(new DownloadSpec(url, userAgent, contentDisposition, mimetype, "", contentLength, ""));
             }
         });
     }
@@ -348,28 +356,32 @@ public class AdvancedPanelActivity extends Activity {
         view.evaluateJavascript(
             "(function(){"
                 + "document.documentElement.classList.add('easy-panel-mobile');"
-                + "if(window.__easyPanelMobileDownloadHook)return;"
+                + "if(!window.EasyPanelDownload||window.__easyPanelMobileDownloadHook)return;"
                 + "window.__easyPanelMobileDownloadHook=true;"
+                + "var maxSize=90*1024*1024;"
+                + "function absolute(raw){try{return new URL(String(raw||''),document.baseURI)}catch(e){return null}}"
+                + "function isHttp(url){return !!url&&(url.protocol==='http:'||url.protocol==='https:')}"
+                + "function isSameOrigin(url){if(!isHttp(url)||url.origin!==location.origin||url.username||url.password||url.hash)return false;return !/(?:^|&)(?:token|authorization|api_key|apikey|secret)(?:=|&|$)/i.test((url.search||'').slice(1))}"
+                + "function filenameFromUrl(url){try{var queryName=url.searchParams&&url.searchParams.get('name');if(queryName)return queryName;var path=decodeURIComponent(url.pathname||''),parts=path.split('/');return parts[parts.length-1]||''}catch(e){return ''}}"
+                + "function mimeFor(link){return link.getAttribute('type')||''}"
+                + "function sendUrl(url,name,mime){if(!url||!isSameOrigin(url)||!window.EasyPanelDownload.downloadUrl)return false;window.EasyPanelDownload.downloadUrl(url.href,name||filenameFromUrl(url)||'easy-panel-download',mime||'');return true}"
+                + "function sendBlob(raw,name,mime){if(!window.EasyPanelDownload.saveBase64)return false;var text=String(raw||'');fetch(text).then(function(response){if(!response.ok)throw Error('download');return response.blob()}).then(function(blob){if(blob.size>maxSize)throw Error('large');var reader=new FileReader();reader.onloadend=function(){var result=String(reader.result||''),comma=result.indexOf(',');if(comma>=0)window.EasyPanelDownload.saveBase64(name||'easy-panel-download',blob.type||mime||'application/octet-stream',result.slice(comma+1))};reader.readAsDataURL(blob)}).catch(function(){});return true}"
+                + "function linkFromTarget(target){while(target&&target!==document){if(target.tagName&&target.tagName.toLowerCase()==='a')return target;target=target.parentElement}return null}"
+                + "function markViewerDownload(){var link=document.getElementById('panelImageViewerOpen');if(!link)return;if(link.textContent!=='下载原图')link.textContent='下载原图';link.removeAttribute('target');link.setAttribute('download','');link.title='保存原图到 Downloads'}"
+                + "markViewerDownload();"
+                + "if(window.MutationObserver)new MutationObserver(markViewerDownload).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['href']});"
                 + "document.addEventListener('click',function(event){"
-                + "var link=event.target&&event.target.closest?event.target.closest('a[download]'):null;"
-                + "if(!link||!link.href||(!link.href.startsWith('blob:')&&!link.href.startsWith('data:')))return;"
-                + "event.preventDefault();event.stopPropagation();"
-                + "var name=link.download||'easy-panel-download';"
-                + "if(link.href.startsWith('data:')){"
-                + "var comma=link.href.indexOf(',');"
-                + "if(comma<0)return;"
-                + "var header=link.href.slice(5,comma),body=link.href.slice(comma+1);"
-                + "var mime=(header.split(';')[0]||'application/octet-stream');"
-                + "if(header.indexOf(';base64')<0){body=btoa(unescape(encodeURIComponent(decodeURIComponent(body))))}"
-                + "window.EasyPanelDownload.saveBase64(name,mime,body);return;"
-                + "}"
-                + "fetch(link.href).then(function(response){return response.blob()}).then(function(blob){"
-                + "var reader=new FileReader();reader.onloadend=function(){"
-                + "var result=String(reader.result||''),comma=result.indexOf(',');"
-                + "if(comma>=0)window.EasyPanelDownload.saveBase64(name,blob.type||'application/octet-stream',result.slice(comma+1));"
-                + "};reader.readAsDataURL(blob);"
-                + "}).catch(function(){});"
+                + "var link=linkFromTarget(event.target);if(!link)return;"
+                + "var isViewer=link.id==='panelImageViewerOpen',hasDownload=link.hasAttribute('download');"
+                + "if(!isViewer&&!hasDownload)return;"
+                + "if(event.ctrlKey||event.metaKey||event.shiftKey||event.button===1)return;"
+                + "var raw=link.getAttribute('href')||link.href||'';if(!raw)return;"
+                + "var name=link.getAttribute('download')||'';"
+                + "if(/^blob:|^data:/i.test(raw)){event.preventDefault();event.stopPropagation();sendBlob(raw,name,mimeFor(link));return}"
+                + "var url=absolute(raw);if(!url||!isSameOrigin(url))return;"
+                + "event.preventDefault();event.stopPropagation();sendUrl(url,name||filenameFromUrl(url),mimeFor(link));"
                 + "},true);"
+                + "var originalOpen=window.open;window.open=function(raw,target,features){var text=String(raw||'');if(/^blob:|^data:/i.test(text)){if(sendBlob(text,'',''))return null}var url=absolute(text);if(url&&isSameOrigin(url)&&(url.pathname==='/output'||url.pathname==='/pose-editor-workflow.json')){if(sendUrl(url,filenameFromUrl(url),'') )return null}return typeof originalOpen==='function'?originalOpen.apply(window,arguments):null};"
                 + "})();",
             null
         );
@@ -403,9 +415,11 @@ public class AdvancedPanelActivity extends Activity {
     }
 
     private boolean isPanelOrigin(Uri uri) {
-        return panelScheme.equalsIgnoreCase(uri.getScheme())
-            && panelHost.equalsIgnoreCase(uri.getHost())
-            && panelPort == (uri.getPort() == -1 ? defaultPort(uri.getScheme()) : uri.getPort());
+        return uri != null && isPanelOriginUrl(uri.toString());
+    }
+
+    private boolean isPanelOriginUrl(String rawUrl) {
+        return DownloadSupport.isSameHttpOrigin(rawUrl, panelScheme, panelHost, panelPort);
     }
 
     private boolean isLocalComfyUi(Uri uri) {
@@ -421,9 +435,25 @@ public class AdvancedPanelActivity extends Activity {
         }
     }
 
+    private boolean isTrustedBridgePage() {
+        return verifiedPageUrl != null && isPanelOriginUrl(verifiedPageUrl);
+    }
+
+    private boolean isAllowedPanelDownloadUrl(String rawUrl) {
+        return DownloadSupport.isSameHttpOrigin(rawUrl, panelScheme, panelHost, panelPort);
+    }
+
     private void beginDownload(DownloadSpec spec) {
-        if (spec == null || spec.url == null || !(spec.url.startsWith("http://") || spec.url.startsWith("https://"))) {
+        if (!isTrustedBridgePage()) {
+            Toast.makeText(this, "下载来源未验证，已取消保存", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (spec == null || !isAllowedPanelDownloadUrl(spec.url)) {
             Toast.makeText(this, "不支持此下载地址", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (spec.contentLength > DownloadSupport.MAX_DOWNLOAD_BYTES) {
+            Toast.makeText(this, "文件超过 90 MB，无法保存", Toast.LENGTH_LONG).show();
             return;
         }
         pendingDownload = spec;
@@ -432,32 +462,176 @@ public class AdvancedPanelActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, DOWNLOAD_PERMISSION_REQUEST);
             return;
         }
-        enqueueDownload(spec);
+        pendingDownload = null;
+        startUrlDownload(spec);
     }
 
-    private void enqueueDownload(DownloadSpec spec) {
+    private void startUrlDownload(DownloadSpec spec) {
+        if (spec == null) return;
+        String cookie = "";
         try {
-            DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(spec.url));
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setDescription("Easy Panel 文件");
-            if (spec.mimeType != null && !spec.mimeType.trim().isEmpty()) request.setMimeType(spec.mimeType);
-            if (spec.userAgent != null && !spec.userAgent.trim().isEmpty()) request.addRequestHeader("User-Agent", spec.userAgent);
-            String cookie = CookieManager.getInstance().getCookie(spec.url);
-            if (cookie != null && !cookie.trim().isEmpty()) request.addRequestHeader("Cookie", cookie);
-            String filename = uniqueDownloadFilename(sanitizeFilename(URLUtil.guessFileName(spec.url, spec.contentDisposition, spec.mimeType)));
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename);
-            manager.enqueue(request);
-            pendingDownload = null;
-            Toast.makeText(this, "已加入下载：" + filename, Toast.LENGTH_LONG).show();
+            cookie = DownloadSupport.safeHeaderValue(CookieManager.getInstance().getCookie(spec.url), 8192);
+        } catch (Exception ignored) {
+            // A missing cookie is valid for the public Easy Panel output route.
+        }
+        final DownloadSpec request = new DownloadSpec(
+            spec.url,
+            DownloadSupport.safeHeaderValue(spec.userAgent, 512),
+            spec.contentDisposition,
+            spec.mimeType,
+            spec.requestedFilename,
+            spec.contentLength,
+            cookie
+        );
+        Toast.makeText(this, "正在下载到系统 Downloads…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                String savedFilename = downloadUrl(request);
+                runOnUiThread(() -> Toast.makeText(
+                    this,
+                    "已保存到下载：" + savedFilename,
+                    Toast.LENGTH_LONG
+                ).show());
+            } catch (Exception error) {
+                runOnUiThread(() -> Toast.makeText(
+                    this,
+                    "下载失败，文件未保存",
+                    Toast.LENGTH_LONG
+                ).show());
+            }
+        }, "easy-panel-http-download").start();
+    }
+
+    private String downloadUrl(DownloadSpec spec) throws Exception {
+        String currentUrl = spec.url;
+        HttpURLConnection connection = null;
+        try {
+            for (int redirect = 0; redirect < 5; redirect++) {
+                if (!isAllowedPanelDownloadUrl(currentUrl)) throw new SecurityException("download origin rejected");
+                URL requestUrl = new URL(currentUrl);
+                connection = (HttpURLConnection) requestUrl.openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(15_000);
+                connection.setReadTimeout(120_000);
+                connection.setRequestMethod("GET");
+                connection.setDoInput(true);
+                if (!spec.userAgent.isEmpty()) connection.setRequestProperty("User-Agent", spec.userAgent);
+                if (!spec.cookie.isEmpty()) connection.setRequestProperty("Cookie", spec.cookie);
+
+                int status = connection.getResponseCode();
+                if (status >= 300 && status < 400) {
+                    String location = connection.getHeaderField("Location");
+                    if (location == null || location.trim().isEmpty()) throw new IOException("redirect missing");
+                    String nextUrl = new URL(requestUrl, location).toExternalForm();
+                    connection.disconnect();
+                    connection = null;
+                    if (!isAllowedPanelDownloadUrl(nextUrl)) throw new SecurityException("redirect origin rejected");
+                    currentUrl = nextUrl;
+                    continue;
+                }
+                if (status < 200 || status >= 300) throw new IOException("download HTTP error");
+
+                long responseLength = connection.getContentLengthLong();
+                if (responseLength > DownloadSupport.MAX_DOWNLOAD_BYTES) throw new DownloadTooLargeException();
+                String contentDisposition = connection.getHeaderField("Content-Disposition");
+                if (contentDisposition == null || contentDisposition.trim().isEmpty()) {
+                    contentDisposition = spec.contentDisposition;
+                }
+                String mimeType = DownloadSupport.normalizeMimeType(
+                    spec.mimeType == null || spec.mimeType.trim().isEmpty()
+                        ? connection.getContentType()
+                        : spec.mimeType
+                );
+                String filename = spec.requestedFilename;
+                if (filename == null || filename.trim().isEmpty()) {
+                    filename = DownloadSupport.filenameFromContentDisposition(contentDisposition);
+                }
+                if (filename == null || filename.trim().isEmpty()) {
+                    filename = URLUtil.guessFileName(currentUrl, contentDisposition, mimeType);
+                }
+                filename = DownloadSupport.sanitizeFilename(filename);
+                try (InputStream input = connection.getInputStream()) {
+                    return writeHttpResponseToDownloads(filename, mimeType, input, responseLength);
+                } finally {
+                    connection.disconnect();
+                    connection = null;
+                }
+            }
+            throw new IOException("too many redirects");
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private String writeHttpResponseToDownloads(
+        String filename,
+        String mimeType,
+        InputStream input,
+        long expectedLength
+    ) throws Exception {
+        if (expectedLength > DownloadSupport.MAX_DOWNLOAD_BYTES) throw new DownloadTooLargeException();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentResolver resolver = getContentResolver();
+            String savedFilename = uniqueDownloadFilename(DownloadSupport.sanitizeFilename(filename));
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, savedFilename);
+            values.put(MediaStore.Downloads.MIME_TYPE, DownloadSupport.normalizeMimeType(mimeType));
+            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/");
+            values.put(MediaStore.Downloads.IS_PENDING, 1);
+            Uri inserted = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (inserted == null) throw new IllegalStateException("download insert failed");
+            try {
+                try (OutputStream output = resolver.openOutputStream(inserted)) {
+                    if (output == null) throw new IllegalStateException("download stream failed");
+                    copyLimited(input, output, expectedLength);
+                }
+                ContentValues done = new ContentValues();
+                done.put(MediaStore.Downloads.IS_PENDING, 0);
+                if (resolver.update(inserted, done, null, null) <= 0) {
+                    throw new IllegalStateException("download finalize failed");
+                }
+                return savedFilename;
+            } catch (Exception error) {
+                resolver.delete(inserted, null, null);
+                throw error;
+            }
+        }
+
+        File directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (!directory.exists() && !directory.mkdirs()) throw new IllegalStateException("download directory failed");
+        String savedFilename = uniqueDownloadFilename(directory, DownloadSupport.sanitizeFilename(filename));
+        File target = new File(directory, savedFilename);
+        try {
+            try (OutputStream output = new FileOutputStream(target)) {
+                copyLimited(input, output, expectedLength);
+            }
+            sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(target)));
+            return savedFilename;
         } catch (Exception error) {
-            pendingDownload = null;
-            Toast.makeText(this, "下载失败，请稍后重试", Toast.LENGTH_LONG).show();
+            target.delete();
+            throw error;
+        }
+    }
+
+    private void copyLimited(InputStream input, OutputStream output, long expectedLength) throws IOException {
+        if (expectedLength > DownloadSupport.MAX_DOWNLOAD_BYTES) throw new DownloadTooLargeException();
+        byte[] buffer = new byte[32 * 1024];
+        long total = 0;
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            total += count;
+            if (total > DownloadSupport.MAX_DOWNLOAD_BYTES) throw new DownloadTooLargeException();
+            output.write(buffer, 0, count);
         }
     }
 
     private void saveJavascriptDownload(String filename, String mimeType, String base64) {
-        if (base64 == null || base64.length() > 120_000_000) {
+        if (!isTrustedBridgePage()) {
+            runOnUiThread(() -> Toast.makeText(this, "下载来源未验证，已取消保存", Toast.LENGTH_LONG).show());
+            return;
+        }
+        long maxBase64Length = ((DownloadSupport.MAX_DOWNLOAD_BYTES + 2) / 3) * 4 + 4;
+        if (base64 == null || (long) base64.length() > maxBase64Length) {
             runOnUiThread(() -> Toast.makeText(this, "文件过大，无法保存", Toast.LENGTH_LONG).show());
             return;
         }
@@ -468,12 +642,20 @@ public class AdvancedPanelActivity extends Activity {
             runOnUiThread(() -> Toast.makeText(this, "文件数据无效", Toast.LENGTH_LONG).show());
             return;
         }
+        if (bytes.length > DownloadSupport.MAX_DOWNLOAD_BYTES) {
+            runOnUiThread(() -> Toast.makeText(this, "文件超过 90 MB，无法保存", Toast.LENGTH_LONG).show());
+            return;
+        }
         final JsDownloadSpec spec = new JsDownloadSpec(
-            sanitizeFilename(filename),
-            mimeType == null || mimeType.trim().isEmpty() ? "application/octet-stream" : mimeType,
+            DownloadSupport.sanitizeFilename(filename),
+            DownloadSupport.normalizeMimeType(mimeType),
             bytes
         );
         runOnUiThread(() -> {
+            if (!isTrustedBridgePage()) {
+                Toast.makeText(this, "下载来源未验证，已取消保存", Toast.LENGTH_LONG).show();
+                return;
+            }
             pendingJsDownload = spec;
             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
                 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
@@ -486,43 +668,28 @@ public class AdvancedPanelActivity extends Activity {
 
     private void writeJavascriptDownload(JsDownloadSpec spec) {
         if (spec == null) return;
-        Uri inserted = null;
-        String savedFilename = spec.filename;
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ContentResolver resolver = getContentResolver();
-                savedFilename = uniqueDownloadFilename(spec.filename);
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Downloads.DISPLAY_NAME, savedFilename);
-                values.put(MediaStore.Downloads.MIME_TYPE, spec.mimeType);
-                values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/");
-                values.put(MediaStore.Downloads.IS_PENDING, 1);
-                inserted = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                if (inserted == null) throw new IllegalStateException("download insert failed");
-                try (OutputStream output = resolver.openOutputStream(inserted)) {
-                    if (output == null) throw new IllegalStateException("download stream failed");
-                    output.write(spec.bytes);
-                }
-                ContentValues done = new ContentValues();
-                done.put(MediaStore.Downloads.IS_PENDING, 0);
-                resolver.update(inserted, done, null, null);
-            } else {
-                File directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                if (!directory.exists() && !directory.mkdirs()) throw new IllegalStateException("download directory failed");
-                savedFilename = uniqueDownloadFilename(directory, spec.filename);
-                File target = new File(directory, savedFilename);
-                try (FileOutputStream output = new FileOutputStream(target)) {
-                    output.write(spec.bytes);
-                }
-                sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(target)));
+        pendingJsDownload = null;
+        new Thread(() -> {
+            try (InputStream input = new java.io.ByteArrayInputStream(spec.bytes)) {
+                String savedFilename = writeHttpResponseToDownloads(
+                    spec.filename,
+                    spec.mimeType,
+                    input,
+                    spec.bytes.length
+                );
+                runOnUiThread(() -> Toast.makeText(
+                    this,
+                    "已保存到下载：" + savedFilename,
+                    Toast.LENGTH_LONG
+                ).show());
+            } catch (Exception error) {
+                runOnUiThread(() -> Toast.makeText(
+                    this,
+                    "保存下载文件失败，文件未保存",
+                    Toast.LENGTH_LONG
+                ).show());
             }
-            pendingJsDownload = null;
-            Toast.makeText(this, "已保存到下载：" + savedFilename, Toast.LENGTH_LONG).show();
-        } catch (Exception error) {
-            if (inserted != null) getContentResolver().delete(inserted, null, null);
-            pendingJsDownload = null;
-            Toast.makeText(this, "保存下载文件失败", Toast.LENGTH_LONG).show();
-        }
+        }, "easy-panel-js-download").start();
     }
 
     private String uniqueDownloadFilename(String filename) {
@@ -568,13 +735,6 @@ public class AdvancedPanelActivity extends Activity {
         return filename + " (" + suffix + ")";
     }
 
-    private String sanitizeFilename(String filename) {
-        String safe = filename == null ? "easy-panel-download" : filename.trim();
-        safe = safe.replaceAll("[\\\\/:*?\"<>|]", "_");
-        if (safe.isEmpty() || ".".equals(safe) || "..".equals(safe)) safe = "easy-panel-download";
-        return safe.length() > 180 ? safe.substring(0, 180) : safe;
-    }
-
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -589,14 +749,14 @@ public class AdvancedPanelActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != DOWNLOAD_PERMISSION_REQUEST) return;
         DownloadSpec download = pendingDownload;
+        JsDownloadSpec javascriptDownload = pendingJsDownload;
         pendingDownload = null;
+        pendingJsDownload = null;
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && download != null) {
-            enqueueDownload(download);
-        } else if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && pendingJsDownload != null) {
-            JsDownloadSpec javascriptDownload = pendingJsDownload;
+            startUrlDownload(download);
+        } else if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && javascriptDownload != null) {
             writeJavascriptDownload(javascriptDownload);
         } else {
-            pendingJsDownload = null;
             Toast.makeText(this, "没有存储权限，无法保存下载文件", Toast.LENGTH_LONG).show();
         }
     }
@@ -619,6 +779,9 @@ public class AdvancedPanelActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        verifiedPageUrl = null;
+        pendingDownload = null;
+        pendingJsDownload = null;
         if (fileChooserCallback != null) {
             fileChooserCallback.onReceiveValue(null);
             fileChooserCallback = null;
@@ -642,16 +805,43 @@ public class AdvancedPanelActivity extends Activity {
         final String userAgent;
         final String contentDisposition;
         final String mimeType;
+        final String requestedFilename;
+        final long contentLength;
+        final String cookie;
 
-        DownloadSpec(String url, String userAgent, String contentDisposition, String mimeType) {
+        DownloadSpec(
+            String url,
+            String userAgent,
+            String contentDisposition,
+            String mimeType,
+            String requestedFilename,
+            long contentLength,
+            String cookie
+        ) {
             this.url = url;
             this.userAgent = userAgent;
             this.contentDisposition = contentDisposition;
             this.mimeType = mimeType;
+            this.requestedFilename = requestedFilename == null ? "" : requestedFilename;
+            this.contentLength = contentLength;
+            this.cookie = cookie == null ? "" : cookie;
         }
     }
 
     private final class DownloadBridge {
+        @JavascriptInterface
+        public void downloadUrl(String url, String filename, String mimeType) {
+            runOnUiThread(() -> beginDownload(new DownloadSpec(
+                url,
+                "",
+                "",
+                mimeType,
+                filename,
+                -1,
+                ""
+            )));
+        }
+
         @JavascriptInterface
         public void saveBase64(String filename, String mimeType, String base64) {
             saveJavascriptDownload(filename, mimeType, base64);
@@ -667,6 +857,12 @@ public class AdvancedPanelActivity extends Activity {
             this.filename = filename;
             this.mimeType = mimeType;
             this.bytes = bytes;
+        }
+    }
+
+    private static final class DownloadTooLargeException extends IOException {
+        DownloadTooLargeException() {
+            super("download exceeds size limit");
         }
     }
 }

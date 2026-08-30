@@ -2,6 +2,10 @@
 
 这个目录是 Easy Panel 的 Android 客户端源码。它只控制电脑上的 Easy Panel / ComfyUI，不在手机上运行模型。
 
+![Easy Panel Mobile 品牌图标](android/app/src/main/res/drawable-nodpi/easy_panel_brand_source.png)
+
+图标源图保存在 `android/app/src/main/res/drawable-nodpi/easy_panel_brand_source.png`；Android 自适应图标、圆形/传统密度图标和启动图均由同一品牌标记生成，前景内容留在安全区内，未修改包名。
+
 ## 两种模式
 
 - **快速生图**：手机编辑正向提示词、负向提示词、Checkpoint、质量档位、宽高和轮询间隔；只有点击“生成图片”才提交任务。模型列表来自 Easy Panel 的 `/api/rpg/models`，任务通过 API v2 异步执行。
@@ -32,13 +36,13 @@ Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、
 2. 确认 Checkpoint 下拉框出现电脑端实际模型。
 3. 修改质量、模型、尺寸和提示词，确认不会自动生成；点击“生成图片”后才提交一次。
 4. 出图后点击“下载图片”，在系统 `Downloads` 中检查文件。重复下载会自动使用不覆盖的文件名。
-5. 点击“高级面板”，测试完整页面的上传、生成、下载、刷新和返回。
+5. 点击“高级面板”，测试完整页面的上传、生成、当前图/历史图下载、Blob/Data URL 下载、刷新和返回。
 
 ## 权限与下载
 
 - Android 10 及以上使用 MediaStore 写入公共 `Downloads`，不要求旧式外部存储权限。
 - Android 9 及以下在首次保存时请求 `WRITE_EXTERNAL_STORAGE`；拒绝后会显示明确失败信息，不会静默丢文件。
-- 高级面板的 HTTP/HTTPS 下载使用 Android 下载管理器；Blob / data URL 由 WebView 桥接到公共 `Downloads`。
+- 高级面板的同源 HTTP/HTTPS 下载由原生流式下载写入公共 `Downloads`；Blob / data URL 和脚本触发的下载由 WebView 桥接到同一目录。文件名、MIME、大小、重定向和来源会在原生侧复核。
 - 浏览器运行时仍使用普通 Blob 下载，不依赖 Android 原生插件。
 
 ## 本地构建
@@ -53,6 +57,13 @@ pnpm build
 pnpm android:apk
 ```
 
+如需单独运行 Android 原生单测：
+
+```powershell
+Set-Location android
+.\gradlew.bat testDebugUnitTest --no-daemon
+```
+
 APK 输出到：
 
 ```text
@@ -65,8 +76,9 @@ GitHub Actions 只构建 Debug artifact，不使用秘密、不发布未签名 R
 
 - 手机端保存的 Token 使用本机存储，仅作为 `X-RPG-Token` 请求头发送到用户填写的 Easy Panel 地址。
 - 高级面板 URL 只允许 HTTP/HTTPS 根地址，并最多附带 `mobile=1`；不会附带 Token。
+- 高级面板下载桥只接受已验证的 Easy Panel 同源地址；Token、Authorization、API key 和 secret 不允许出现在下载 URL，也不会写入日志。
 - ComfyUI `8188` 不应从手机直接访问；高级页面中电脑专用入口会隐藏，原生容器也会拦截到 `8188` 的导航。
-- 本次发布已完成 TypeScript、Vitest/Node、Web、Capacitor、Gradle、APK 元数据、敏感信息和局域网只读检查；发布环境没有连接 Android 真机。
+- 本次发布已完成 TypeScript、Vitest/Node、Android 原生单测、Web、Capacitor、Gradle、APK 元数据、敏感信息和局域网只读检查；发布环境没有连接 Android 真机。
 - 因此 Android 文件选择器、返回键、MediaStore 实际落盘、不同系统版本权限弹窗、Tailscale 从手机的实际可达性和真实 GPU 出图仍需在目标设备上验收。
 
 ## APK 校验
@@ -82,5 +94,5 @@ Get-FileHash -Algorithm SHA256 .\app-debug.apk
 本次 `mobile-v1.2.4` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
 
 ```text
-DB003C5F959344038D9DC8383085D5D53482BC7354E6D0D9EB71E717CC830ECA
+994CA457622BE39AD0CC4A781953D93B927D974C7E0D8056B02A98EC98D29D82
 ```
