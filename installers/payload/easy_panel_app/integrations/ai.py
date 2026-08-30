@@ -26,52 +26,39 @@ PROMPT_SECTION_KEYS = (
 )
 
 _ANIMA_TRANSLATION_PROMPT = """\
-You are an Anima prompt adapter. Convert the user's Chinese image description into one precise English positive prompt for Anima.
+Convert CHINESE_DESCRIPTION into one precise English positive prompt optimized for Anima.
 
-Rules:
-1. Preserve every explicitly stated subject, appearance, garment, pose, action, expression, camera angle, setting, lighting, color, and medium. Never invent or remove elements.
-2. The message contains application fields (ANIMA_PREFIX, SAFETY_TAG) followed by CHINESE_DESCRIPTION:. Insert their values where told, ignore empty ones, and never output field names.
-3. Place LoRA triggers, <lora:...>, embeddings, wildcards, and weights like (concept:1.5) verbatim at the very start, in original order. Character, series, and artist tags are preserved but placed in their section below.
-4. After triggers, order: quality/meta, safety, subject count, character, series, artist, appearance, clothing, pose/action, expression/gaze, composition/camera, setting, lighting/color/style, then natural-language sentence if any.
-5. Lowercase normal tags; underscores to spaces (keep only in score_*); prefer canonical Gelbooru terms; comma-separated; concise. Merge duplicates, synonyms, and hierarchies (e.g. "very long hair" not "long hair, very long hair").
-6. Artist: output "@artist name" only when given; never invent one.
-7. Use 1-2 concise English sentences only when needed (multiple subjects, complex poses, hand placement, spatial relations); clearly attribute each action to the right subject.
-8. Keep about 10-45 meaningful tags; never add filler quality spam unless requested.
-9. Put ANIMA_PREFIX after any triggers; use SAFETY_TAG as the rating; add no other quality or score_* tags.
-10. Output only the final positive prompt, one line, no headings, explanations, quotation marks, Markdown, JSON, negative prompt, or alternatives.
+Preserve every explicit visual fact and relationship; add or remove nothing. Treat ANIMA_PREFIX and SAFETY_TAG as control fields: emit only nonempty values, never their field names. Copy LoRA triggers, <lora:...>, embeddings, wildcards, and weighted syntax verbatim to the beginning in their original order; then add the prefix and safety value. Add no other quality or score_* tags.
+
+Order the rest as: subject count; character/series; an explicit artist as @name; appearance; clothing; pose/action; expression/gaze; camera/composition; setting; lighting/color/style. Use concise lowercase canonical Gelbooru tags separated by commas, with spaces instead of underscores except in score_*. Merge duplicates, synonyms, and hierarchies.
+
+Use tags by default. Only for multiple subjects or complex poses, hand placement, or spatial relations, append 1-2 short English clauses that bind each action to the correct subject. Use only necessary tags; never add filler.
+
+Output one line containing only the positive prompt: no explanation, Markdown, JSON, negative prompt, surrounding quotes, or alternatives.
 """
 
 _ILLUSTRIOUS_TRANSLATION_PROMPT = """\
-You are an Illustrious XL prompt adapter. Convert the user's Chinese description into one compact English positive prompt using canonical Danbooru tags (natural language only for actions tags cannot express).
+Convert CHINESE_DESCRIPTION into one compact Illustrious XL English positive prompt, primarily using canonical Danbooru tags.
 
-Rules:
-1. Keep every stated subject/count, character and series name, physical appearance, hairstyle, clothing, pose/action, interaction, expression, gaze, camera distance and angle, foreground/background, lighting/color, style/medium. Never invent details, identity, franchise, or story elements.
-2. The message contains ILLUSTRIOUS_PREFIX followed by CHINESE_DESCRIPTION:. Insert its value, ignore empty ones, and never output field names.
-3. Place LoRA triggers, <lora:...>, embeddings, wildcards, escaped character tags, and existing weights verbatim at the start; never translate them.
-4. Order: triggers, quality prefix, subject count, character/series, major appearance, hair/face, clothing/accessories, pose, action/interaction, expression/gaze, framing/camera, background/environment, lighting/color, style/medium.
-5. Lowercase ordinary tags with spaces, not underscores (keep underscores only inside protected, parenthetical, or tag-database tokens); comma-separated; prefer Danbooru terms. Deduplicate and merge synonyms/hierarchies (e.g. "white collared shirt" not "shirt, white shirt, collared shirt").
-6. Use an established character/series tag only when present in the input or the application tag database; otherwise keep the readable name.
-7. Simple scenes: tags only. Complex relationships: add one short clause identifying each subject; never write the whole output as prose.
-8. Use ILLUSTRIOUS_PREFIX as the quality prefix; add no score_* or "very awa" tags, model magic words, or conflicting quality tiers.
-9. Keep the smallest tag set that fully preserves the request (about 12-50 typical).
-10. Output only the final positive prompt, one line, no explanations, headings, categories, bullet points, Markdown, JSON, negative prompt, comments, or alternatives.
+Preserve every explicit visual fact and relationship; invent nothing. Treat ILLUSTRIOUS_PREFIX as a control field: emit its nonempty value, never the field name. Copy LoRA triggers, <lora:...>, embeddings, wildcards, escaped tags, and weighted syntax verbatim to the beginning in their original order; then add the prefix. Beyond that supplied prefix, add no score_*, "very awa", model-specific magic words, or conflicting quality tags.
+
+Order the rest as: subject count; character/series; appearance and hair/face; clothing/accessories; pose; action/interaction; expression/gaze; camera/framing; environment; lighting/color; style/medium. Use concise lowercase tags separated by commas, with spaces instead of underscores except in protected or database-supplied tags. Prefer canonical terms and merge duplicates, synonyms, and hierarchies. Use canonical character/series tags only when supplied by the input or application database; otherwise keep readable names.
+
+Use tags alone for simple scenes. For complex relationships, append one short clause that clearly identifies each subject. Use only necessary tags.
+
+Output one line containing only the positive prompt: no explanation, Markdown, JSON, negative prompt, comments, or alternatives.
 """
 
 _KREA_TRANSLATION_PROMPT = """\
-You are a Krea 2 prompt editor. Convert the user's Chinese description into one clear, visually grounded English prompt that reads as a coherent image description (not a tag list).
+Convert CHINESE_DESCRIPTION into one coherent, visually grounded English prompt for Krea 2; do not write a Danbooru tag list.
 
-Rules:
-1. Keep every stated subject, appearance, hairstyle, clothing/accessory, pose/action, interaction, expression, gaze, camera view, environment, lighting, color palette, medium, and style. Never invent elements, visible text, or story events.
-2. The message contains KREA_EXPANSION_MODE and CHINESE_DESCRIPTION:. Insert their values, ignore empty ones, and never output field names.
-3. Place LoRA or style trigger words verbatim at the very start, followed by a comma; keep character/series names and requested quoted text exactly.
-4. Describe in natural order: subject, defining appearance, clothing/accessories, pose/action, interaction and spatial relations, expression/gaze, composition and framing, setting/background, lighting/color/texture/atmosphere. Flow naturally, not template-like.
-5. For multiple characters, associate each with their own appearance, clothing, position, action, and gaze using explicit spatial wording (left/right/foreground/behind/facing); avoid ambiguous pronouns.
-6. KREA_EXPANSION_MODE: strict = add no unspecified lighting, framing, style, medium, color, atmosphere, or scene detail; balanced = may add one restrained framing/lighting/medium when unspecified. In both, never add subjects, objects, clothing, colors, locations, identities, or story.
-7. Describe poses physically: body orientation, head/torso direction, visible hands, contact, camera-relative direction, standing/sitting/kneeling/reclining/moving. No unrequested poses.
-8. Use concrete visual language (e.g. "soft directional lighting", "low-angle medium shot"); avoid promotional fluff ("breathtaking", "perfect", "viral artwork").
-9. Reproduce requested in-image text exactly inside English quotation marks.
-10. Length proportional to input (about 15-50 words simple, 50-140 detailed); no filler.
-11. Output only the final prompt as one cohesive paragraph; no reasoning, explanations, headings, bullet points, Markdown, JSON, negatives, alternatives, or surrounding quotes.
+Preserve every explicit visual fact, relationship, name, trigger, and requested in-image text; invent nothing. Treat KREA_EXPANSION_MODE as a control field and never output its name. Copy LoRA/style triggers verbatim to the beginning. Reproduce requested visible text exactly inside English quotation marks.
+
+Describe naturally: subject and appearance; clothing; pose/action; interactions and spatial relations; expression/gaze; camera/framing; setting; lighting/color/texture/atmosphere. For multiple characters, explicitly bind each appearance, position, action, and gaze; avoid ambiguous pronouns. Describe poses concretely, including orientation, contact, and camera-relative direction when relevant, without adding a pose.
+
+In strict mode, add no unspecified scene, style, medium, framing, lighting, color, or atmosphere. In balanced mode, if missing, add at most one restrained framing, lighting, or medium choice. In both modes, never add subjects, objects, clothing, colors, locations, identities, or story. Use concrete language, proportional length, and no promotional filler.
+
+Output only the final prompt as one paragraph: no reasoning, headings, Markdown, JSON, negative prompt, alternatives, or surrounding quotes.
 """
 
 

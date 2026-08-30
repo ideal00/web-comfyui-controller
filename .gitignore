@@ -6,13 +6,34 @@ backup/
 
 # ===== 第三方标签数据（体积大，按需自行下载，见 README 说明）=====
 vendor/
+!web/assets/vendor/
+!web/assets/vendor/minipaint/
+!web/assets/vendor/minipaint/**
+!installers/payload/web/assets/vendor/
+!installers/payload/web/assets/vendor/minipaint/
+!installers/payload/web/assets/vendor/minipaint/**
 
 # ===== Python =====
 __pycache__/
 *.py[cod]
+.pytest_cache/
+
+# ===== 本地导入审计与诊断脚本（不属于发布包）=====
+lora_imports/
+_diag_user_gen.py
+
+# ===== 本机 RPG 视觉档案（首次运行时自动创建）=====
+rpg_visual_profiles.json
 
 # ===== 运行日志 =====
 *.log
+generation_snapshots.json
+generation_snapshots.tmp
 
 # ===== 本地截图 / 杂项 =====
 panel_layout_check.png
+
+# ===== RPGBox 手机视觉接口运行数据 =====
+rpg_mobile_token.txt
+rpg_jobs.json
+rpg_jobs.json.tmp

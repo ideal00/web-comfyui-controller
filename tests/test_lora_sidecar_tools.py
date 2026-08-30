@@ -14,9 +14,11 @@ if str(PROJECT_DIR) not in sys.path:
 from easy_panel_app.lora_sidecars import (
     SIDECAR_MARKER,
     atomic_write_notes,
+    classify_lora_note_outfits,
     infer_base_model,
     load_notes,
     merge_note,
+    outfit_main_class,
     read_safetensors_metadata,
     read_text_smart,
     render_sidecar,
@@ -181,6 +183,23 @@ class NotesSafetyTests(unittest.TestCase):
         self.assertEqual("old dress", outfit["clothing"])
         self.assertEqual("keep me", outfit["other"])
         self.assertEqual("blue hair", outfit["appearance"])
+        self.assertEqual("appearance", outfit["main_class"])
+
+    def test_main_class_uses_first_populated_editor_field(self):
+        self.assertEqual("appearance", outfit_main_class({"appearance": "blue hair", "clothing": "dress"}))
+        self.assertEqual("clothing", outfit_main_class({"clothing": "dress", "pose": "standing"}))
+        self.assertEqual("pose", outfit_main_class({"pose": "standing", "scene": "street"}))
+        self.assertEqual("coloring", outfit_main_class({"coloring": "pastel", "negative": "bad hands"}))
+        self.assertEqual("other", outfit_main_class({}))
+
+    def test_all_saved_presets_receive_an_automatic_main_class(self):
+        notes = {"a.safetensors": {"outfits": [
+            {"name": "角色", "subject": "alice", "clothing": "dress", "main_class": "clothing"},
+            {"name": "场景", "scene": "street"},
+        ]}}
+        classified = classify_lora_note_outfits(notes)
+        self.assertEqual("character", classified["a.safetensors"]["outfits"][0]["main_class"])
+        self.assertEqual("scene", classified["a.safetensors"]["outfits"][1]["main_class"])
 
     def test_atomic_json_round_trip(self):
         with tempfile.TemporaryDirectory() as temporary:

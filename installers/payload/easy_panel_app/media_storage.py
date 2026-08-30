@@ -57,13 +57,13 @@ def save_inpaint_upload(content_type: str, body: bytes) -> dict:
     mask_name = f"easy_panel/inpaint_mask_{uuid.uuid4().hex[:12]}.png"
     try:
         import io
-        from PIL import Image
+        from PIL import Image, ImageOps
     except ImportError:
         (COMFY_INPUT / image_name).write_bytes(image_bytes)
         (COMFY_INPUT / mask_name).write_bytes(mask_bytes)
         return {"image": image_name, "mask": mask_name}
     try:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
         mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
     except Exception as exc:
         raise ValueError("原图或蒙版无法解析：" + str(exc)) from exc

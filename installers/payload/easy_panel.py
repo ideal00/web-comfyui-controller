@@ -5,11 +5,13 @@ import json
 import html
 import csv
 import bisect
+import hashlib
 import mimetypes
 import os
 import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -55,7 +57,7 @@ from easy_panel_app.integrations.ai import (
 )
 from easy_panel_app.integrations.comfy_client import comfy_json
 from easy_panel_app.image_ops import apply_color_correction
-from easy_panel_app.lora_sidecars import atomic_write_notes, merge_note, parse_lora_sidecar, read_text_smart
+from easy_panel_app.lora_sidecars import atomic_write_notes, classify_lora_note_outfits, merge_note, parse_lora_sidecar, read_text_smart
 from easy_panel_app.media_storage import (
     extract_image_upload,
     list_output_images,
@@ -98,6 +100,209 @@ SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
 FACE_DETECTOR_MODEL = "bbox/face_yolov8m.pt"
 HAND_DETECTOR_MODEL = "bbox/hand_yolov8s.pt"
 FOOT_DETECTOR_MODEL = "bbox/foot_yolov8x.pt"
+EMBEDDING_EXTENSIONS = {".safetensors", ".pt", ".bin"}
+EMBEDDING_NOTES_FILE = PROJECT_DIR / "embedding_notes.json"
+ROUTE1_MAX_WORKING_PIXELS = 2_200_000
+
+
+def route1_working_dimensions(width: int, height: int,
+                              max_pixels: int = ROUTE1_MAX_WORKING_PIXELS) -> tuple[int, int]:
+    """Return an aspect-preserving, model-aligned route-1 working size."""
+    width, height = int(width), int(height)
+    if width <= 0 or height <= 0 or width * height <= max_pixels:
+        return width, height
+    scale = (max_pixels / (width * height)) ** 0.5
+    target_width = max(8, int(width * scale) // 8 * 8)
+    target_height = max(8, int(height * scale) // 8 * 8)
+    while target_width * target_height > max_pixels:
+        if target_width >= target_height:
+            target_width = max(8, target_width - 8)
+        else:
+            target_height = max(8, target_height - 8)
+    return target_width, target_height
+
+
+def prepare_route1_working_assets(image_name: str, mask_name: str,
+                                  max_pixels: int = ROUTE1_MAX_WORKING_PIXELS
+                                  ) -> tuple[str, str, tuple[int, int], tuple[int, int], bool]:
+    """Create aligned background/mask copies for route 1 without touching uploads."""
+    try:
+        from PIL import Image as _PILImage, ImageOps as _PILImageOps
+
+        image_path, mask_path = COMFY_INPUT / image_name, COMFY_INPUT / mask_name
+        with _PILImage.open(image_path) as source:
+            source = _PILImageOps.exif_transpose(source)
+            original_size = source.size
+            working_size = route1_working_dimensions(*original_size, max_pixels=max_pixels)
+            if working_size == original_size:
+                return image_name, mask_name, original_size, working_size, False
+            background = source.convert("RGB").resize(working_size, _PILImage.Resampling.LANCZOS)
+        with _PILImage.open(mask_path) as source_mask:
+            mask = source_mask.convert("L").resize(working_size, _PILImage.Resampling.LANCZOS)
+
+        working_dir = COMFY_INPUT / "easy_panel"
+        working_dir.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        working_image_name = f"easy_panel/route1_work_{token}.png"
+        working_mask_name = f"easy_panel/route1_mask_{token}.png"
+        background.save(COMFY_INPUT / working_image_name, format="PNG")
+        mask.save(COMFY_INPUT / working_mask_name, format="PNG")
+        return working_image_name, working_mask_name, original_size, working_size, True
+    except Exception as exc:
+        raise ValueError("路线1无法自动缩小背景图与蒙版：" + str(exc)) from exc
+
+
+def prepare_route1_generation_mask(mask_name: str,
+                                   working_size: tuple[int, int]) -> tuple[str, int, int]:
+    """Add a safety halo around only the head area of a rough character mask."""
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image as _PILImage, ImageChops as _PILImageChops
+
+        with _PILImage.open(COMFY_INPUT / mask_name) as source_mask:
+            mask = source_mask.convert("L")
+        if mask.size != tuple(working_size):
+            mask = mask.resize(tuple(working_size), _PILImage.Resampling.LANCZOS)
+        longest_side = max(int(working_size[0]), int(working_size[1]))
+        headroom = max(20, min(36, round(longest_side / 64)))
+        side_margin = max(24, min(40, round(longest_side / 56)))
+        shifted_left = _PILImage.new("L", mask.size, 0)
+        shifted_right = _PILImage.new("L", mask.size, 0)
+        shifted_left.paste(mask, (-side_margin, 0))
+        shifted_right.paste(mask, (side_margin, 0))
+        lateral_mask = _PILImageChops.lighter(
+            mask, _PILImageChops.lighter(shifted_left, shifted_right)
+        )
+        bbox = mask.getbbox()
+        head_region = _PILImage.new("L", mask.size, 0)
+        if bbox:
+            left, top, right, bottom = bbox
+            mask_height, mask_width = bottom - top, right - left
+            head_band_height = max(48, round(min(mask_height * 0.30, mask_width * 0.55)))
+            head_band_bottom = min(bottom, top + head_band_height)
+            head_region.paste(mask.crop((0, top, mask.width, head_band_bottom)),
+                              (0, top))
+        kernel_size = headroom * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                           (kernel_size, kernel_size))
+        expanded_head = _PILImage.fromarray(
+            cv2.dilate(np.asarray(head_region, dtype=np.uint8), kernel), mode="L"
+        )
+        generation_mask = _PILImageChops.lighter(lateral_mask, expanded_head)
+
+        working_dir = COMFY_INPUT / "easy_panel"
+        working_dir.mkdir(parents=True, exist_ok=True)
+        generation_name = f"easy_panel/route1_generation_mask_{uuid.uuid4().hex}.png"
+        generation_mask.save(COMFY_INPUT / generation_name, format="PNG")
+        return generation_name, headroom, side_margin
+    except Exception as exc:
+        raise ValueError("路线1无法为人物头顶预留生成空间：" + str(exc)) from exc
+
+
+def prepare_route1_environment_light(image_name: str, mask_name: str) -> tuple[str, dict]:
+    """Measure robust local lighting and create an aligned low-frequency light field."""
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image as _PILImage, ImageFilter as _PILImageFilter
+
+        with _PILImage.open(COMFY_INPUT / image_name) as source:
+            image = source.convert("RGB")
+        with _PILImage.open(COMFY_INPUT / mask_name) as source_mask:
+            mask_image = source_mask.convert("L")
+        if mask_image.size != image.size:
+            mask_image = mask_image.resize(image.size, _PILImage.Resampling.LANCZOS)
+
+        rgb = np.asarray(image, dtype=np.float32) / 255.0
+        mask = np.asarray(mask_image, dtype=np.float32) / 255.0
+        height, width = mask.shape
+        longest = max(width, height)
+        near_radius = max(24, min(100, round(longest * 0.045)))
+        middle_radius = max(near_radius + 24, min(300, round(longest * 0.14)))
+        outside = (mask < 0.08).astype(np.uint8)
+        distance = cv2.distanceTransform(outside, cv2.DIST_L2, 5)
+        near_selection = (distance > 1) & (distance <= near_radius)
+        middle_selection = (distance > near_radius) & (distance <= middle_radius)
+        if int(near_selection.sum()) < 128:
+            near_selection = outside.astype(bool)
+        if int(middle_selection.sum()) < 128:
+            middle_selection = outside.astype(bool)
+
+        def robust_pixels(selection):
+            pixels = rgb[selection]
+            luminance = pixels @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+            saturation = pixels.max(axis=1) - pixels.min(axis=1)
+            low, high = np.percentile(luminance, [5, 95])
+            keep = (luminance >= low) & (luminance <= high) & (saturation < 0.90)
+            if int(keep.sum()) >= 64:
+                pixels, luminance = pixels[keep], luminance[keep]
+            return pixels, luminance
+
+        near_pixels, near_luminance = robust_pixels(near_selection)
+        middle_pixels, middle_luminance = robust_pixels(middle_selection)
+        shadow_cut, highlight_cut = np.percentile(middle_luminance, [25, 75])
+        shadow_pixels = middle_pixels[middle_luminance <= shadow_cut]
+        highlight_pixels = middle_pixels[middle_luminance >= highlight_cut]
+        near_rgb = np.median(near_pixels, axis=0)
+        middle_rgb = np.median(middle_pixels, axis=0)
+        shadow_rgb = np.median(shadow_pixels, axis=0)
+        highlight_rgb = np.median(highlight_pixels, axis=0)
+        contrast = float(np.percentile(middle_luminance, 90) -
+                         np.percentile(middle_luminance, 10))
+
+        fit_selection = near_selection | middle_selection
+        ys, xs = np.nonzero(fit_selection)
+        values = rgb[ys, xs] @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        low, high = np.percentile(values, [5, 95])
+        keep = (values >= low) & (values <= high)
+        xs, ys, values = xs[keep], ys[keep], values[keep]
+        if values.size > 60000:
+            stride = max(1, values.size // 60000)
+            xs, ys, values = xs[::stride], ys[::stride], values[::stride]
+        design = np.column_stack((
+            (xs / max(1, width - 1)) * 2 - 1,
+            (ys / max(1, height - 1)) * 2 - 1,
+            np.ones_like(values),
+        ))
+        coefficient, *_ = np.linalg.lstsq(design, values, rcond=None)
+        gradient_x, gradient_y, base_luminance = (float(value) for value in coefficient)
+        gradient_angle = float(np.degrees(np.arctan2(gradient_y, gradient_x)))
+
+        near_blur = image.filter(_PILImageFilter.GaussianBlur(radius=max(12, near_radius * 0.65)))
+        middle_blur = image.filter(
+            _PILImageFilter.GaussianBlur(radius=max(24, middle_radius * 0.55)))
+        light_field = _PILImage.blend(near_blur, middle_blur, 0.42)
+        working_dir = COMFY_INPUT / "easy_panel"
+        working_dir.mkdir(parents=True, exist_ok=True)
+        light_name = f"easy_panel/route1_light_{uuid.uuid4().hex}.png"
+        light_field.save(COMFY_INPUT / light_name, format="PNG")
+
+        def rgb255(values):
+            return tuple(int(round(float(value) * 255)) for value in values)
+
+        analysis = {
+            "nearRadius": near_radius,
+            "middleRadius": middle_radius,
+            "baseLuminance": round(base_luminance, 4),
+            "gradientX": round(gradient_x, 4),
+            "gradientY": round(gradient_y, 4),
+            "gradientAngle": round(gradient_angle, 2),
+            "contrast": round(contrast, 4),
+            "nearRgb": rgb255(near_rgb),
+            "middleRgb": rgb255(middle_rgb),
+            "highlightRgb": rgb255(highlight_rgb),
+            "shadowRgb": rgb255(shadow_rgb),
+        }
+        analysis["prompt"] = (
+            "continuous background-derived illumination field, "
+            f"measured luminance gradient vector ({gradient_x:.3f}, {gradient_y:.3f}), "
+            f"local contrast {contrast:.3f}, near reflected light RGB {rgb255(near_rgb)}, "
+            f"highlight tint RGB {rgb255(highlight_rgb)}, shadow tint RGB {rgb255(shadow_rgb)}"
+        )
+        return light_name, analysis
+    except Exception as exc:
+        raise ValueError("路线1无法分析人物位置周围的环境光：" + str(exc)) from exc
 
 
 def object_info_choices(info: dict, class_type: str, input_name: str) -> list[str]:
@@ -230,6 +435,36 @@ PROMPT_SECTION_LABELS = {
 }
 MATURE_NEGATIVE_TERMS = ("nsfw", "nude", "nudity", "explicit", "sex", "sexual",
                          "porn", "hentai", "uncensored")
+PANEL_VERSION = "2.1.0-dev"
+SNAPSHOT_FILE = PROJECT_DIR / "generation_snapshots.json"
+_FILE_SIGNATURE_CACHE: dict[tuple[str, int, int], dict] = {}
+
+
+def prompt_automation(data: dict) -> dict[str, bool]:
+    """Return explicit switches for every prompt fragment inserted by the panel."""
+    supplied = data.get("promptAutomation")
+    defaults = {
+        "quality": True,
+        "loraTriggers": True,
+        "baseNegative": True,
+        "safetyNegative": True,
+        "dynamicNegative": True,
+        "sceneFallback": True,
+        "detailerNegative": True,
+    }
+    if isinstance(supplied, dict):
+        for key in defaults:
+            if key in supplied:
+                defaults[key] = bool(supplied[key])
+    return defaults
+
+
+def safety_negative_terms(level: str) -> list[str]:
+    if level == "safe":
+        return list(MATURE_NEGATIVE_TERMS)
+    if level == "sensitive":
+        return ["nude", "nudity", "explicit", "sex", "sexual", "porn", "hentai"]
+    return []
 
 
 def exact_unique_terms(*chunks: str, limit: int = 360) -> list[str]:
@@ -305,6 +540,71 @@ def lora_meta_map(lora_names: list) -> dict:
     return meta
 
 
+def load_embedding_notes() -> dict:
+    """Read display metadata separately from the real embedding filenames."""
+    if not EMBEDDING_NOTES_FILE.is_file():
+        return {}
+    try:
+        with EMBEDDING_NOTES_FILE.open("r", encoding="utf-8-sig") as handle:
+            notes = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return notes if isinstance(notes, dict) else {}
+
+
+def embedding_catalog() -> tuple[list[str], dict]:
+    """List local textual inversions with panel-friendly labels and target fields."""
+    root = COMFY_MODELS / "embeddings"
+    if not root.is_dir():
+        return [], {}
+    notes = load_embedding_notes()
+    names: list[str] = []
+    meta: dict[str, dict] = {}
+    section_tokens = (
+        ("02_负面", "negative"),
+        ("03_外貌", "appearance"),
+        ("04_nsfw姿势", "pose"),
+        ("05_性感动作", "pose"),
+        ("06_构图", "composition"),
+        ("07_场景", "scene"),
+        ("08_动作表情", "pose"),
+    )
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix().casefold()):
+        if not path.is_file() or path.suffix.casefold() not in EMBEDDING_EXTENSIONS:
+            continue
+        relative = path.relative_to(root).as_posix()
+        physical_folder = path.relative_to(root).parent.as_posix()
+        normalized_folder = physical_folder.casefold()
+        section = next((target for token, target in section_tokens if token in normalized_folder), "manual")
+        if "__" in path.stem:
+            chinese, original = path.stem.split("__", 1)
+            label = f"{chinese}（{original}）"
+        else:
+            label = path.stem
+        family = "illustrious" if "illustrious" in normalized_folder or "光辉" in physical_folder else "general"
+        note = notes.get(relative) or notes.get(path.name)
+        if isinstance(note, dict):
+            folder = str(note.get("folder", "")).strip() or physical_folder or "未分类"
+            label = str(note.get("label", "")).strip() or label
+            section = str(note.get("section", "")).strip() or section
+            family = str(note.get("family", "")).strip() or family
+        else:
+            note = {}
+            folder = physical_folder or "未分类"
+        names.append(relative)
+        meta[relative] = {
+            "folder": folder,
+            "label": label,
+            "section": section,
+            "family": family,
+            "trigger": str(note.get("trigger", "")).strip() or path.stem,
+            "prompt": str(note.get("prompt", "")).strip() or f"embedding:{path.stem}",
+            "source": str(note.get("source", "")).strip() or path.name,
+            "versionId": note.get("version_id"),
+        }
+    return names, meta
+
+
 def model_prompt_profile(model_name: str, safety_level: str) -> dict:
     family = prompt_family(model_name)
     name = Path(str(model_name or "")).name.lower()
@@ -330,10 +630,6 @@ def model_prompt_profile(model_name: str, safety_level: str) -> dict:
         quality = ["masterpiece", "best quality", "highres"]
         negative = ["worst quality", "low quality", "lowres", "bad anatomy",
                     "bad hands", "text", "watermark", "signature", "blurry"]
-    if safety_level == "safe":
-        negative.extend(MATURE_NEGATIVE_TERMS)
-    elif safety_level == "sensitive":
-        negative.extend(("nude", "nudity", "explicit", "sex", "sexual", "porn", "hentai"))
     return {"family": family, "quality": quality, "negative": negative,
             "safety": safety_level, "aesthetic": "aesthetic" in name}
 
@@ -365,19 +661,50 @@ def prompt_sections(data: dict) -> dict[str, str]:
     return sections
 
 
-def prompt_conflicts(terms: list[str], natural_language: str, safety_level: str) -> list[str]:
-    keys = {normalize_prompt_key(term) for term in terms}
-    warnings: list[str] = []
+def prompt_term_info(term: str) -> dict:
+    """Parse common ComfyUI emphasis syntax without changing the submitted text."""
+    raw = str(term or "").strip()
+    weight = 1.0
+    match = re.fullmatch(r"\((.*):\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\)", raw)
+    if match:
+        raw = match.group(1).strip()
+        try:
+            weight = float(match.group(2))
+        except ValueError:
+            weight = 1.0
+    return {"text": str(term or "").strip(), "key": normalize_prompt_key(raw), "weight": weight}
+
+
+PROMPT_CONFLICT_GROUPS = (
+    ("画面范围", ("full body", "upper body", "cowboy shot", "portrait", "close-up")),
+    ("基础姿势", ("standing", "sitting", "lying")),
+    ("人物朝向", ("front view", "from behind", "side view")),
+    ("场景", ("indoors", "outdoors")),
+    ("发型", ("high ponytail", "ponytail", "twintails", "side ponytail", "low ponytail",
+              "hair down", "loose hair", "short hair", "bob cut", "single braid", "braided hair")),
+)
+
+
+def diagnose_prompt_conflicts(terms: list[str], negative_terms: list[str] | None,
+                              natural_language: str, safety_level: str) -> list[dict]:
+    positive = [prompt_term_info(term) for term in terms]
+    negative = [prompt_term_info(term) for term in (negative_terms or [])]
+    keys = {item["key"] for item in positive}
+    negative_keys = {item["key"] for item in negative}
+    issues: list[dict] = []
+
+    def add(code: str, severity: str, title: str, message: str, related: list[str]) -> None:
+        issues.append({"code": code, "severity": severity, "title": title,
+                       "message": message, "terms": related})
 
     def report(label: str, options: tuple[str, ...]) -> None:
         present = [option for option in options if normalize_prompt_key(option) in keys]
         if len(present) > 1:
-            warnings.append(f"{label}可能冲突：" + "、".join(present))
+            add("positive-conflict", "warning", label + "冲突",
+                f"{label}可能冲突：" + "、".join(present), present)
 
-    report("画面范围", ("full body", "upper body", "cowboy shot", "portrait", "close-up"))
-    report("基础姿势", ("standing", "sitting", "lying"))
-    report("人物朝向", ("front view", "from behind", "side view"))
-    report("场景", ("indoors", "outdoors"))
+    for label, options in PROMPT_CONFLICT_GROUPS:
+        report(label, options)
     report("头发颜色", tuple(f"{color} hair" for color in
                           ("black", "white", "silver", "grey", "gray", "blonde", "brown",
                            "red", "pink", "purple", "blue", "aqua", "green")))
@@ -388,13 +715,50 @@ def prompt_conflicts(terms: list[str], natural_language: str, safety_level: str)
                                              "group", "crowd", "multiple people"})
     mixed_pair = "1girl" in keys and "1boy" in keys
     if "solo" in keys and (multiple or mixed_pair):
-        warnings.append("人数可能冲突：solo 与多人标签同时存在。")
+        add("subject-count", "warning", "人数冲突", "人数可能冲突：solo 与多人标签同时存在。",
+            ["solo"])
     mature_positive = keys.intersection(MATURE_NEGATIVE_TERMS)
     if safety_level == "safe" and mature_positive:
-        warnings.append("安全等级为 SFW，但正向提示词含有：" + "、".join(sorted(mature_positive)))
+        add("safety", "warning", "安全等级冲突",
+            "安全等级为 SFW，但正向提示词含有：" + "、".join(sorted(mature_positive)),
+            sorted(mature_positive))
     if natural_language and len(natural_language) < 24:
-        warnings.append("自然语言描述较短；Anima 纯自然语言模式建议至少写两个具体句子。")
-    return warnings
+        add("short-natural-language", "info", "自然语言过短",
+            "自然语言描述较短；Anima 纯自然语言模式建议至少写两个具体句子。", [])
+    cross = sorted(keys.intersection(negative_keys))
+    for key in cross[:12]:
+        add("positive-negative", "warning", "正负向相互对抗",
+            f"“{key}”同时出现在正向和负向，可能改变构图或使生成不稳定。", [key])
+    for item in positive:
+        if item["weight"] > 1.25:
+            add("high-weight", "warning", "提示词权重过高",
+                f"“{item['text']}”权重为 {item['weight']:g}；叠加多个 LoRA 时建议先降到 1.05–1.15。",
+                [item["text"]])
+    hairstyle_sets = (
+        ({"high ponytail", "ponytail", "side ponytail", "low ponytail", "twintails"},
+         {"hair down", "loose hair"}),
+    )
+    for tied, loose in hairstyle_sets:
+        pos_tied = sorted(keys.intersection(tied))
+        pos_loose = sorted(keys.intersection(loose))
+        neg_tied = sorted(negative_keys.intersection(tied))
+        neg_loose = sorted(negative_keys.intersection(loose))
+        if pos_tied and (pos_loose or neg_loose):
+            related = pos_tied + pos_loose + neg_loose
+            add("hairstyle-pull", "warning", "发型注意力拉扯",
+                "束发/马尾与散发约束同时作用；这类正负向拉扯会在 LoRA 叠加时改变整体去噪轨迹。",
+                related)
+        elif pos_loose and neg_tied:
+            add("hairstyle-pull", "warning", "发型注意力拉扯",
+                "散发与负向束发约束同时作用，建议只保留正向目标发型。", pos_loose + neg_tied)
+    return issues
+
+
+def prompt_conflicts(terms: list[str], natural_language: str, safety_level: str,
+                     negative_terms: list[str] | None = None) -> list[str]:
+    return [item["message"] for item in diagnose_prompt_conflicts(
+        terms, negative_terms, natural_language, safety_level
+    )]
 
 
 def dynamic_negative_terms(positive: str) -> list[str]:
@@ -422,14 +786,31 @@ def compile_prompt(data: dict) -> dict:
     model = str(data.get("model", ""))
     safety = normalized_safety_level(data)
     profile = model_prompt_profile(model, safety)
+    automation = prompt_automation(data)
     sections = prompt_sections(data)
-    if isinstance(data.get("promptSections"), dict) and not sections["scene"]:
+    sources: list[dict] = []
+
+    def source(key: str, label: str, kind: str, enabled: bool, terms) -> None:
+        if isinstance(terms, str):
+            values = split_prompt_terms(terms, limit=720)
+        else:
+            values = [str(item) for item in (terms or []) if str(item).strip()]
+        sources.append({"key": key, "label": label, "kind": kind,
+                        "enabled": bool(enabled), "terms": values})
+
+    depth_settings = data.get("depth") or {}
+    depth_enabled = bool(isinstance(depth_settings, dict) and depth_settings.get("enabled"))
+    scene_fallback = bool(isinstance(data.get("promptSections"), dict)
+                          and not sections["scene"] and automation["sceneFallback"]
+                          and not depth_enabled)
+    if scene_fallback:
         # The structured panel owns the scene field, so an empty scene means
         # "use a safe neutral fallback".  This prevents stacked LoRAs from
         # inventing dense background props and figures.  Callers that want a
         # detailed setting can still provide one explicitly.
         sections["scene"] = "simple background, uncluttered background, subject focus"
-    trigger_terms = exact_unique_terms(", ".join(selected_lora_triggers(data)))
+    all_trigger_terms = exact_unique_terms(", ".join(selected_lora_triggers(data)))
+    trigger_terms = all_trigger_terms if automation["loraTriggers"] else []
     ordered: list[str] = []
     seen: set[str] = set()
 
@@ -441,44 +822,91 @@ def compile_prompt(data: dict) -> dict:
                 seen.add(key)
                 ordered.append(term)
 
-    extend(trigger_terms)
-    extend(profile["quality"])
+    source("loraTriggers", "LoRA 自动触发词", "positive", automation["loraTriggers"],
+           all_trigger_terms)
+    source("quality", "模型质量词", "positive", automation["quality"], profile["quality"])
+    if automation["loraTriggers"]:
+        extend(trigger_terms)
+    if automation["quality"]:
+        extend(profile["quality"])
     for key in PROMPT_SECTION_KEYS:
         value = sections[key]
         if profile["family"] == "anima" and key == "manual":
             value = canonical_anima_hard_tags(value)
         extend(value)
+    user_positive_terms = []
+    original_sections = prompt_sections(data)
+    for key in PROMPT_SECTION_KEYS:
+        user_positive_terms.extend(split_prompt_terms(original_sections[key], limit=360))
+    source("userPositive", "用户正向分区", "positive", True, user_positive_terms)
+    source("sceneFallback", "空场景兜底", "positive", automation["sceneFallback"],
+           ["simple background", "uncluttered background", "subject focus"] if scene_fallback else [])
     natural_language = sections["naturalLanguage"].strip()
+    if natural_language:
+        source("naturalLanguage", "自然语言关系", "positive", True, [natural_language])
     positive = ", ".join(ordered)
     if natural_language:
         positive = positive.rstrip(" .") + ". " + natural_language
 
     manual_negative = str(data.get("negative", "") or "").strip()
-    negative_terms = exact_unique_terms(", ".join(profile["negative"]), manual_negative)
-    negative_terms = exact_unique_terms(", ".join(negative_terms),
-                                        ", ".join(dynamic_negative_terms(positive)))
-    if isinstance(data.get("promptSections"), dict) and not str(
-            data["promptSections"].get("scene", "") or "").strip():
+    base_negative = list(profile["negative"])
+    safety_negative = safety_negative_terms(safety)
+    dynamic_negative = dynamic_negative_terms(positive)
+    negative_terms: list[str] = []
+    if automation["baseNegative"]:
+        negative_terms = exact_unique_terms(", ".join(negative_terms), ", ".join(base_negative))
+    if automation["safetyNegative"]:
+        negative_terms = exact_unique_terms(", ".join(negative_terms), ", ".join(safety_negative))
+    negative_terms = exact_unique_terms(", ".join(negative_terms), manual_negative)
+    if automation["dynamicNegative"]:
+        negative_terms = exact_unique_terms(", ".join(negative_terms), ", ".join(dynamic_negative))
+    fallback_negative = []
+    if scene_fallback:
+        fallback_negative = ["busy background", "cluttered background"]
         negative_terms = exact_unique_terms(
             ", ".join(negative_terms), "busy background, cluttered background")
+    depth_options = data.get("depth") or {}
+    depth_negative: list[str] = []
+    if (isinstance(depth_options, dict) and depth_options.get("enabled")
+            and depth_options.get("suppressSimple", True)):
+        depth_negative = ["simple background", "plain background", "empty background",
+                          "minimal background", "flat background", "low detail background"]
+        negative_terms = exact_unique_terms(
+            ", ".join(negative_terms), ", ".join(depth_negative))
     # The hand/foot detailer may be enabled even when the visible prompt does not
     # literally mention limbs (for example a generic "1girl, standing" prompt).
     # Seed the base sampler with matching failure prevention so the local pass is
     # correcting a mostly sound structure instead of rebuilding it from scratch.
     enhancement = data.get("outputEnhancement") or {}
     limb_detailer = (enhancement.get("limbDetailer") or {}) if isinstance(enhancement, dict) else {}
-    if isinstance(limb_detailer, dict):
+    detailer_negative: list[str] = []
+    if isinstance(limb_detailer, dict) and automation["detailerNegative"]:
         if limb_detailer.get("hands"):
+            detailer_negative += ["bad hands", "malformed hands", "extra fingers", "missing fingers",
+                                  "fused fingers", "blurry hands"]
             negative_terms = exact_unique_terms(
                 ", ".join(negative_terms),
                 "bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands",
             )
         if limb_detailer.get("feet"):
+            detailer_negative += ["bad feet", "malformed feet", "extra toes", "missing toes",
+                                  "fused toes", "blurry feet"]
             negative_terms = exact_unique_terms(
                 ", ".join(negative_terms),
                 "bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet",
             )
-    warnings = prompt_conflicts(ordered, natural_language, safety)
+    source("baseNegative", "模型基础负面词", "negative", automation["baseNegative"], base_negative)
+    source("safetyNegative", "安全等级负面词", "negative", automation["safetyNegative"], safety_negative)
+    source("userNegative", "用户额外负面词", "negative", True, manual_negative)
+    source("dynamicNegative", "动态结构保护词", "negative", automation["dynamicNegative"], dynamic_negative)
+    source("sceneFallbackNegative", "空场景负面兜底", "negative", automation["sceneFallback"],
+           fallback_negative)
+    source("depthBackgroundNegative", "Depth 简陋背景抑制", "negative",
+           bool(depth_negative), depth_negative)
+    source("detailerNegative", "局部修复保护词", "negative", automation["detailerNegative"],
+           detailer_negative)
+    diagnostics = diagnose_prompt_conflicts(ordered, negative_terms, natural_language, safety)
+    warnings = [item["message"] for item in diagnostics]
     warnings.extend(lora_compatibility_warnings(data, profile["family"]))
     style_count = len(split_prompt_terms(sections["style"], limit=180))
     if str(data.get("promptMode", "style_test")) == "style_test" and style_count:
@@ -499,14 +927,18 @@ def compile_prompt(data: dict) -> dict:
             errors.append("最终提示词单项不能超过 32000 个字符。")
         ordered = split_prompt_terms(positive, limit=720)
         negative_terms = split_prompt_terms(negative, limit=720)
-        warnings = prompt_conflicts(ordered, "", safety)
+        diagnostics = diagnose_prompt_conflicts(ordered, negative_terms, "", safety)
+        warnings = [item["message"] for item in diagnostics]
         warnings.extend(lora_compatibility_warnings(data, profile["family"]))
+        sources = [{"key": "manualOverride", "label": "手动最终文本", "kind": "both",
+                    "enabled": True, "terms": ordered + negative_terms}]
     elif not user_term_count and not trigger_terms and not natural_language and not region_term_count:
         errors.append("请至少填写人物、场景、姿势、其他标签或自然语言描述中的一项。")
     return {"positive": positive,
             "negative": negative if overridden else ", ".join(negative_terms),
             "errors": errors, "warnings": warnings, "sections": sections,
             "triggers": trigger_terms, "profile": profile,
+            "sources": sources, "diagnostics": diagnostics, "automation": automation,
             "overridden": overridden,
             "positiveTerms": len(ordered), "negativeTerms": len(negative_terms)}
 
@@ -689,7 +1121,37 @@ def load_lora_notes() -> dict:
         return {}
     with LORA_NOTES.open("r", encoding="utf-8") as handle:
         content = json.load(handle)
-    return content if isinstance(content, dict) else {}
+    return classify_lora_note_outfits(content) if isinstance(content, dict) else {}
+
+
+def load_lora_rename_aliases() -> dict[str, str]:
+    """Return old-to-new LoRA names used to migrate browser-persisted state."""
+    sources = []
+    packaged = PROJECT_DIR / "lora_rename_aliases.json"
+    if packaged.is_file():
+        sources.append(packaged)
+    imports = PROJECT_DIR / "lora_imports"
+    if imports.is_dir():
+        sources.extend(sorted(imports.glob("*_illustrious_chinese_filenames.json")))
+    if not sources:
+        return {}
+    aliases: dict[str, str] = {}
+    prefix = "Illustrious_Hosiery_Test/"
+    for source in sources:
+        try:
+            raw = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        for old, new in raw.items():
+            old_name = str(old).replace("\\", "/").lstrip("./")
+            new_name = str(new).replace("\\", "/").lstrip("./")
+            if not old_name or not new_name:
+                continue
+            aliases[prefix + old_name] = prefix + new_name
+            aliases[Path(old_name).name] = Path(new_name).name
+    return aliases
 
 
 def normalized_lora_name(value: str) -> str:
@@ -995,7 +1457,7 @@ def lora_compatibility_warnings(data: dict, family: str) -> list[str]:
 def save_lora_notes(notes: dict) -> None:
     if not isinstance(notes, dict):
         raise ValueError("LoRA 备忘格式不正确。")
-    atomic_write_notes(LORA_NOTES, notes)
+    atomic_write_notes(LORA_NOTES, classify_lora_note_outfits(notes))
 
 
 def load_lora_sidecars() -> dict:
@@ -1461,6 +1923,370 @@ def build_workflow(data: dict) -> dict:
     else:
         positive_ref = [positive_id, 0]
 
+    # Route 1: composite an anime character into a real background.  This is an
+    # isolated two-pass inpaint graph: OpenPose controls the character pose,
+    # background depth preserves scene geometry, and a low-denoise second pass
+    # removes the cut-out edge while leaving the unmasked background intact.
+    route1 = data.get("route1") or {}
+    if isinstance(route1, dict) and route1.get("enabled"):
+        if anima or krea2:
+            raise ValueError("路线1的 Xinsir OpenPose / Depth ControlNet 仅支持 SDXL / Illustrious 模型。")
+        if regional_mode:
+            raise ValueError("路线1暂不与多人区域提示词同时使用，请先关闭多人分区。")
+        image_name = validate_input_image(str(route1.get("image", "") or ""))
+        mask_name = validate_input_image(str(route1.get("mask", "") or ""))
+        pose_mode = str(route1.get("poseMode", "extract") or "extract")
+        if pose_mode not in {"prompt", "extract", "skeleton"}:
+            raise ValueError("路线1姿势模式无效。")
+        pose_name = ""
+        openpose_controlnet = str(route1.get("openposeControlnet", "") or "").strip()
+        depth_controlnet = str(route1.get("depthControlnet", "") or "").strip()
+        if pose_mode != "prompt":
+            pose_name = validate_input_image(str(route1.get("poseImage", "") or ""))
+            if not openpose_controlnet:
+                raise ValueError("请选择路线1的 OpenPose ControlNet。")
+        if not depth_controlnet:
+            raise ValueError("请选择路线1的 Depth ControlNet。")
+
+        image_name, mask_name, _original_size, working_size, _was_resized = (
+            prepare_route1_working_assets(image_name, mask_name)
+        )
+        generation_mask_name, _headroom, _side_margin = prepare_route1_generation_mask(
+            mask_name, working_size
+        )
+        smart_fusion = bool(route1.get("smartFusion", True))
+        light_map_name, light_analysis = "", {}
+        if smart_fusion:
+            light_map_name, light_analysis = prepare_route1_environment_light(
+                image_name, mask_name
+            )
+
+        light_direction = str(route1.get("lightDirection", "auto") or "auto").strip()
+        light_prompts = {
+            "upper_right": "strong directional sunlight from the upper right, warm highlights on the upper-right edges, cooler shadow on the lower-left side",
+            "upper_left": "strong directional sunlight from the upper left, warm highlights on the upper-left edges, cooler shadow on the lower-right side",
+            "right": "directional light from the right, bright right rim and softly shaded left side",
+            "left": "directional light from the left, bright left rim and softly shaded right side",
+            "backlight": "environment-matched backlight, restrained rim light and readable facial shadows",
+        }
+        light_prompt = str(light_analysis.get("prompt", "") or
+                           "lighting direction inferred from the surrounding environment")
+        if light_direction != "auto" and light_direction in light_prompts:
+            light_prompt = ", ".join((
+                light_prompt, "manual direction override", light_prompts[light_direction],
+            ))
+        blend_prompt = str(route1.get("blendPrompt", "") or "").strip()
+        blend_prompt = ", ".join(part for part in (
+            blend_prompt, light_prompt,
+            "(exactly one character:1.3), (single centered subject:1.25), "
+            "character centered inside the marked area, no foreground silhouette",
+            "subtle environmental reflected light, natural ambient occlusion at character boundaries",
+        ) if part)
+        route_negative = str(route1.get("negativePrompt", "") or "").strip()
+        route_negative = ", ".join(part for part in (
+            route_negative,
+            "second character, second person, foreground person, dark silhouette, "
+            "giant silhouette, foreground figure, duplicate subject",
+        ) if part)
+        if blend_prompt:
+            route_positive_id = alloc()
+            nodes[route_positive_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                "text": ", ".join(part for part in (prompt, blend_prompt) if part), "clip": clip_ref,
+            }}
+            positive_ref = [route_positive_id, 0]
+        if route_negative:
+            route_negative_id = alloc()
+            nodes[route_negative_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                "text": ", ".join(part for part in (negative, route_negative) if part), "clip": clip_ref,
+            }}
+            negative_ref = [route_negative_id, 0]
+
+        load_image_id, load_mask_id, load_generation_mask_id = alloc(), alloc(), alloc()
+        grow_mask_id, feather_mask_id = alloc(), alloc()
+        nodes[load_image_id] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+        nodes[load_mask_id] = {"class_type": "LoadImageMask", "inputs": {
+            "image": mask_name, "channel": "red",
+        }}
+        nodes[load_generation_mask_id] = {"class_type": "LoadImageMask", "inputs": {
+            "image": generation_mask_name, "channel": "red",
+        }}
+        grow = bounded(route1.get("grow"), 8, 0, 64)
+        feather = bounded(route1.get("feather"), 12, 0, 64)
+        nodes[grow_mask_id] = {"class_type": "GrowMask", "inputs": {
+            "mask": [load_generation_mask_id, 0], "expand": grow, "tapered_corners": True,
+        }}
+        nodes[feather_mask_id] = {"class_type": "FeatherMask", "inputs": {
+            "mask": [grow_mask_id, 0], "left": feather, "top": feather,
+            "right": feather, "bottom": feather,
+        }}
+        mask_ref = [feather_mask_id, 0]
+
+        controlled_positive, controlled_negative = positive_ref, negative_ref
+        if pose_mode != "prompt":
+            pose_load_id = alloc()
+            nodes[pose_load_id] = {"class_type": "LoadImage", "inputs": {"image": pose_name}}
+            pose_image_ref = [pose_load_id, 0]
+            if pose_mode == "extract":
+                pose_pre_id = alloc()
+                nodes[pose_pre_id] = {"class_type": "DWPreprocessor", "inputs": {
+                    "image": pose_image_ref, "bbox_detector": "None",
+                    "pose_estimator": "dw-ll_ucoco_384.onnx", "resolution": 1024,
+                    "scale_stick_for_xinsr_cn": "enable",
+                }}
+                pose_image_ref = [pose_pre_id, 0]
+
+            openpose_loader_id, openpose_apply_id = alloc(), alloc()
+            nodes[openpose_loader_id] = {"class_type": "ControlNetLoader", "inputs": {
+                "control_net_name": openpose_controlnet,
+            }}
+            pose_strength = bounded(route1.get("poseStrength"), 0.75, 0, 2, integer=False)
+            pose_end = bounded(route1.get("poseEnd"), 0.85, 0, 1, integer=False)
+            nodes[openpose_apply_id] = {"class_type": "ControlNetApplyAdvanced", "inputs": {
+                "positive": positive_ref, "negative": negative_ref,
+                "control_net": [openpose_loader_id, 0], "image": pose_image_ref,
+                "strength": pose_strength, "start_percent": 0.0, "end_percent": pose_end,
+            }}
+            controlled_positive, controlled_negative = [openpose_apply_id, 0], [openpose_apply_id, 1]
+
+        # Remove the original scene geometry from the character opening before
+        # depth extraction. Otherwise a doorpost/tree inside the paint mask
+        # competes with the requested body and can suppress it completely.
+        depth_blank_id, depth_source_id = alloc(), alloc()
+        working_width = working_size[0] if working_size[0] > 0 else width
+        working_height = working_size[1] if working_size[1] > 0 else height
+        nodes[depth_blank_id] = {"class_type": "EmptyImage", "inputs": {
+            "width": working_width, "height": working_height,
+            "batch_size": 1, "color": 0x7F7F7F,
+        }}
+        nodes[depth_source_id] = {"class_type": "ImageCompositeMasked", "inputs": {
+            "destination": [load_image_id, 0], "source": [depth_blank_id, 0],
+            "x": 0, "y": 0, "resize_source": False, "mask": mask_ref,
+        }}
+
+        depth_pre_id, depth_loader_id, depth_apply_id = alloc(), alloc(), alloc()
+        nodes[depth_pre_id] = {"class_type": "DepthAnythingV2Preprocessor", "inputs": {
+            "image": [depth_source_id, 0], "ckpt_name": "depth_anything_v2_vits.pth", "resolution": 1024,
+        }}
+        nodes[depth_loader_id] = {"class_type": "ControlNetLoader", "inputs": {
+            "control_net_name": depth_controlnet,
+        }}
+        depth_strength = bounded(route1.get("depthStrength"), 0.45, 0, 2, integer=False)
+        depth_end = bounded(route1.get("depthEnd"), 0.70, 0, 1, integer=False)
+        nodes[depth_apply_id] = {"class_type": "ControlNetApplyAdvanced", "inputs": {
+            "positive": controlled_positive, "negative": controlled_negative,
+            "control_net": [depth_loader_id, 0], "image": [depth_pre_id, 0],
+            "strength": depth_strength, "start_percent": 0.0, "end_percent": depth_end,
+        }}
+
+        pass1_condition_id, pass1_sampler_id, pass1_decode_id = alloc(), alloc(), alloc()
+        nodes[pass1_condition_id] = {"class_type": "InpaintModelConditioning", "inputs": {
+            "positive": [depth_apply_id, 0], "negative": [depth_apply_id, 1], "vae": vae_ref,
+            "pixels": [load_image_id, 0], "mask": mask_ref, "noise_mask": True,
+        }}
+        nodes[pass1_sampler_id] = {"class_type": "KSampler", "inputs": {
+            "seed": seed,
+            "steps": bounded(route1.get("pass1Steps"), 28, 8, 60),
+            "cfg": bounded(route1.get("pass1Cfg"), 6.5, 1, 15, integer=False),
+            "sampler_name": "euler", "scheduler": "karras",
+            "denoise": bounded(route1.get("pass1Denoise"), 0.85, 0.1, 1, integer=False),
+            "model": model_ref, "positive": [pass1_condition_id, 0],
+            "negative": [pass1_condition_id, 1], "latent_image": [pass1_condition_id, 2],
+        }}
+        nodes[pass1_decode_id] = {"class_type": "VAEDecode", "inputs": {
+            "samples": [pass1_sampler_id, 0], "vae": vae_ref,
+        }}
+
+        pass2_condition_id, pass2_sampler_id, pass2_decode_id = alloc(), alloc(), alloc()
+        nodes[pass2_condition_id] = {"class_type": "InpaintModelConditioning", "inputs": {
+            "positive": positive_ref, "negative": negative_ref, "vae": vae_ref,
+            "pixels": [pass1_decode_id, 0], "mask": mask_ref, "noise_mask": True,
+        }}
+        nodes[pass2_sampler_id] = {"class_type": "KSampler", "inputs": {
+            "seed": min(seed + 1, 2**63 - 1),
+            "steps": bounded(route1.get("pass2Steps"), 20, 8, 40),
+            "cfg": bounded(route1.get("pass2Cfg"), 5.5, 1, 15, integer=False),
+            "sampler_name": "dpmpp_2m", "scheduler": "karras",
+            "denoise": bounded(route1.get("pass2Denoise"), 0.25, 0.05, 0.6, integer=False),
+            "model": model_ref, "positive": [pass2_condition_id, 0],
+            "negative": [pass2_condition_id, 1], "latent_image": [pass2_condition_id, 2],
+        }}
+        nodes[pass2_decode_id] = {"class_type": "VAEDecode", "inputs": {
+            "samples": [pass2_sampler_id, 0], "vae": vae_ref,
+        }}
+        if smart_fusion:
+            # RMBG supplies a soft alpha matte (including hair and translucent
+            # detail). The user's rough mask is expanded and feathered before
+            # multiplication, so it limits the search area without acting as a
+            # hard cookie cutter. This is the practical trimap: foreground from
+            # RMBG confidence, an uncertain soft boundary, and definite outside.
+            # The rough mask only locates the search area. RMBG owns the final
+            # silhouette; do not multiply it by the rough mask again, because a
+            # character leaning outside that mask would be cut in half. Keep a
+            # generous asymmetric crop around the area instead.
+            crop_top = min(72, _headroom + grow + feather)
+            crop_bottom = min(48, grow + feather)
+            crop_side = min(112, _side_margin + grow + feather)
+            crop_id, rmbg_id, restore_mask_id = alloc(), alloc(), alloc()
+            nodes[crop_id] = {"class_type": "LayerUtility: CropByMask", "inputs": {
+                "image": [pass2_decode_id, 0], "mask_for_crop": [load_mask_id, 0],
+                "invert_mask": False, "detect": "min_bounding_rect",
+                "top_reserve": crop_top, "bottom_reserve": crop_bottom,
+                "left_reserve": crop_side, "right_reserve": crop_side,
+            }}
+            nodes[rmbg_id] = {"class_type": "LayerMask: RmBgUltra V2", "inputs": {
+                "image": [crop_id, 0], "detail_method": "GuidedFilter",
+                "detail_erode": 6, "detail_dilate": 8,
+                "black_point": 0.02, "white_point": 0.98,
+                "process_detail": True, "device": "cpu", "max_megapixels": 2.2,
+            }}
+            nodes[restore_mask_id] = {"class_type": "LayerUtility: RestoreCropBox", "inputs": {
+                "background_image": [load_image_id, 0], "croped_image": [rmbg_id, 0],
+                "invert_mask": False, "crop_box": [crop_id, 2],
+                "croped_mask": [rmbg_id, 1],
+            }}
+            precise_mask_ref = [restore_mask_id, 1]
+
+            # Analyze only the character's local crop. Whole-frame color transfer
+            # is dominated by the already-identical background and barely affects
+            # the subject. The aligned blurred light crop supplies a continuous
+            # low-frequency illumination field instead of a classified light type.
+            color_strength = bounded(route1.get("colorMatchStrength"), 0.28, 0, 0.8,
+                                     integer=False)
+            reference_crop_id, light_load_id, light_crop_id = alloc(), alloc(), alloc()
+            nodes[reference_crop_id] = {"class_type": "LayerUtility: CropByMask", "inputs": {
+                "image": [load_image_id, 0], "mask_for_crop": [load_mask_id, 0],
+                "invert_mask": False, "detect": "min_bounding_rect",
+                "top_reserve": crop_top, "bottom_reserve": crop_bottom,
+                "left_reserve": crop_side, "right_reserve": crop_side,
+            }}
+            nodes[light_load_id] = {"class_type": "LoadImage", "inputs": {
+                "image": light_map_name,
+            }}
+            nodes[light_crop_id] = {"class_type": "LayerUtility: CropByMask", "inputs": {
+                "image": [light_load_id, 0], "mask_for_crop": [load_mask_id, 0],
+                "invert_mask": False, "detect": "min_bounding_rect",
+                "top_reserve": crop_top, "bottom_reserve": crop_bottom,
+                "left_reserve": crop_side, "right_reserve": crop_side,
+            }}
+            color_match_id, light_blend_id, grain_id = alloc(), alloc(), alloc()
+            nodes[color_match_id] = {"class_type": "ColorTransfer", "inputs": {
+                "image_target": [crop_id, 0], "image_ref": [reference_crop_id, 0],
+                "method": "reinhard_lab", "source_stats": "per_frame",
+                "strength": color_strength,
+            }}
+            light_strength = bounded(route1.get("environmentLightStrength"), 0.22, 0, 0.6,
+                                     integer=False)
+            nodes[light_blend_id] = {"class_type": "ImageBlend", "inputs": {
+                "image1": [color_match_id, 0], "image2": [light_crop_id, 0],
+                "blend_factor": light_strength, "blend_mode": "soft_light",
+            }}
+            grain_strength = bounded(route1.get("grainStrength"), 0.035, 0, 0.12,
+                                     integer=False)
+            nodes[grain_id] = {"class_type": "LayerFilter: AddGrain", "inputs": {
+                "image": [light_blend_id, 0], "grain_power": grain_strength,
+                "grain_scale": 1.0, "grain_sat": 0.2,
+            }}
+            sharpen_strength = bounded(route1.get("sharpenStrength"), 0.10, 0, 0.15,
+                                       integer=False)
+            sharpen_id, edge_id, edge_mask_id = alloc(), alloc(), alloc()
+            edge_grow_id, edge_feather_id, edge_limit_id = alloc(), alloc(), alloc()
+            nodes[sharpen_id] = {"class_type": "ImageSharpen", "inputs": {
+                "image": [grain_id, 0], "sharpen_radius": 1,
+                "sigma": 0.8, "alpha": sharpen_strength,
+            }}
+            nodes[edge_id] = {"class_type": "Canny", "inputs": {
+                "image": [grain_id, 0], "low_threshold": 0.25, "high_threshold": 0.65,
+            }}
+            nodes[edge_mask_id] = {"class_type": "ImageToMask", "inputs": {
+                "image": [edge_id, 0], "channel": "red",
+            }}
+            nodes[edge_grow_id] = {"class_type": "GrowMask", "inputs": {
+                "mask": [edge_mask_id, 0], "expand": 1, "tapered_corners": True,
+            }}
+            nodes[edge_feather_id] = {"class_type": "FeatherMask", "inputs": {
+                "mask": [edge_grow_id, 0], "left": 2, "top": 2,
+                "right": 2, "bottom": 2,
+            }}
+            nodes[edge_limit_id] = {"class_type": "MaskComposite", "inputs": {
+                "destination": [edge_feather_id, 0], "source": [rmbg_id, 1],
+                "x": 0, "y": 0, "operation": "multiply",
+            }}
+            sharpen_composite_id = alloc()
+            nodes[sharpen_composite_id] = {"class_type": "ImageCompositeMasked", "inputs": {
+                "destination": [grain_id, 0], "source": [sharpen_id, 0],
+                "x": 0, "y": 0, "resize_source": False, "mask": [edge_limit_id, 0],
+            }}
+            processed_restore_id, base_composite_id = alloc(), alloc()
+            nodes[processed_restore_id] = {
+                "class_type": "LayerUtility: RestoreCropBox", "inputs": {
+                    "background_image": [pass2_decode_id, 0],
+                    "croped_image": [sharpen_composite_id, 0], "invert_mask": False,
+                    "crop_box": [crop_id, 2], "croped_mask": [rmbg_id, 1],
+                },
+            }
+            nodes[base_composite_id] = {"class_type": "ImageCompositeMasked", "inputs": {
+                "destination": [load_image_id, 0], "source": [processed_restore_id, 0],
+                "x": 0, "y": 0, "resize_source": False, "mask": precise_mask_ref,
+            }}
+
+            # Only redraw a resolution-adaptive band around the alpha boundary.
+            # The shrunken inner mask protects the face and character core.
+            ring_radius = max(12, min(32, round(max(working_width, working_height) / 64)))
+            inner_radius = max(6, ring_radius // 2)
+            ring_feather = max(4, min(12, round(ring_radius / 3)))
+            outer_id, outer_feather_id, inner_id, ring_id = alloc(), alloc(), alloc(), alloc()
+            nodes[outer_id] = {"class_type": "GrowMask", "inputs": {
+                "mask": precise_mask_ref, "expand": ring_radius, "tapered_corners": True,
+            }}
+            nodes[outer_feather_id] = {"class_type": "FeatherMask", "inputs": {
+                "mask": [outer_id, 0], "left": ring_feather, "top": ring_feather,
+                "right": ring_feather, "bottom": ring_feather,
+            }}
+            nodes[inner_id] = {"class_type": "GrowMask", "inputs": {
+                "mask": precise_mask_ref, "expand": -inner_radius,
+                "tapered_corners": True,
+            }}
+            nodes[ring_id] = {"class_type": "MaskComposite", "inputs": {
+                "destination": [outer_feather_id, 0], "source": [inner_id, 0],
+                "x": 0, "y": 0, "operation": "subtract",
+            }}
+
+            fusion_condition_id, fusion_sampler_id, fusion_decode_id = alloc(), alloc(), alloc()
+            nodes[fusion_condition_id] = {"class_type": "InpaintModelConditioning", "inputs": {
+                "positive": positive_ref, "negative": negative_ref, "vae": vae_ref,
+                "pixels": [base_composite_id, 0], "mask": [ring_id, 0], "noise_mask": True,
+            }}
+            nodes[fusion_sampler_id] = {"class_type": "KSampler", "inputs": {
+                "seed": min(seed + 2, 2**63 - 1),
+                "steps": bounded(route1.get("fusionSteps"), 12, 6, 24),
+                "cfg": bounded(route1.get("fusionCfg"), 4.5, 2, 8, integer=False),
+                "sampler_name": "dpmpp_2m", "scheduler": "karras",
+                "denoise": bounded(route1.get("fusionDenoise"), 0.18, 0.1, 0.26,
+                                   integer=False),
+                "model": model_ref, "positive": [fusion_condition_id, 0],
+                "negative": [fusion_condition_id, 1],
+                "latent_image": [fusion_condition_id, 2],
+            }}
+            nodes[fusion_decode_id] = {"class_type": "VAEDecode", "inputs": {
+                "samples": [fusion_sampler_id, 0], "vae": vae_ref,
+            }}
+            final_composite_id = alloc()
+            nodes[final_composite_id] = {"class_type": "ImageCompositeMasked", "inputs": {
+                "destination": [base_composite_id, 0], "source": [fusion_decode_id, 0],
+                "x": 0, "y": 0, "resize_source": False, "mask": [ring_id, 0],
+            }}
+        else:
+            final_composite_id = alloc()
+            nodes[final_composite_id] = {"class_type": "ImageCompositeMasked", "inputs": {
+                "destination": [load_image_id, 0], "source": [pass2_decode_id, 0],
+                "x": 0, "y": 0, "resize_source": False, "mask": mask_ref,
+            }}
+        save_id = alloc()
+        nodes[save_id] = {"class_type": "SaveImage", "inputs": {
+            "filename_prefix": "EasyPanel_Route1", "images": [final_composite_id, 0],
+        }}
+        return {"prompt": nodes, "client_id": "easy-panel"}
+
     # Local repaint: encode the uploaded image with a hand-drawn mask so the
     # KSampler only re-draws the masked region (denoise < 1 keeps the rest).
     # Whole-image redraw (img2img): encode a base image (e.g. a Krea 2 render) and
@@ -1581,6 +2407,38 @@ def build_workflow(data: dict) -> dict:
                        "image": pose_image_ref, "strength": strength, "start_percent": start, "end_percent": end},
         }
         positive_ref, negative_ref = [apply_id, 0], [apply_id, 1]
+
+    depth = data.get("depth") or {}
+    if not isinstance(depth, dict):
+        raise ValueError("Depth 空间控制设置格式无效。")
+    if depth.get("enabled"):
+        if anima or krea2:
+            raise ValueError("当前 Xinsir Depth ControlNet 仅支持 SDXL / Illustrious，不能用于 Anima / Krea 2。")
+        depth_image = validate_input_image(str(depth.get("image", "") or ""))
+        depth_controlnet = str(depth.get("controlnet", "") or "").strip()
+        if not depth_controlnet:
+            raise ValueError("请选择 Depth ControlNet。")
+        depth_strength = bounded(depth.get("strength"), 0.55, 0, 2, integer=False)
+        depth_start = bounded(depth.get("start"), 0, 0, 1, integer=False)
+        depth_end = bounded(depth.get("end"), 0.75, 0, 1, integer=False)
+        if depth_end < depth_start:
+            raise ValueError("Depth 控制结束比例不能早于开始比例。")
+        depth_load_id, depth_pre_id, depth_cn_id, depth_apply_id = [alloc() for _ in range(4)]
+        nodes[depth_load_id] = {"class_type": "LoadImage", "inputs": {"image": depth_image}}
+        nodes[depth_pre_id] = {"class_type": "DepthAnythingV2Preprocessor", "inputs": {
+            "image": [depth_load_id, 0], "ckpt_name": "depth_anything_v2_vits.pth",
+            "resolution": 1024,
+        }}
+        nodes[depth_cn_id] = {"class_type": "ControlNetLoader", "inputs": {
+            "control_net_name": depth_controlnet,
+        }}
+        nodes[depth_apply_id] = {"class_type": "ControlNetApplyAdvanced", "inputs": {
+            "positive": positive_ref, "negative": negative_ref,
+            "control_net": [depth_cn_id, 0], "image": [depth_pre_id, 0],
+            "strength": depth_strength, "start_percent": depth_start,
+            "end_percent": depth_end,
+        }}
+        positive_ref, negative_ref = [depth_apply_id, 0], [depth_apply_id, 1]
 
     sampler_name, scheduler = sampling_profile["sampler"], sampling_profile["scheduler"]
     # Optional manual sampler/scheduler override; locked distilled profiles keep
@@ -1965,9 +2823,204 @@ def build_workflow(data: dict) -> dict:
         }
         image_ref = [levels_id, 0]
 
+    transparent = data.get("transparentBackground") or {}
+    if not isinstance(transparent, dict):
+        raise ValueError("透明背景设置格式无效。")
+    transparent_mode = str(transparent.get("mode", "off") or "off")
+    if transparent_mode not in {"off", "auto", "complex"}:
+        raise ValueError("未知的透明背景模式。")
+
+    if transparent_mode != "off":
+        # Keep the RGB source by default.  It is useful both as a normal result
+        # and as the pixel source when the browser-side manual alpha editor
+        # restores hair, ribbons, translucent fabric or small accessories.
+        if transparent.get("keepOriginal", True):
+            original_save_id = alloc()
+            nodes[original_save_id] = {
+                "class_type": "SaveImage",
+                "inputs": {"filename_prefix": "EasyPanel", "images": image_ref},
+            }
+
+        detail_method = str(transparent.get("detailMethod", "GuidedFilter") or "GuidedFilter")
+        if detail_method not in {"GuidedFilter", "PyMatting", "VITMatte", "VITMatte(local)",
+                                 "vitmatte-base-composition-1k"}:
+            detail_method = "GuidedFilter"
+        rmbg_id = alloc()
+        nodes[rmbg_id] = {
+            "class_type": "LayerMask: RmBgUltra V2",
+            "inputs": {
+                "image": image_ref,
+                "detail_method": detail_method,
+                "detail_erode": bounded(transparent.get("detailErode"), 6, 1, 255),
+                "detail_dilate": bounded(transparent.get("detailDilate"), 6, 1, 255),
+                "black_point": bounded(transparent.get("blackPoint"), 0.01, 0.01, 0.98,
+                                       integer=False),
+                "white_point": bounded(transparent.get("whitePoint"), 0.99, 0.02, 0.99,
+                                       integer=False),
+                "process_detail": transparent_mode == "complex",
+                "device": "cuda",
+                "max_megapixels": bounded(transparent.get("maxMegapixels"), 2.0, 1.0, 16.0,
+                                          integer=False),
+            },
+        }
+        image_ref = [rmbg_id, 0]
+
     save_id = alloc()
-    nodes[save_id] = {"class_type": "SaveImage", "inputs": {"filename_prefix": "EasyPanel", "images": image_ref}}
+    filename_prefix = "EasyPanel_Transparent" if transparent_mode != "off" else "EasyPanel"
+    nodes[save_id] = {"class_type": "SaveImage", "inputs": {
+        "filename_prefix": filename_prefix, "images": image_ref,
+    }}
     return {"prompt": nodes, "client_id": "easy-panel"}
+
+
+def build_clarity_upscale_workflow(data: dict) -> dict:
+    """Upscale one existing output without diffusion or prompt regeneration."""
+    if not isinstance(data, dict):
+        raise ValueError("清晰版请求格式无效。")
+    image_name = prepare_generation_image(str(data.get("name", "") or ""))
+    scale = bounded(data.get("scale"), 1.5, 1.1, 2.0, integer=False)
+    nodes = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "2": {"class_type": "UpscaleModelLoader", "inputs": {
+            "model_name": HIRES_UPSCALE_MODEL,
+        }},
+        "3": {"class_type": "ImageUpscaleWithModel", "inputs": {
+            "upscale_model": ["2", 0], "image": ["1", 0],
+        }},
+        # Anime6B outputs 4x. Scale it back to the requested delivery size so
+        # the image gains reconstructed edges without creating a huge 4x file.
+        "4": {"class_type": "ImageScaleBy", "inputs": {
+            "image": ["3", 0], "upscale_method": "lanczos",
+            "scale_by": scale / 4.0,
+        }},
+        "5": {"class_type": "SaveImage", "inputs": {
+            "filename_prefix": "EasyPanel_Clarity", "images": ["4", 0],
+        }},
+    }
+    return {"prompt": nodes, "client_id": "easy-panel-clarity"}
+
+
+def _model_file(model_name: str) -> Path | None:
+    relative = Path(str(model_name or "").replace("\\", os.sep).replace("/", os.sep))
+    candidates = [CHECKPOINT_DIR / relative, COMFY_MODELS / "diffusion_models" / relative,
+                  COMFY_MODELS / "unet" / relative]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _lora_file(lora_name: str) -> Path | None:
+    relative = Path(str(lora_name or "").replace("\\", os.sep).replace("/", os.sep))
+    direct = LORA_DIR / relative
+    if direct.is_file():
+        return direct
+    basename = relative.name.casefold()
+    if LORA_DIR.is_dir():
+        return next((path for path in LORA_DIR.rglob("*")
+                     if path.is_file() and path.name.casefold() == basename), None)
+    return None
+
+
+def file_signature(path: Path | None) -> dict:
+    """Fast content fingerprint: size plus first/last 1 MiB, cached by stat."""
+    if path is None or not path.is_file():
+        return {"exists": False, "size": None, "mtime_ns": None, "fingerprint": ""}
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    cached = _FILE_SIGNATURE_CACHE.get(cache_key)
+    if cached:
+        return dict(cached)
+    digest = hashlib.sha256()
+    digest.update(str(stat.st_size).encode("ascii"))
+    with path.open("rb") as handle:
+        digest.update(handle.read(1024 * 1024))
+        if stat.st_size > 1024 * 1024:
+            handle.seek(max(0, stat.st_size - 1024 * 1024))
+            digest.update(handle.read(1024 * 1024))
+    result = {"exists": True, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+              "fingerprint": digest.hexdigest(), "path": str(path)}
+    _FILE_SIGNATURE_CACHE[cache_key] = result
+    return dict(result)
+
+
+def snapshot_environment(data: dict) -> dict:
+    return {
+        "panelVersion": PANEL_VERSION,
+        "model": {"name": str(data.get("model", "")),
+                  **file_signature(_model_file(str(data.get("model", ""))))},
+        "loras": [{"name": str(item.get("name", "")), "weight": item.get("weight"),
+                   **file_signature(_lora_file(str(item.get("name", ""))))}
+                  for item in (data.get("loras") or []) if isinstance(item, dict)],
+    }
+
+
+def load_snapshots() -> list[dict]:
+    if not SNAPSHOT_FILE.is_file():
+        return []
+    try:
+        parsed = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def write_snapshots(items: list[dict]) -> None:
+    SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp = SNAPSHOT_FILE.with_suffix(".tmp")
+    temp.write_text(json.dumps(items[-200:], ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, SNAPSHOT_FILE)
+
+
+def create_generation_snapshot(data: dict, prompt_id: str = "") -> dict:
+    clean = json.loads(json.dumps(data, ensure_ascii=False))
+    compiled = compile_prompt(clean)
+    snapshot = {
+        "id": uuid.uuid4().hex,
+        "createdAt": int(time.time() * 1000),
+        "promptId": prompt_id,
+        "outputs": [],
+        "label": str((clean.get("experiment") or {}).get("label", "") or ""),
+        "experiment": clean.get("experiment") or None,
+        "payload": clean,
+        "compiled": {key: compiled.get(key) for key in
+                     ("positive", "negative", "sources", "diagnostics", "automation")},
+        "environment": snapshot_environment(clean),
+    }
+    items = load_snapshots()
+    items.append(snapshot)
+    write_snapshots(items)
+    return snapshot
+
+
+def attach_snapshot_outputs(snapshot_id: str, outputs) -> dict:
+    names = [Path(str(name)).name for name in (outputs or []) if Path(str(name)).name]
+    items = load_snapshots()
+    target = next((item for item in items if item.get("id") == snapshot_id), None)
+    if target is None:
+        raise ValueError("找不到生成快照。")
+    target["outputs"] = list(dict.fromkeys(names))[:16]
+    write_snapshots(items)
+    return target
+
+
+def compare_snapshot_environment(snapshot_id: str) -> dict:
+    target = next((item for item in load_snapshots() if item.get("id") == snapshot_id), None)
+    if target is None:
+        raise ValueError("找不到生成快照。")
+    current = snapshot_environment(target.get("payload") or {})
+    original = target.get("environment") or {}
+    differences: list[str] = []
+    for label, before, after in [("基础模型", original.get("model") or {}, current.get("model") or {})]:
+        if before.get("fingerprint") != after.get("fingerprint") or before.get("exists") != after.get("exists"):
+            differences.append(f"{label}文件已变化或缺失：{before.get('name', '')}")
+    before_loras = {item.get("name"): item for item in original.get("loras") or []}
+    after_loras = {item.get("name"): item for item in current.get("loras") or []}
+    for name, before in before_loras.items():
+        after = after_loras.get(name) or {}
+        if before.get("fingerprint") != after.get("fingerprint") or before.get("exists") != after.get("exists"):
+            differences.append("LoRA 文件已变化或缺失：" + str(name))
+    if original.get("panelVersion") != PANEL_VERSION:
+        differences.append(f"面板版本不同：{original.get('panelVersion')} → {PANEL_VERSION}")
+    return {"same": not differences, "differences": differences, "current": current,
+            "snapshot": target}
 
 
 CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
@@ -2114,6 +3167,7 @@ class Handler(BaseHTTPRequestHandler):
                     "anime6b": HIRES_UPSCALE_MODEL in upscale_models,
                     "color_transfer": "ColorTransfer" in info,
                     "ultimate": "UltimateSDUpscale" in info,
+                    "transparent_background": "LayerMask: RmBgUltra V2" in info,
                     "face_detailer_node": "FaceDetailer" in info,
                     "face_detector_provider": "UltralyticsDetectorProvider" in info,
                     "face_detector_model": FACE_DETECTOR_MODEL in detector_models,
@@ -2148,11 +3202,13 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 sampling_profiles = {name: model_sampling_profile(name)
                                      for name in checkpoints + anima_models + krea2_models}
+                embeddings, embedding_meta = embedding_catalog()
                 self.send_json({"checkpoints": checkpoints, "unavailable_checkpoints": unavailable_checkpoints,
                                 "anima_models": anima_models, "anima_ready": anima_ready,
                                 "krea2_models": krea2_models, "krea2_ready": krea2_ready,
                                 "anima_tag_count": len(ANIMA_TAG_INDEX), "loras": loras,
                                 "loraMeta": lora_meta_map(loras), "controlnets": controlnets,
+                                "embeddings": embeddings, "embeddingMeta": embedding_meta,
                                 "upscaleModels": upscale_models, "detectorModels": detector_models,
                                 "workflowFeatures": workflow_features,
                                 "samplingProfiles": sampling_profiles})
@@ -2168,10 +3224,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"tags": search_tags(query[:100]), "total": len(TAG_INDEX)})
             elif parsed.path == "/api/lora-notes":
                 self.send_json({"notes": load_lora_notes()})
+            elif parsed.path == "/api/lora-aliases":
+                self.send_json({"aliases": load_lora_rename_aliases()})
             elif parsed.path == "/api/lora-sidecars":
                 self.send_json({"entries": load_lora_sidecars()})
             elif parsed.path == "/api/output-images":
                 self.send_json({"entries": list_output_images()})
+            elif parsed.path == "/api/snapshots":
+                items = load_snapshots()
+                self.send_json({"entries": list(reversed(items[-200:]))})
+            elif parsed.path == "/api/snapshot-compare":
+                snapshot_id = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
+                if not re.fullmatch(r"[0-9a-f]{32}", snapshot_id):
+                    raise ValueError("无效快照编号。")
+                self.send_json(compare_snapshot_environment(snapshot_id))
             elif parsed.path == "/api/history":
                 job = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
                 if not re.fullmatch(r"[0-9a-f-]{36}", job):
@@ -2200,7 +3266,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def do_POST(self):
-        if self.path not in {"/api/generate", "/api/generate-batch", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color"}:
+        if self.path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -2226,6 +3292,9 @@ class Handler(BaseHTTPRequestHandler):
                 if safe_name != name or not file.is_file():
                     raise ValueError("找不到该输出图片。")
                 self.send_json(parse_generation_info(file.read_bytes()))
+                return
+            if self.path == "/api/snapshot-outputs":
+                self.send_json(attach_snapshot_outputs(str(data.get("id", "")), data.get("outputs") or []))
                 return
             if self.path == "/api/preview-color":
                 name = str(data.get("name", "") or "").strip()
@@ -2257,6 +3326,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(compile_prompt(data))
             elif self.path == "/api/preview-pose":
                 self.send_json(comfy_json("/prompt", "POST", build_pose_preview_workflow(data)))
+            elif self.path == "/api/clarity-upscale":
+                info = comfy_json("/object_info")
+                available = object_info_choices(info, "UpscaleModelLoader", "model_name")
+                if HIRES_UPSCALE_MODEL not in available:
+                    raise ValueError("缺少 Anime6B 放大模型，无法生成同图清晰版。")
+                self.send_json(comfy_json("/prompt", "POST", build_clarity_upscale_workflow(data)))
             elif self.path == "/api/lora-notes":
                 save_lora_notes(data.get("notes", {}))
                 self.send_json({"ok": True})
@@ -2272,14 +3347,20 @@ class Handler(BaseHTTPRequestHandler):
                             for item in expanded]
                 submitted = []
                 for index, item in enumerate(prepared):
+                    result = comfy_json("/prompt", "POST", item["workflow"])
+                    prompt_id = result.get("prompt_id")
+                    snapshot = create_generation_snapshot(item["payload"], str(prompt_id or ""))
                     submitted.append({"index": index, "task_index": item["task_index"],
                                       "image_index": item["image_index"],
                                       "image_count": item["image_count"],
-                                      "prompt_id": comfy_json("/prompt", "POST", item["workflow"]).get("prompt_id")})
+                                      "prompt_id": prompt_id, "snapshot_id": snapshot["id"],
+                                      "label": snapshot["label"]})
                 self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
                                 "total_images": len(submitted)})
             else:
-                self.send_json(comfy_json("/prompt", "POST", build_workflow(data)))
+                result = comfy_json("/prompt", "POST", build_workflow(data))
+                snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""))
+                self.send_json({**result, "snapshot_id": snapshot["id"]})
         except CLIENT_DISCONNECT_ERRORS:
             return
         except urllib.error.HTTPError as exc:

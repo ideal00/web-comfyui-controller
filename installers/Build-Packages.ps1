@@ -40,7 +40,7 @@ function Copy-CleanDirectory([string]$Source, [string]$Destination) {
 
 function Sync-CorePayload {
     New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
-    foreach ($file in "easy_panel.py", "index.html", "pose_editor_workflow.json", "README.md",
+    foreach ($file in "easy_panel.py", "index.html", "embedding_notes.json", "pose_editor_workflow.json", "README.md", "LORA_MEMO_RULES.md",
                       "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
                       "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
                       "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
@@ -53,6 +53,13 @@ function Sync-CorePayload {
     Copy-CleanDirectory (Join-Path $repositoryRoot "easy_panel_app") (Join-Path $payloadRoot "easy_panel_app")
     Copy-CleanDirectory (Join-Path $repositoryRoot "web") (Join-Path $payloadRoot "web")
     Copy-CleanDirectory (Join-Path $repositoryRoot "launchers") (Join-Path $payloadRoot "launchers")
+    $mergedAliases = [ordered]@{}
+    foreach ($aliasFile in Get-ChildItem -LiteralPath (Join-Path $repositoryRoot "lora_imports") -Filter "*_illustrious_chinese_filenames.json" | Sort-Object Name) {
+        $entries = Get-Content -LiteralPath $aliasFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+        foreach ($entry in $entries.GetEnumerator()) { $mergedAliases[$entry.Key] = $entry.Value }
+    }
+    $aliasJson = $mergedAliases | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText((Join-Path $payloadRoot "lora_rename_aliases.json"), $aliasJson, [Text.UTF8Encoding]::new($false))
 }
 
 function New-Package([string]$Name, [string]$CommandFile, [switch]$Core, [switch]$Tags) {

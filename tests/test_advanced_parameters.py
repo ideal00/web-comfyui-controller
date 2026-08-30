@@ -90,8 +90,9 @@ class SamplingProfileTests(unittest.TestCase):
         nodes = result["prompt"]
         lora_items = [(node_id, node) for node_id, node in nodes.items()
                       if node["class_type"] == "LoraLoader"]
-        self.assertEqual(names, [node["inputs"]["lora_name"]
-                                 for _, node in lora_items])
+        actual_names = [node["inputs"]["lora_name"].replace("\\", "/")
+                        for _, node in lora_items]
+        self.assertEqual(names, actual_names)
         checkpoint_id = next(node_id for node_id, node in nodes.items()
                              if node["class_type"] == "CheckpointLoaderSimple")
         expected_model = [checkpoint_id, 0]
@@ -507,6 +508,54 @@ class SamplingProfileTests(unittest.TestCase):
         encode = self.nodes_of(nodes, "VAEEncodeForInpaint")[0]["inputs"]
         self.assertEqual(6, encode["grow_mask_by"])
         self.assertEqual(0.5, self.nodes_of(nodes, "KSampler")[0]["inputs"]["denoise"])
+
+    def test_illustrious_depth_reference_flows_into_hires_generation(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({
+            "illustriousMode": "hires", "hiresScale": 1.3,
+            "hiresDenoise": 0.35, "hiresSteps": 20, "hiresCfg": 6,
+            "depth": {
+                "enabled": True, "image": "easy_panel/background.png",
+                "controlnet": "xinsir_depth_sdxl_1.0.safetensors",
+                "strength": 0.55, "start": 0, "end": 0.75,
+            },
+        })
+        with patch.object(easy_panel, "validate_input_image", side_effect=lambda name: name):
+            nodes = self.build(data)
+        self.assertEqual(1, len(self.nodes_of(nodes, "DepthAnythingV2Preprocessor")))
+        apply = self.nodes_of(nodes, "ControlNetApplyAdvanced")[0]["inputs"]
+        self.assertEqual(0.55, apply["strength"])
+        self.assertEqual(0.75, apply["end_percent"])
+        samplers = self.nodes_of(nodes, "KSampler")
+        self.assertEqual(2, len(samplers))
+        self.assertEqual(20, samplers[1]["inputs"]["steps"])
+        self.assertEqual(0.35, samplers[1]["inputs"]["denoise"])
+
+    def test_depth_reference_rejects_anima(self):
+        data = payload("anima-base-v1.0.safetensors")
+        data["depth"] = {
+            "enabled": True, "image": "easy_panel/background.png",
+            "controlnet": "xinsir_depth_sdxl_1.0.safetensors",
+        }
+        with self.assertRaisesRegex(ValueError, "Depth ControlNet.*Anima"):
+            self.build(data)
+
+    def test_depth_background_suppression_is_visible_and_optional(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data["promptSections"] = {"subject": "1girl"}
+        data["depth"] = {"enabled": True, "suppressSimple": True}
+        compiled = easy_panel.compile_prompt(data)
+        self.assertNotIn("simple background", compiled["positive"])
+        for term in ("simple background", "plain background", "empty background",
+                     "minimal background", "flat background", "low detail background"):
+            self.assertIn(term, compiled["negative"])
+        source = next(item for item in compiled["sources"]
+                      if item["key"] == "depthBackgroundNegative")
+        self.assertTrue(source["enabled"])
+
+        data["depth"]["suppressSimple"] = False
+        compiled = easy_panel.compile_prompt(data)
+        self.assertNotIn("simple background", compiled["negative"])
 
     def test_edited_pose_and_color_correction_create_real_nodes(self):
         pose = payload("waiIllustriousSDXL_v140.safetensors")

@@ -270,7 +270,7 @@ function Write-LoraToolLaunchers([string]$Target, [string]$InputPath,
 function Install-CoreModule {
     Write-Title "安装核心面板"
     $payload = Join-Path $PSScriptRoot "payload"
-    foreach ($required in "easy_panel.py", "index.html", "pose_editor_workflow.json", "README.md",
+    foreach ($required in "easy_panel.py", "index.html", "embedding_notes.json", "pose_editor_workflow.json", "README.md", "LORA_MEMO_RULES.md", "lora_rename_aliases.json",
                            "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
                            "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
                            "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
@@ -286,7 +286,7 @@ function Install-CoreModule {
     $target = Resolve-PanelRoot $script:ResolvedComfyRoot $true
     New-Item -ItemType Directory -Path $target -Force | Out-Null
     $coreItems = @(
-        "easy_panel.py", "index.html", "pose_editor_workflow.json", "README.md",
+        "easy_panel.py", "index.html", "embedding_notes.json", "pose_editor_workflow.json", "README.md", "LORA_MEMO_RULES.md", "lora_rename_aliases.json",
         "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
         "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
         "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd",

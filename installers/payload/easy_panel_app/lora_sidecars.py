@@ -26,7 +26,14 @@ from easy_panel_app.tag_classifier import (
 
 SIDECAR_MARKER = "# Easy Panel LoRA Sidecar v2"
 NOTE_FIELDS = ("subject", "appearance", "clothing", "pose", "composition", "scene",
-               "lighting", "style", "negative", "other")
+               "lighting", "style", "coloring", "negative", "other")
+OUTFIT_MAIN_CLASS_FIELDS = (
+    ("subject", "character"), ("appearance", "appearance"),
+    ("clothing", "clothing"), ("prompt", "clothing"),
+    ("pose", "pose"), ("composition", "composition"), ("scene", "scene"),
+    ("lighting", "lighting"), ("style", "style"), ("coloring", "coloring"),
+    ("negative", "negative"), ("other", "other"), ("manual", "other"),
+)
 SECTION_LABELS = {
     "subject": "人物与角色",
     "appearance": "角色外貌",
@@ -713,6 +720,26 @@ def atomic_write_notes(path: Path, notes: dict) -> None:
         raise
 
 
+def outfit_main_class(outfit: dict) -> str:
+    """Classify by the first populated editor field, left-to-right then top-to-bottom."""
+    item = outfit if isinstance(outfit, dict) else {}
+    return next((main_class for field, main_class in OUTFIT_MAIN_CLASS_FIELDS
+                 if str(item.get(field, "") or "").strip()), "other")
+
+
+def classify_lora_note_outfits(notes: dict) -> dict:
+    """Set a deterministic main_class on every saved LoRA memo preset in place."""
+    if not isinstance(notes, dict):
+        return notes
+    for note in notes.values():
+        if not isinstance(note, dict):
+            continue
+        for outfit in note.get("outfits", []):
+            if isinstance(outfit, dict):
+                outfit["main_class"] = outfit_main_class(outfit)
+    return notes
+
+
 def _canonical_outfit(outfit: dict) -> dict:
     result = {"name": str(outfit.get("name", "自动识别") or "自动识别").strip()}
     aliases = {"clothing": ("clothing", "prompt"), "other": ("other", "manual")}
@@ -722,6 +749,7 @@ def _canonical_outfit(outfit: dict) -> dict:
                       if str(outfit.get(key, "") or "").strip()), "")
         if value:
             result[field] = ", ".join(_unique(split_prompt_tags(value)))
+    result["main_class"] = outfit_main_class(result)
     return result
 
 
@@ -752,6 +780,8 @@ def merge_note(existing: dict, parsed: dict, replace: bool = False) -> tuple[dic
         for field in NOTE_FIELDS:
             if incoming.get(field) and not current.get(field):
                 current[field] = incoming[field]
+    for outfit in existing_outfits:
+        outfit["main_class"] = outfit_main_class(outfit)
     if existing_outfits:
         note["outfits"] = existing_outfits
     return note, note != old
@@ -759,11 +789,14 @@ def merge_note(existing: dict, parsed: dict, replace: bool = False) -> tuple[dic
 
 __all__ = [
     "NOTE_FIELDS",
+    "OUTFIT_MAIN_CLASS_FIELDS",
     "SIDECAR_MARKER",
     "atomic_write_notes",
     "backup_notes",
+    "classify_lora_note_outfits",
     "infer_base_model",
     "is_generated_sidecar",
+    "outfit_main_class",
     "load_notes",
     "merge_note",
     "parse_lora_sidecar",

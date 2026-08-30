@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html dir="ltr" lang="zh-CN">
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<meta http-equiv="x-ua-compatible" content="IE=edge" />
+	<title>miniPaint - 图片编辑器</title>
+	<meta name="description" content="miniPaint is free online image editor using HTML5. Edit, adjust your images, add effects online in your browser, without installing anything..." />
+	<meta name="keywords" content="photo, image, picture, transparent, layers, free, edit, html5, canvas, javascript, online, photoshop, gimp, effects, sharpen, blur, magic eraser tool, clone tool, rotate, resize, photoshop online, online tools, tilt shift, sprites, keypoints" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=0" />
+	<link rel="icon" sizes="192x192" href="images/favicon.png">
+	<!-- <link rel="manifest" href="dist/manifest.json"> -->
+	<!-- Google -->
+	<meta itemprop="name" content="miniPaint" />
+	<meta itemprop="description" content="miniPaint is free online image editor using HTML5. Edit, adjust your images, add effects online in your browser, without installing anything..." />
+	<meta itemprop="image" content="https://viliusle.github.io/miniPaint/images/preview.jpg" />
+	<!-- Twitter -->
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:title" content="miniPaint" />
+	<meta name="twitter:description" content="miniPaint is free online image editor using HTML5. Edit, adjust your images, add effects online in your browser, without installing anything..." />
+	<meta name="twitter:image" content="https://viliusle.github.io/miniPaint/images/preview.jpg" />
+	<meta name="twitter:image:alt" content="miniPaint is free online image editor using HTML5. Edit, adjust your images, add effects online in your browser, without installing anything..." />
+	<!-- Facebook, Pinterest -->
+	<meta property="og:title" content="miniPaint" />
+	<meta property="og:type" content="article" />
+	<meta property="og:url" content="https://viliusle.github.io/miniPaint/" />
+	<meta property="og:image" content="https://viliusle.github.io/miniPaint/images/preview.jpg" />
+	<meta property="og:description" content="miniPaint is free online image editor using HTML5. Edit, adjust your images, add effects online in your browser, without installing anything..." />
+	<meta property="og:site_name" content="miniPaint" />
+	
+	<script src="dist/bundle.js"></script>
+</head>
+<body>
+	<div class="wrapper">
+
+		<nav aria-label="Main Menu" class="main_menu" id="main_menu"></nav>
+		
+		<div class="submenu">
+			<a class="logo" href="#">miniPaint</a>
+			<div class="block attributes" id="action_attributes"></div>
+			<button class="undo_button" id="undo_button" type="button">
+				<span class="sr_only">Undo</span>
+			</button>
+		</div>
+		
+		<div class="sidebar_left" id="tools_container"></div>
+
+
+		<div class="middle_area" id="middle_area">
+
+			<canvas class="ruler_left" id="ruler_left"></canvas>
+			<canvas class="ruler_top" id="ruler_top"></canvas>
+
+			<div class="main_wrapper" id="main_wrapper">
+				<div class="canvas_wrapper" id="canvas_wrapper">
+					<div id="mouse"></div>
+					<div class="transparent-grid" id="canvas_minipaint_background"></div>
+					<canvas id="canvas_minipaint">
+						<div class="trn error">
+							Your browser does not support canvas or JavaScript is not enabled.
+						</div>
+					</canvas>
+				</div>
+			</div>
+		</div>
+
+		<div class="sidebar_right">
+			<div class="preview block">
+				<h2 class="trn toggle" data-target="toggle_preview">Preview</h2>
+				<div id="toggle_preview"></div>
+			</div>
+			
+			<div class="colors block">
+				<h2 class="trn toggle" data-target="toggle_colors">Colors</h2>
+				<div class="content" id="toggle_colors"></div>
+			</div>
+			
+			<div class="block" id="info_base">
+				<h2 class="trn toggle toggle-full" data-target="toggle_info">Information</h2>
+				<div class="content" id="toggle_info"></div>
+			</div>
+			
+			<div class="details block" id="details_base">
+				<h2 class="trn toggle toggle-full" data-target="toggle_details">Layer details</h2>
+				<div class="content details-content" id="toggle_details"></div>
+			</div>
+			
+			<div class="layers block">
+				<h2 class="trn">Layers</h2>
+				<div class="content" id="layers_base"></div>
+			</div>
+		</div>
+	</div>
+	<div class="mobile_menu">
+		<button class="left_mobile_menu" id="left_mobile_menu_button" type="button">
+			<span class="sr_only">Toggle Menu</span>
+		</button>
+		<button class="right_mobile_menu" id="mobile_menu_button" type="button">
+			<span class="sr_only">Toggle Menu</span>
+		</button>
+	</div>
+	<div class="hidden" id="tmp"></div>
+	<div id="popups"></div>
+	<script>
+	(function () {
+		// miniPaint ships a Simplified Chinese dictionary. Fill the small gaps in
+		// that dictionary and use familiar Photoshop-style Chinese tool names.
+		var easyPanelZh = {
+			'Pressure': '压感', 'Size': '尺寸', 'Size:': '尺寸：', 'Increase': '增加', 'Decrease': '减少',
+			'Brush': '画笔', 'Brush Tool': '画笔', '刷子工具': '画笔',
+			'Pencil': '铅笔', 'Pencil Tool': '铅笔', '铅笔工具': '铅笔',
+			'Erase': '橡皮擦', 'Eraser Tool': '橡皮擦', '橡皮擦工具': '橡皮擦',
+			'Clone': '仿制图章', 'Clone Tool': '仿制图章', '克隆工具': '仿制图章',
+			'Blur': '模糊', 'Blur Tool': '模糊', '模糊工具': '模糊',
+			'Content Fill': '内容填充', 'Content fill': '内容填充',
+			'Magic Eraser Tool': '魔术橡皮擦', '魔术橡皮擦工具': '魔术橡皮擦', 'Desaturate': '去色', 'Desaturate Tool': '去色', '去色工具': '去色',
+			'Selection': '选区', 'Selection Tool': '选区工具', '选择工具': '选区工具', 'Select object tool': '选择对象',
+			'Pick color': '吸管', 'Pick Color Tool': '吸管', '吸管工具': '吸管',
+			'Text': '文字', 'Text Tool': '文字工具', '文本工具': '文字工具',
+			'Crop': '裁剪', 'Crop Tool': '裁剪', '裁剪工具': '裁剪',
+			'Bulge/Pinch Tool': '膨胀/收缩', '凸出/收缩工具': '膨胀/收缩', 'Shapes': '形状工具', 'Shapes (H)': '形状', '形状 (H)': '形状',
+			'Search images': '图片素材', '搜索图像': '图片素材', 'Toggle Color Picker': '切换取色器',
+			'Toggle Color Channels': '切换颜色通道', 'Toggle Swatches': '切换色板', 'Current Color Preview': '当前颜色预览'
+		};
+		function localizeMiniPaint(root) {
+			root = root || document.body;
+			if (!root) return;
+			if (root.nodeType === 3) {
+				var direct = root.nodeValue, directKey = direct.trim(), directTranslation = easyPanelZh[directKey];
+				if (directTranslation && directTranslation !== directKey) root.nodeValue = direct.replace(directKey, directTranslation);
+				return;
+			}
+			var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+			var node;
+			while ((node = walker.nextNode())) {
+				var raw = node.nodeValue, key = raw.trim(), translated = easyPanelZh[key];
+				if (translated && translated !== key) node.nodeValue = raw.replace(key, translated);
+			}
+			var elements = [];
+			if (root.nodeType === 1) elements.push(root);
+			if (root.querySelectorAll) elements = elements.concat(Array.prototype.slice.call(root.querySelectorAll('[title],[aria-label],[placeholder]')));
+			elements.forEach(function (element) {
+				['title', 'aria-label', 'placeholder'].forEach(function (attribute) {
+					var value = element.getAttribute(attribute), translated = easyPanelZh[value];
+					if (translated && translated !== value) element.setAttribute(attribute, translated);
+				});
+			});
+		}
+		var localizationObserver = new MutationObserver(function (records) {
+			records.forEach(function (record) {
+				if (record.type === 'characterData') localizeMiniPaint(record.target);
+				if (record.type === 'attributes') localizeMiniPaint(record.target);
+				Array.prototype.forEach.call(record.addedNodes || [], function (node) { localizeMiniPaint(node); });
+			});
+		});
+		localizationObserver.observe(document.documentElement || document, { childList: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label', 'placeholder'], subtree: true });
+		function send(type, extra) {
+			if (window.parent !== window) window.parent.postMessage(Object.assign({ source: 'easy-panel-minipaint', type: type }, extra || {}), window.location.origin);
+		}
+		window.addEventListener('message', function (event) {
+			if (event.origin !== window.location.origin || !event.data || event.data.source !== 'easy-panel-hand-workbench') return;
+			if (event.data.type === 'resize-editor') {
+				var notifyResize = function () { window.dispatchEvent(new Event('resize')); };
+				requestAnimationFrame(function () { notifyResize(); requestAnimationFrame(notifyResize); });
+				setTimeout(function () { notifyResize(); send('resize-complete', { id: event.data.id }); }, 120);
+			}
+			if (event.data.type === 'load-image' && event.data.url && window.FileOpen) {
+				window.FileOpen.file_open_url_handler({ url: event.data.url });
+			}
+			if (event.data.type === 'export-image' && window.Layers && window.AppConfig) {
+				var canvas = document.createElement('canvas');
+				canvas.width = window.AppConfig.WIDTH;
+				canvas.height = window.AppConfig.HEIGHT;
+				window.Layers.convert_layers_to_canvas(canvas.getContext('2d'), null, false);
+				send('export-image', { url: canvas.toDataURL('image/png') });
+			}
+		});
+		window.addEventListener('load', function () {
+			setTimeout(function () { localizeMiniPaint(); send('ready'); }, 300);
+			setTimeout(function () { localizeMiniPaint(); }, 1000);
+		});
+	})();
+	</script>
+</body>
+</html>

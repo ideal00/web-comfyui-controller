@@ -77,7 +77,8 @@ class RegionalPromptingTests(unittest.TestCase):
         self.assertEqual([97], [item["right"] for item in feather_edges if item["right"]])
         self.assertEqual([97], [item["left"] for item in feather_edges if item["left"]])
 
-        globally_loaded = [node["inputs"]["lora_name"] for node in by_type("LoraLoader")]
+        globally_loaded = [node["inputs"]["lora_name"].replace("\\", "/")
+                           for node in by_type("LoraLoader")]
         self.assertEqual(["styles/soft.safetensors"], globally_loaded)
 
         default_node = by_type("ConditioningSetDefaultCombine")[0]

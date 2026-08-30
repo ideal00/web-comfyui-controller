@@ -95,6 +95,17 @@
         <div class="two"><label><input id="handDetailerEnabled" type="checkbox" onchange="outputEnhancementChanged(true)"> 自动修复手指（按需） ${help("使用较高置信度检测真实手部后局部重绘。复杂背景或手部严重遮挡时建议关闭，改用手绘蒙版局部修复。")}</label><label><input id="footDetailerEnabled" type="checkbox" onchange="outputEnhancementChanged(true)"> 自动修复脚趾/鞋形（按需） ${help("裸足时强调五趾，穿鞋时强调鞋形。复杂背景中的小物件仍可能误检，因此默认关闭。")}</label></div>
         <div id="limbDetailerControls" style="display:none"><div class="three"><div><div class="field-title"><span>引导尺寸</span>${help("手脚局部重绘分辨率。推荐 512；远景小手脚可试 640，但误检风险也会增加。")}</div><input id="limbDetailerGuideSize" type="number" min="256" max="1024" step="64" value="512"></div><div><div class="field-title"><span>步数</span>${help("默认 12 步，足够修补局部结构并减少重绘漂移。")}</div><input id="limbDetailerSteps" type="number" min="8" max="30" value="12"></div><div><div class="field-title"><span>重绘幅度</span>${help("默认 0.35，优先保留原手势和鞋形；超过 0.50 更容易产生新指趾或改写周围结构。")}</div><input id="limbDetailerDenoise" type="number" min="0.15" max="0.6" step="0.05" value="0.35"></div></div><div class="two" style="margin-top:8px"><div><div class="field-title"><span>手部修复正向词</span><span class="small">可完整改写或清空</span></div><textarea id="handDetailerPositive" style="min-height:72px">anatomically correct hands, five fingers on each hand, separated fingers, natural hand pose, sharp hand details, clean lineart</textarea><div class="field-title"><span>手部修复负向词</span></div><textarea id="handDetailerNegative" style="min-height:72px">bad hands, malformed hands, extra fingers, missing fingers, fused fingers, blurry hands</textarea></div><div><div class="field-title"><span>脚部修复正向词</span><span class="small">裸足时可改为 five toes</span></div><textarea id="footDetailerPositive" style="min-height:72px">anatomically correct feet, detailed footwear, correct shoe shape, sharp foot details, clean lineart</textarea><div class="field-title"><span>脚部修复负向词</span></div><textarea id="footDetailerNegative" style="min-height:72px">bad feet, malformed feet, extra toes, missing toes, fused toes, blurry feet</textarea></div></div></div>
         <div id="autoColorControls" style="display:none" class="two"><div><div class="field-title"><span>匹配算法</span>${help("Reinhard LAB 是稳妥默认；MKL LAB 匹配更强，Histogram 适合明显色阶差异但可能压缩层次。")}</div><select id="autoColorMethod"><option value="reinhard_lab">Reinhard LAB（推荐）</option><option value="mkl_lab">MKL LAB</option><option value="histogram">Histogram</option></select></div><div><div class="field-title"><span>强度</span>${help("颜色回匹配强度。推荐 0.70；色偏仍明显可提高，颜色变平则降低。")}</div><input id="autoColorStrength" type="number" min="0" max="1" step="0.05" value="0.7"></div></div>
+        <section id="transparentOutputPanel" class="transparent-output-panel">
+        <div class="transparent-output-heading"><div><span class="studio-kicker">角色素材输出</span><h3>透明背景角色 PNG</h3></div><span class="small">普通角色自动 · 复杂角色可调边缘</span></div>
+        <div class="field-title"><span>处理方式</span>${help("普通角色使用自动模式；长发、薄纱、飘带、翅膀或复杂配饰使用复杂角色模式并调边缘。透明通道由抠图节点生成，不依赖提示词假装透明。")}</div>
+        <div class="two transparent-output-row"><div><select id="transparentBackgroundMode" onchange="transparentBackgroundChanged()"><option value="off">关闭</option><option value="auto">普通角色 · 自动抠图</option><option value="complex">复杂角色 · 精细边缘</option></select></div><label class="transparent-keep-original"><input id="transparentKeepOriginal" type="checkbox" checked> 同时保留原背景图</label></div>
+        <div id="transparentBackgroundInfo" class="small" style="margin-top:6px">自动模式会输出透明 PNG；复杂角色可调头发、薄纱和小配饰边缘。</div>
+        <div id="transparentComplexControls" class="transparent-complex-controls" style="display:none">
+          <div class="three"><div><div class="field-title"><span>边缘算法</span>${help("GuidedFilter 快且稳；PyMatting 对发丝和半透明材质更细，但更慢；VITMatte 质量高，首次可能下载模型。")}</div><select id="transparentDetailMethod"><option value="GuidedFilter">GuidedFilter（推荐）</option><option value="PyMatting">PyMatting（发丝/薄纱）</option><option value="VITMatte">VITMatte（首次可能下载）</option><option value="VITMatte(local)">VITMatte 本地模型</option></select></div><div><div class="field-title"><span>向内收边</span>${help("去除背景残边；过大会吃掉发丝和小配饰。推荐 4–8。")}</div><input id="transparentDetailErode" type="number" min="1" max="64" step="1" value="6"></div><div><div class="field-title"><span>向外扩边</span>${help("找回发丝、飘带等细边；过大会留下背景光晕。推荐 4–10。")}</div><input id="transparentDetailDilate" type="number" min="1" max="64" step="1" value="6"></div></div>
+          <div class="three"><div><div class="field-title"><span>黑场</span>${help("低于该透明度的区域变为完全透明。提高可去杂边，推荐 0.01–0.08。")}</div><input id="transparentBlackPoint" type="number" min="0.01" max="0.98" step="0.01" value="0.01"></div><div><div class="field-title"><span>白场</span>${help("高于该透明度的区域变为完全不透明。降低可让主体更实，推荐 0.90–0.99。")}</div><input id="transparentWhitePoint" type="number" min="0.02" max="0.99" step="0.01" value="0.99"></div><div><div class="field-title"><span>精修像素上限</span>${help("越高边缘越精细但更吃显存；8GB 显存推荐 2MP。")}</div><input id="transparentMaxMegapixels" type="number" min="1" max="16" step="0.5" value="2"></div></div>
+        </div>
+        <div class="actions transparent-manual-actions"><button id="transparentManualButton" class="secondary" type="button" onclick="openTransparentMaskEditor()" disabled>手动修正最近的透明图</button><span class="small">自动抠图后可用画笔补留或擦除，再导出 PNG。</span></div>
+        </section>
         <div id="outputEnhancementAvailability" class="small" style="margin-top:8px"></div>
       </div>`;
   }
@@ -107,6 +118,15 @@
     details.id = "modelAdvancedExtras";
     details.innerHTML = advancedPanelHtml();
     regions.parentNode.insertBefore(details, regions);
+
+    // “透明背景”是常用输出选项，固定显示在生成设置页，不跟随高级工具进入侧栏。
+    const transparentPanel = byId("transparentOutputPanel");
+    const settingsView = byId("studioSettingsView");
+    const illustriousPanel = byId("illustriousPanel");
+    if (transparentPanel && settingsView) {
+      if (illustriousPanel?.parentNode === settingsView) illustriousPanel.insertAdjacentElement("afterend", transparentPanel);
+      else settingsView.prepend(transparentPanel);
+    }
 
     const workflowHeading = byId("illustriousPanel")?.querySelector("h3");
     if (workflowHeading) workflowHeading.textContent = "SDXL / Illustrious 精准生成";
@@ -266,6 +286,14 @@
       color.disabled = !features.color_transfer;
       if (color.disabled) color.checked = false;
     }
+    const transparent = byId("transparentBackgroundMode");
+    if (transparent) {
+      for (const value of ["auto", "complex"]) {
+        const option = transparent.querySelector(`option[value="${value}"]`);
+        if (option) option.disabled = features.transparent_background === false;
+      }
+      if (transparent.selectedOptions[0]?.disabled) transparent.value = "off";
+    }
     const hand = byId("handDetailerEnabled");
     if (hand) {
       hand.disabled = features.hand_detailer !== true || profile().family === "krea2";
@@ -286,12 +314,26 @@
     if (!features.hand_detailer) missing.push("手部检测模型");
     if (!features.foot_detailer) missing.push("足部检测模型");
     if (!features.color_transfer) missing.push("ColorTransfer 节点");
+    if (!features.transparent_background) missing.push("透明背景抠图节点");
     const status = byId("outputEnhancementAvailability");
     if (status) status.textContent = missing.length
       ? `本机尚不可用：${missing.join("、")}；对应选项已禁用。`
       : "输出增强依赖均已就绪。建议固定种子逐项 A/B，避免同时叠加多个增强。";
     window.outputEnhancementChanged(true);
+    window.transparentBackgroundChanged(true);
   }
+
+  window.transparentBackgroundChanged = function (silent) {
+    const mode = byId("transparentBackgroundMode")?.value || "off";
+    if (byId("transparentComplexControls")) byId("transparentComplexControls").style.display = mode === "complex" ? "block" : "none";
+    const info = byId("transparentBackgroundInfo");
+    if (info) info.textContent = mode === "auto"
+      ? "普通角色自动模式：快速分离主体并输出透明 PNG。"
+      : mode === "complex"
+        ? "复杂角色模式：启用边缘精修；建议先用默认值，不满意再逐项小幅调整。"
+        : "透明输出已关闭，保存普通 RGB 图片。";
+    if (!silent && byId("status")) byId("status").textContent = info?.textContent || "透明背景设置已更新。";
+  };
 
   window.outputEnhancementChanged = function (silent) {
     const mode = byId("outputEnhancementMode")?.value || "off";
@@ -399,6 +441,16 @@
           strength: byId("autoColorStrength")?.value || 0.7,
         },
       };
+      data.transparentBackground = {
+        mode: byId("transparentBackgroundMode")?.value || "off",
+        keepOriginal: byId("transparentKeepOriginal")?.checked !== false,
+        detailMethod: byId("transparentDetailMethod")?.value || "GuidedFilter",
+        detailErode: byId("transparentDetailErode")?.value || 6,
+        detailDilate: byId("transparentDetailDilate")?.value || 6,
+        blackPoint: byId("transparentBlackPoint")?.value || 0.01,
+        whitePoint: byId("transparentWhitePoint")?.value || 0.99,
+        maxMegapixels: byId("transparentMaxMegapixels")?.value || 2,
+      };
       return data;
     };
     wrapped.__advancedWrapped = true;
@@ -434,6 +486,25 @@
     window.applyIllustriousMode = wrapped;
   }
 
+  function wrapTransparentRestore() {
+    const original = window.restorePayloadToPanel;
+    if (typeof original !== "function" || original.__transparentWrapped) return;
+    const wrapped = function (data) {
+      const result = original.apply(this, arguments);
+      const transparent = data?.transparentBackground || {};
+      if (byId("transparentBackgroundMode")) byId("transparentBackgroundMode").value = transparent.mode || "off";
+      if (byId("transparentKeepOriginal")) byId("transparentKeepOriginal").checked = transparent.keepOriginal !== false;
+      if (byId("transparentDetailMethod")) byId("transparentDetailMethod").value = transparent.detailMethod || "GuidedFilter";
+      for (const [id, key, fallback] of [["transparentDetailErode", "detailErode", 6], ["transparentDetailDilate", "detailDilate", 6], ["transparentBlackPoint", "blackPoint", 0.01], ["transparentWhitePoint", "whitePoint", 0.99], ["transparentMaxMegapixels", "maxMegapixels", 2]]) {
+        if (byId(id)) byId(id).value = transparent[key] ?? fallback;
+      }
+      window.transparentBackgroundChanged(true);
+      return result;
+    };
+    wrapped.__transparentWrapped = true;
+    window.restorePayloadToPanel = wrapped;
+  }
+
   installPanel();
   wrapPayload();
   wrapProfileRefresh("renderAdvancedRecommendation");
@@ -441,5 +512,6 @@
   wrapProfileRefresh("modelChanged");
   wrapProfileRefresh("toggleRegions");
   wrapHiresConflict();
+  wrapTransparentRestore();
   syncCapabilities();
 })();

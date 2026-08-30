@@ -14,9 +14,18 @@ class GenerationProgressUiTests(unittest.TestCase):
         backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
 
         self.assertIn('id="generationProgressBar"', html)
+        preview_start = html.index('class="card preview-card"')
+        preview_end = html.index('</aside>', preview_start)
+        progress_position = html.index('id="generationProgress"')
+        controls_position = html.index('class="preview-controls"', preview_start)
+        self.assertGreater(progress_position, preview_start)
+        self.assertLess(progress_position, controls_position)
+        self.assertLess(progress_position, preview_end)
         self.assertIn("new EventSource(url)", javascript)
         self.assertIn("dataset.connection='connected'", javascript)
         self.assertIn("type==='progress'", javascript)
+        self.assertIn("当前节点进度", javascript)
+        self.assertNotIn("当前采样 ${cached.value}", javascript)
         self.assertIn("markGenerationPromptComplete(id)", javascript)
         self.assertIn('parsed.path == "/api/progress-stream"', backend)
         self.assertIn('"progress_stream": "/api/progress-stream"', backend)
@@ -51,6 +60,19 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn('self.path == "/api/read-output"', backend)
         self.assertIn("self.send_json(parse_generation_info(file.read_bytes()))\n                return", backend)
 
+    def test_compatible_models_default_to_requested_hires_configuration(self):
+        javascript = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(
+            encoding="utf-8")
+        for marker in (
+            "DEFAULT_HIRES_GENERATION_CONFIG",
+            "scale:'1.3'", "denoise:'0.35'", "steps:'20'", "cfg:'6'",
+            "sampler:'euler_ancestral'", "scheduler:'normal'",
+            "function applyDefaultHiresGenerationConfig",
+            "$('illustriousMode').value='hires'",
+            "guidanceChanged(true);applyDefaultHiresGenerationConfig()",
+        ):
+            self.assertIn(marker, javascript)
+
     def test_output_enhancement_ui_is_capability_gated_and_payload_backed(self):
         advanced = (ROOT / "web" / "assets" / "js" / "model-advanced.js").read_text(
             encoding="utf-8")
@@ -65,6 +87,66 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn("data.foot_detailer", panel)
         self.assertIn("hiresSampler", panel)
         self.assertIn("hiresScheduler", panel)
+
+    def test_standard_generation_can_use_a_depth_background_reference(self):
+        panel = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(
+            encoding="utf-8")
+        backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+        for marker in (
+            "背景空间控制（Depth）", "用参考图锁定背景空间",
+            "function uploadDepthReference", "function depthPayload",
+            "depth:depthPayload()", "xinsir_depth", "function setDepthPreset",
+            "轻控制", "标准控制", "强控制", "抑制简陋背景",
+            "背景 LoRA 建议 0.4–0.6", "二采 0.25–0.32",
+        ):
+            self.assertIn(marker, panel)
+        for marker in (
+            'depth = data.get("depth")', "DepthAnythingV2Preprocessor",
+            '"resolution": 1024', '"strength": depth_strength',
+            '"depthBackgroundNegative"', 'and not depth_enabled',
+        ):
+            self.assertIn(marker, backend)
+
+    def test_route1_can_use_main_pose_prompt_without_openpose(self):
+        panel = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(
+            encoding="utf-8")
+        backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+        for marker in (
+            "function initRoute1PromptPoseMode", "仅使用主界面姿势提示词",
+            "function route1PoseModeChanged", "value!=='prompt'",
+        ):
+            self.assertIn(marker, panel)
+        self.assertIn('pose_mode not in {"prompt", "extract", "skeleton"}', backend)
+        self.assertIn('if pose_mode != "prompt":', backend)
+
+    def test_route1_smart_fusion_uses_soft_trimap_and_ring_only_redraw(self):
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        panel = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(
+            encoding="utf-8")
+        backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+        for marker in (
+            "RMBG精确轮廓 + 自适应窄环重绘", "光照方向覆盖",
+            "自动：近环 + 中环连续拟合", "route1FusionProfile",
+            "route1FusionDenoise", "route1EnvironmentLightStrength", "照片颗粒",
+            "route1SharpenStrength", "平坦皮肤区域基本不处理",
+        ):
+            self.assertIn(marker, html)
+        for marker in (
+            "function applyRoute1FusionPreset", "smartFusion:", "lightDirection:",
+            "colorMatchStrength:", "environmentLightStrength:", "grainStrength:",
+            "sharpenStrength:",
+        ):
+            self.assertIn(marker, panel)
+        for marker in (
+            '"LayerUtility: CropByMask"', '"LayerMask: RmBgUltra V2"',
+            '"LayerUtility: RestoreCropBox"', '"ColorTransfer"',
+            '"ImageBlend"', '"LayerFilter: AddGrain"', '"ImageSharpen"',
+            '"Canny"', '"ImageToMask"', '"operation": "multiply"',
+            '"operation": "subtract"', "ring_radius", "inner_radius",
+            "prepare_route1_environment_light", "near_radius", "middle_radius",
+            "np.linalg.lstsq",
+        ):
+            self.assertIn(marker, backend)
 
     def test_all_final_and_limb_prompts_are_editable_and_payload_backed(self):
         html = (ROOT / "index.html").read_text(encoding="utf-8")
