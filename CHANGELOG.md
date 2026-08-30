@@ -1,5 +1,16 @@
 # Easy Panel 更新记录
 
+## Android 客户端 mobile-v1.2.4（2026-08-30）
+
+- 新增 `android-client/`，包含快速生图与电脑端完整高级面板入口。
+- 快速页支持 LAN / Tailscale / MagicDNS 地址、实际模型列表选择、异步任务恢复和显式生成。
+- Android 下载保存到系统 `Downloads`，兼容 MediaStore、旧版存储权限和重复文件名。
+- 高级面板支持移动响应式布局、文件选择器、返回键、刷新、加载错误提示和页面下载。
+- 提供 Android Debug 构建 CI；Debug APK 仅用于测试，不代表商店签名版本。
+- 未提交 Token、API Key、模型权重、个人局域网地址、构建缓存或签名文件。
+
+详细安装和验收步骤见 [android-client/README.md](android-client/README.md)。
+
 ## 工作树发布版（2026-08-30）
 
 本次发布把本机已完成并经过本地测试的功能、前端资源和一键安装包统一同步到仓库：

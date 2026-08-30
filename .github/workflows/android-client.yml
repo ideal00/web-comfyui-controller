@@ -1,0 +1,68 @@
+name: Android client
+
+on:
+  push:
+    paths:
+      - "android-client/**"
+      - ".github/workflows/android-client.yml"
+  pull_request:
+    paths:
+      - "android-client/**"
+      - ".github/workflows/android-client.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: android-client/pnpm-lock.yaml
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check and test
+        run: pnpm test
+
+      - name: Build web assets and sync Capacitor
+        run: pnpm android:sync
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35 components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon --max-workers=2
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: easy-panel-mobile-debug
+          path: android-client/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

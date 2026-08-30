@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Easy Panel Mobile</string>
+    <string name="title_activity_main">Easy Panel Mobile</string>
+    <string name="package_name">app.rpgbox.mobile</string>
+    <string name="custom_url_scheme">app.rpgbox.mobile</string>
+</resources>

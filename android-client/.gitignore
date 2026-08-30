@@ -1,0 +1,69 @@
+# Dependencies and web build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+local.properties
+keystore.properties
+*.jks
+*.keystore
+google-services.json
+
+# IDE and operating system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
+*.hprof
+captures/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
+
+# Android and Capacitor build output
+.gradle/
+build/
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/
+.externalNativeBuild/
+.cxx/
+output-metadata.json
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/res/xml/config.xml
+*.apk
+*.aab
+*.aar
+
+# Generated JavaScript config
+capacitor.config.js
+
+# Local application data and exports
+artifacts/
+.desktop-data/
+*.rpgbox
+window-*.xml
+
+# Private development material
+AGENTS.md
+defaultprompt.txt
+立绘资源/
+角色包/
+默认RPG/
+src/assets/default-rpg/
+参考系统提示词.txt
+scripts/import-current-rpg-portraits.ps1
+
+# Debug screenshots; publish reviewed images under docs/screenshots instead
+rpgbox-*.png
+rpg-*.png

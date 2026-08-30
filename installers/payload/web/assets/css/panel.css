@@ -70,3 +70,43 @@ input,select,textarea{border-color:#303a52;border-radius:4px;background:#0f1420}
 .lora-search{display:grid;grid-template-columns:minmax(0,1fr) 54px;gap:6px;margin:8px 0}.lora-search input{min-width:0;padding-right:8px}.lora-search button{padding:7px 8px;font-size:11px}
 .clarity-analysis-panel{margin:0 0 10px;padding:9px 10px;border:1px solid #39475e;border-left:3px solid #6f8fb8;border-radius:5px;background:#101722}.clarity-analysis-panel header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.clarity-analysis-panel header>div{display:grid;gap:1px}.clarity-analysis-panel header b{font-size:12px}.clarity-analysis-panel button{padding:6px 9px;font-size:10px}.clarity-analysis-panel[data-level=working]{border-left-color:#7ca8dc}.clarity-analysis-panel[data-level=clear]{border-left-color:#70b995;background:#102019}.clarity-analysis-panel[data-level=medium]{border-left-color:#d0a85a;background:#211c10}.clarity-analysis-panel[data-level=soft],.clarity-analysis-panel[data-level=error]{border-left-color:#d06d76;background:#241417}.clarity-analysis-panel[data-level=sharp]{border-left-color:#a988db;background:#1d1729}#clarityAnalysisResult{line-height:1.5}#clarityAnalysisResult b{color:#eef5ff}#clarityAnalysisResult span{color:#7f90a8;font-size:10px}
 .clarity-upscale-panel{margin-top:10px;padding:10px;border:1px solid #39475e;border-radius:7px;background:#101722}.clarity-upscale-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:7px}.clarity-upscale-controls select{min-width:0}.clarity-upscale-controls button{white-space:nowrap}#clarityUpscaleStatus{margin-top:6px;line-height:1.45}
+
+/* The Android advanced viewer keeps the complete desktop page, but makes the
+   mobile-specific affordances explicit and prevents accidental navigation to
+   the computer-only ComfyUI port. */
+html.easy-panel-mobile,
+html.easy-panel-mobile body { min-width: 0; overflow-x: hidden; }
+html.easy-panel-mobile .comfy-only-link { display: none; }
+html.easy-panel-mobile .studio-header { padding-top: max(8px, env(safe-area-inset-top)); }
+html.easy-panel-mobile .studio-nav { padding-bottom: 2px; }
+html.easy-panel-mobile .studio-layout,
+html.easy-panel-mobile .studio-layout.panel-widths-custom { display: block; max-width: none; }
+html.easy-panel-mobile .studio-left,
+html.easy-panel-mobile .studio-generation,
+html.easy-panel-mobile .preview-card,
+html.easy-panel-mobile .studio-lora { position: static; max-height: none; margin-bottom: 8px; }
+html.easy-panel-mobile .card { min-width: 0; }
+html.easy-panel-mobile input,
+html.easy-panel-mobile select,
+html.easy-panel-mobile textarea,
+html.easy-panel-mobile button { max-width: 100%; }
+html.easy-panel-mobile canvas { max-width: 100%; }
+html.easy-panel-mobile .route1-canvas-wrap,
+html.easy-panel-mobile .repair-canvas-wrap,
+html.easy-panel-mobile .transparent-editor-stage,
+html.easy-panel-mobile .hand-canvas-shell { min-width: 0; overflow: auto; }
+html.easy-panel-mobile .studio-action-dock { bottom: max(8px, env(safe-area-inset-bottom)); }
+html.easy-panel-mobile .studio-tool-drawer-panel { padding-bottom: calc(30px + env(safe-area-inset-bottom)); }
+html.easy-panel-mobile .lora-memo-dialog,
+html.easy-panel-mobile .feature-editor-dialog,
+html.easy-panel-mobile .transparent-mask-editor,
+html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh; }
+@media(max-width:520px){
+  html.easy-panel-mobile .studio-header { gap: 8px; }
+  html.easy-panel-mobile .studio-brand h1 { font-size: 16px; }
+  html.easy-panel-mobile .studio-brand p { font-size: 10px; }
+  html.easy-panel-mobile .studio-nav button { min-height: 40px; padding: 7px 9px; }
+  html.easy-panel-mobile .studio-generation .prompt-section-grid { grid-template-columns: 1fr; }
+  html.easy-panel-mobile .studio-main-heading { top: 91px; }
+  html.easy-panel-mobile .studio-action-dock { left: 6px; right: 6px; width: auto; }
+}

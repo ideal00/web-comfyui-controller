@@ -9,6 +9,7 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 ## 目录
 
 - [更新记录](CHANGELOG.md)
+- [Android 客户端](android-client/README.md)
 - [1. 项目如何工作](#1-项目如何工作)
 - [2. 功能与模型兼容性](#2-功能与模型兼容性)
 - [3. 安装前准备](#3-安装前准备)
@@ -1587,3 +1588,11 @@ vendor\anima-tags\
 
 本版本新增 `/api/rpg/*` 手机视觉 API，可把 Easy Panel 作为 RPGBox Android 的远程生图后端。
 运行 `launchers/Start_EasyPanel_Mobile_RPG.bat` 启动局域网模式；完整协议见 [RPG_MOBILE_API.md](RPG_MOBILE_API.md)。
+
+## Android 客户端
+
+仓库同时提供 [Easy Panel Mobile Android 客户端](android-client/README.md)。它把手机作为电脑 GPU 的控制端：快速模式只提交到本机 Easy Panel 的 `8190` 接口，高级模式打开电脑端完整 Easy Panel；ComfyUI 仍绑定电脑本机 `127.0.0.1:8188`。
+
+手机与电脑在同一局域网时，使用电脑当前局域网 IP 加 `:8190`；跨网络时推荐使用 Tailscale 的 `100.x.x.x` 地址或 MagicDNS 主机名。Token 位于运行目录的 `rpg_mobile_token.txt`，只粘贴文件内容到客户端，不要放进 URL。
+
+Android 客户端源码、可复现构建、权限说明、下载位置、安全边界和已知限制见 [android-client/README.md](android-client/README.md)。不要把 `8190` 或 `8188` 直接暴露到公网。
