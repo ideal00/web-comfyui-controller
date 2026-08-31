@@ -504,6 +504,7 @@ RPG_SESSION_MAX_AGE = 12 * 60 * 60
 _FILE_SIGNATURE_CACHE: dict[tuple[str, int, int], dict] = {}
 _CREATIVE_INDEX_SOURCE_SIGNATURE: tuple | None = None
 _CREATIVE_INDEX_IMPORT_LOCK = threading.Lock()
+CREATIVE_INDEX_RECONCILE_LIMIT = 1000
 
 
 def get_creative_index() -> CreativeIndex:
@@ -625,6 +626,24 @@ def update_creative_index_status_best_effort(snapshot_id: str, status: dict) -> 
         return {}
 
 
+def update_creative_index_job_status_best_effort(job: dict, status: dict) -> dict:
+    """Reflect a ComfyUI status using the prompt id as the stable fallback key."""
+
+    if not isinstance(job, dict) or not isinstance(status, dict):
+        return {}
+    try:
+        return get_creative_index().update_job(
+            prompt_id=str(job.get("prompt_id") or ""),
+            request_id=str(job.get("request_id") or ""),
+            snapshot_id=str(job.get("snapshot_id") or ""),
+            status=status.get("status", "unknown"),
+            images=status.get("images") if isinstance(status.get("images"), list) else (),
+            output_root=OUTPUT,
+        ) or {}
+    except Exception:
+        return {}
+
+
 def sync_rpg_status_to_creative_index(status: dict) -> dict:
     """Mirror an existing RPG status response into the read-only index."""
 
@@ -634,7 +653,98 @@ def sync_rpg_status_to_creative_index(status: dict) -> dict:
     snapshot_id = str(metadata.get("snapshot_id") or metadata.get("snapshotId") or "").strip()
     if snapshot_id:
         update_creative_index_status_best_effort(snapshot_id, status)
+    else:
+        prompt_id = str(status.get("prompt_id") or status.get("job_id") or "").strip()
+        if prompt_id:
+            update_creative_index_job_status_best_effort({"prompt_id": prompt_id}, status)
     return status
+
+
+def reconcile_creative_index_jobs(limit: int = CREATIVE_INDEX_RECONCILE_LIMIT) -> int:
+    """Reconcile finished ComfyUI jobs even when no client is polling them.
+
+    Both the desktop page and the mobile app historically wrote ``queued`` to
+    the SQLite projection and relied on their own polling loop to write the
+    terminal state.  The ComfyUI history is process-owned, so a short-lived
+    client must not be the only component responsible for this transition.
+    """
+
+    try:
+        ensure_creative_index_from_legacy_best_effort()
+        jobs = get_creative_index().list_unfinished_jobs(limit=limit)
+    except Exception:
+        return 0
+    if not jobs:
+        return 0
+
+    try:
+        history = comfy_json("/history?max_items=%d" % CREATIVE_INDEX_RECONCILE_LIMIT)
+    except Exception:
+        return 0
+    if not isinstance(history, dict):
+        return 0
+
+    reconciled = 0
+    for job in jobs:
+        prompt_id = str(job.get("prompt_id") or "").strip()
+        if not prompt_id or not isinstance(history.get(prompt_id), dict):
+            # ComfyUI omits still-queued jobs from /history.  Leave them alone
+            # until a later pass sees their completed or error record.
+            continue
+        status = history_to_rpg_status(prompt_id, history)
+        if not isinstance(status, dict):
+            continue
+        if update_creative_index_job_status_best_effort(job, status):
+            reconciled += 1
+
+        # Keep the replay-oriented JSON snapshot aligned with the query index
+        # when a completed job was never observed by a client.
+        if status.get("status") == "completed":
+            snapshot_id = str(job.get("snapshot_id") or "").strip()
+            image_names = [
+                str(image.get("filename") or "").strip()
+                for image in status.get("images") or []
+                if isinstance(image, dict) and str(image.get("filename") or "").strip()
+            ]
+            if snapshot_id and image_names:
+                try:
+                    attach_snapshot_outputs(snapshot_id, image_names)
+                except Exception:
+                    pass
+    return reconciled
+
+
+def _creative_reconcile_interval_seconds() -> float:
+    raw = os.environ.get("EASY_PANEL_RECONCILE_INTERVAL_SECONDS", "5").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 5.0
+    return min(60.0, max(2.0, value))
+
+
+def start_creative_index_reconciler() -> threading.Event:
+    """Start the daemon that reconciles client-independent job state."""
+
+    stop_event = threading.Event()
+    interval = _creative_reconcile_interval_seconds()
+
+    def run() -> None:
+        while not stop_event.wait(interval):
+            try:
+                reconcile_creative_index_jobs()
+            except Exception:
+                # Reconciliation is best effort and must never affect the API
+                # server or the ComfyUI worker.
+                continue
+
+    thread = threading.Thread(
+        target=run,
+        name="easy-panel-creative-index-reconciler",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event
 
 
 def _rpg_expected_token() -> str:
@@ -4023,6 +4133,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
+                reconcile_creative_index_jobs()
                 result = creative_index.list_generations(
                     limit=query.get("limit", [20])[0],
                     offset=query.get("offset", [0])[0],
@@ -4043,6 +4154,7 @@ class Handler(BaseHTTPRequestHandler):
                 generation_id = parsed.path.split("/")[-2].lower()
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
+                reconcile_creative_index_jobs()
                 lineage = creative_index.get_lineage(generation_id)
                 if lineage is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
@@ -4058,6 +4170,7 @@ class Handler(BaseHTTPRequestHandler):
                 generation_id = parsed.path.rsplit("/", 1)[-1].lower()
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
+                reconcile_creative_index_jobs()
                 generation = creative_index.get_generation(generation_id)
                 if generation is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
@@ -4505,5 +4618,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    start_creative_index_reconciler()
     print(f"Easy Panel: http://{HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

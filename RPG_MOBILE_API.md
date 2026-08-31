@@ -225,6 +225,8 @@ Easy Panel 会调用项目现有的 Regional Prompting 路线，把两名角色�
 4. `completed` 后下载图片并缓存到 Android 本地；
 5. 断网/切后台后用保存的 `job_id` 继续查询。
 
+Easy Panel 同时在服务端定期对账 ComfyUI 历史。即使手机或电脑页面退出，已提交任务仍会继续执行；任务完成后，作品库状态会自动从 `queued` / `running` 更新为 `completed`，不依赖客户端一直在线。
+
 
 ## 9. API v2 移动端可靠性修正
 

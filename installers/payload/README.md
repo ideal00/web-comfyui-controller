@@ -306,6 +306,8 @@ G:\ComfyUI\EasyPanel_一键关闭.bat
 
 Token 位于 `ComfyUI_Easy_Panel\rpg_mobile_token.txt`。启动时若文件不存在或为空，会使用系统加密随机数生成 32 bytes 的十六进制 Token；控制器不会打印 Token。
 
+Easy Panel 会在服务端后台对账 ComfyUI 的任务历史，并在作品库读取时再次补偿同步。因此手机或电脑端退出后，已提交任务仍会继续执行，完成后作品库不会永久停留在“排队中”。
+
 ### 第 7 步：确认连接正常
 
 页面应该满足以下条件：

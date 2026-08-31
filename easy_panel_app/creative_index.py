@@ -1165,6 +1165,35 @@ class CreativeIndex:
                 "generation": self._summary_from_row(connection, latest),
             }
 
+    def list_unfinished_jobs(self, *, limit: Any = 1000) -> list[dict[str, Any]]:
+        """Return indexed jobs that still need ComfyUI status reconciliation.
+
+        The creative index is intentionally a query-oriented projection.  A
+        server-side reconciler needs only stable identifiers, not the full
+        snapshot payload, so keep this result narrow and cheap to read.
+        """
+
+        page_limit = max(1, min(1000, _safe_int(limit, 1000) or 1000))
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT generation_id, snapshot_id, prompt_id, request_id, status
+                   FROM generations
+                   WHERE status IN ('queued', 'running') AND prompt_id <> ''
+                   ORDER BY updated_at ASC, generation_id ASC
+                   LIMIT ?""",
+                (page_limit,),
+            ).fetchall()
+        return [
+            {
+                "generation_id": str(row["generation_id"]),
+                "snapshot_id": str(row["snapshot_id"] or ""),
+                "prompt_id": str(row["prompt_id"] or ""),
+                "request_id": str(row["request_id"] or ""),
+                "status": normalize_status(row["status"]),
+            }
+            for row in rows
+        ]
+
     @staticmethod
     def _summary_from_row(connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict[str, Any]:
         if row is None:

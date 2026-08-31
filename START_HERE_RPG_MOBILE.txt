@@ -2,7 +2,7 @@ Easy Panel × RPGBox 手机生图版（API v2）
 ========================================
 
 1. 先正常启动 ComfyUI（默认 127.0.0.1:8188）。
-2. 双击：launchers\Start_EasyPanel_Mobile_RPG.bat
+2. 双击：G:\ComfyUI\EasyPanel_一键启动.bat
 3. 记下窗口显示的：
    - 手机访问地址，例如 http://192.168.1.10:8190
    - Token
@@ -12,6 +12,7 @@ Easy Panel × RPGBox 手机生图版（API v2）
 本次新增：
 - requestId 防止手机弱网重复生图
 - App 重启/切后台后按 requestId 恢复任务
+- 客户端退出后由服务端继续对账任务状态，完成后作品库自动显示“已完成”
 - ComfyUI 子目录输出图片可正常下载
 - /api/rpg/capabilities
 - 安全输出路径检查

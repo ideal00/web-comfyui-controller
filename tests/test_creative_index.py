@@ -336,6 +336,24 @@ class CreativeIndexTests(unittest.TestCase):
             )
             self.assertEqual("error", failed_row["status"])
 
+    def test_list_unfinished_jobs_returns_prompt_backed_nonterminal_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            index = CreativeIndex(Path(folder) / "creative.sqlite3")
+            queued = index.upsert_snapshot(
+                snapshot("9" * 32, prompt_id="prompt-queued"),
+                status="queued",
+            )
+            index.upsert_snapshot(
+                snapshot("a" * 32, prompt_id="prompt-completed", status="completed"),
+                status="completed",
+            )
+            index.upsert_snapshot(snapshot("b" * 32), status="queued")
+
+            unfinished = index.list_unfinished_jobs()
+            self.assertEqual([queued["generation_id"]], [item["generation_id"] for item in unfinished])
+            self.assertEqual("prompt-queued", unfinished[0]["prompt_id"])
+            self.assertEqual("queued", unfinished[0]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()
