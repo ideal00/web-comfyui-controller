@@ -53,10 +53,18 @@ function Sync-CorePayload {
     }
     Copy-CleanDirectory (Join-Path $repositoryRoot "easy_panel_app") (Join-Path $payloadRoot "easy_panel_app")
     Copy-CleanDirectory (Join-Path $repositoryRoot "web") (Join-Path $payloadRoot "web")
-    Copy-CleanDirectory (Join-Path $repositoryRoot "launchers") (Join-Path $payloadRoot "launchers")
+    $legacyPayloadLaunchers = Join-Path $payloadRoot "launchers"
+    foreach ($legacyLauncherName in "Start_ComfyUI_and_EasyPanel.bat", "Start_EasyPanel_Mobile_RPG.bat", "Stop_ComfyUI_and_EasyPanel.bat") {
+        $legacyLauncher = Join-Path $legacyPayloadLaunchers $legacyLauncherName
+        if (Test-Path -LiteralPath $legacyLauncher -PathType Leaf) {
+            Remove-Item -LiteralPath $legacyLauncher -Force
+        }
+    }
     $toolSources = @(
         "tools\rebuild_creative_index.py",
-        "tools\migrate_creative_index_ids.py"
+        "tools\migrate_creative_index_ids.py",
+        "tools\EasyPanel-Service.ps1",
+        "tools\Install-OneClickLaunchers.ps1"
     )
     $toolsPayload = Join-Path $payloadRoot "tools"
     if (Test-Path -LiteralPath $toolsPayload) {

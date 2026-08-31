@@ -216,7 +216,7 @@ git clone https://github.com/ideal00/web-comfyui-controller.git ComfyUI_Easy_Pan
 
 ### 第 3 步：配置本机路径
 
-推荐直接使用 Core / All 一键包：安装器会识别 ComfyUI，并生成已经写好环境变量的 `启动面板.cmd`，不需要改 Python 源码。
+推荐直接使用 Core / All 一键包：安装器会识别 ComfyUI，并在 `G:\ComfyUI` 生成统一的 `EasyPanel_一键启动.bat` 和 `EasyPanel_一键关闭.bat`，不需要改 Python 源码。
 
 手动启动时也不要再修改 `easy_panel.py`。在同一个 PowerShell 窗口设置环境变量：
 
@@ -279,51 +279,32 @@ ComfyUI_Easy_Panel\vendor\anima-tags\anima-1.0.csv
 
 标签数据不是生成模型。缺少时仍可正常出图，只会失去搜索或验证功能。
 
-### 第 6 步：启动顺序
+### 第 6 步：启动与关闭
 
-当前推荐直接双击工作目录中的：
-
-```text
-G:\ComfyUI\Start_ComfyUI_and_EasyPanel.bat
-```
-
-它会检查模块化后端、模型配置目录和前端 JS 是否完整，设置新版所需环境变量，启动 ComfyUI 与 Easy Panel，并自动打开 Easy Panel（`http://127.0.0.1:8190`）和 ComfyUI（`http://127.0.0.1:8188`）两个网页。首次启动 ComfyUI 较慢时，脚本会等待 8188 就绪后再打开，不会提前显示连接失败页。
-
-全部使用结束后双击：
+标准安装只保留工作目录根部的两个入口：
 
 ```text
-G:\ComfyUI\Stop_ComfyUI_and_EasyPanel.bat
+G:\ComfyUI\EasyPanel_一键启动.bat
+G:\ComfyUI\EasyPanel_一键关闭.bat
 ```
 
-关闭脚本会核对进程命令行，只停止确认为 ComfyUI / Easy Panel 的 8188、8190 进程，不会误关碰巧占用端口的其他程序。
-
-每次使用都按以下顺序：
-
-1. 启动 ComfyUI。
-2. 等待 ComfyUI 终端显示服务已启动。
-3. 启动 Easy Panel。
-4. 打开 8190 页面。
-
-使用便携版 Python 启动面板：
+启动入口调用 `ComfyUI_Easy_Panel\tools\EasyPanel-Service.ps1`，会安全检查真实目录，按需在隐藏进程中启动 ComfyUI `127.0.0.1:8188` 和 Easy Panel `0.0.0.0:8190`，等待端口与鉴权 `GET /api/rpg/ping` 就绪，并显示本机局域网 / Tailscale 地址。默认打开 Easy Panel 页面；不想打开浏览器时运行：
 
 ```powershell
-Set-Location G:\ComfyUI\ComfyUI_Easy_Panel
-& "G:\ComfyUI\ComfyUI_windows_portable\python_embeded\python.exe" .\easy_panel.py
+& "G:\ComfyUI\EasyPanel_一键启动.bat" -NoBrowser
 ```
 
-看到下面的文字表示面板服务已启动：
+关闭入口严格按 8190 后 8188 的顺序检查进程命令行和可执行文件路径，只停止确认属于本工作区的正式 `easy_panel.py` / `ComfyUI\main.py` 进程；无关或无法核验的端口占用会跳过并报错，不会抢占或误杀。
 
-```text
-Easy Panel: http://127.0.0.1:8190
+控制器也支持只读诊断，不会启停进程：
+
+```powershell
+& "G:\ComfyUI\ComfyUI_Easy_Panel\tools\EasyPanel-Service.ps1" -Mode Status
+& "G:\ComfyUI\ComfyUI_Easy_Panel\tools\EasyPanel-Service.ps1" -Mode Start -DryRun
+& "G:\ComfyUI\ComfyUI_Easy_Panel\tools\EasyPanel-Service.ps1" -Mode Stop -DryRun
 ```
 
-浏览器打开：
-
-```text
-http://127.0.0.1:8190
-```
-
-不要关闭运行 `easy_panel.py` 的终端窗口；关闭后 8190 页面就无法继续工作。
+Token 位于 `ComfyUI_Easy_Panel\rpg_mobile_token.txt`。启动时若文件不存在或为空，会使用系统加密随机数生成 32 bytes 的十六进制 Token；控制器不会打印 Token。
 
 ### 第 7 步：确认连接正常
 
@@ -365,7 +346,7 @@ http://127.0.0.1:8190/api/status
 1. 自动寻找 ComfyUI 根目录；找不到时让用户输入包含 `main.py` 的文件夹。
 2. 核心更新前自动备份原核心文件。
 3. 保留 `lora_notes.json`，不会覆盖个人 LoRA 备忘。
-4. 不改 Python 源码；在生成的 `启动面板.cmd` 中写入本机环境变量，日后更新不会产生路径冲突。
+4. 不改 Python 源码；由统一 PowerShell 控制器在启动时注入本机环境变量，根目录入口只负责调用控制器。
 5. 第三方节点已是 Git 仓库时执行安全更新；发现不明非 Git 目录时跳过，不直接覆盖。
 6. 模型检查包只报告缺失文件，不会自动下载受许可证和体积限制的模型权重。
 7. LoRA 工具包只安装程序和双击入口，不会在安装过程中生成 TXT，也不会修改 `lora_notes.json`。
@@ -1342,7 +1323,7 @@ git status
 git pull
 ```
 
-本机路径现在由环境变量或 `启动面板.cmd` 管理，不再需要修改 `easy_panel.py`，因此更新时更不容易产生冲突。Core / All 安装器也会先把旧核心文件和模块目录备份到 `backup\installer-日期时间`。
+本机路径现在由统一 PowerShell 控制器管理，不再需要修改 `easy_panel.py`，因此更新时更不容易产生冲突。Core / All 安装器也会先把旧核心文件和模块目录备份到 `backup\installer-日期时间`，并重新生成根目录两个一键入口。
 
 ### 16.3 restore_backup.ps1
 
@@ -1594,7 +1575,7 @@ vendor\anima-tags\
 ## RPGBox 手机生图接口
 
 本版本新增 `/api/rpg/*` 手机视觉 API，可把 Easy Panel 作为 RPGBox Android 的远程生图后端。
-运行 `launchers/Start_EasyPanel_Mobile_RPG.bat` 启动局域网模式；完整协议见 [RPG_MOBILE_API.md](RPG_MOBILE_API.md)。
+运行 `G:\ComfyUI\EasyPanel_一键启动.bat` 启动局域网模式；完整协议见 [RPG_MOBILE_API.md](RPG_MOBILE_API.md)。
 
 ## Android 客户端
 

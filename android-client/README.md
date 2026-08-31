@@ -18,7 +18,7 @@ Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、
 
 ## 连接电脑
 
-1. 先在电脑启动 Easy Panel 和 ComfyUI。推荐使用仓库中的 `launchers/Start_EasyPanel_Mobile_RPG.bat`。
+1. 先在电脑启动 Easy Panel 和 ComfyUI。推荐双击 `G:\ComfyUI\EasyPanel_一键启动.bat`。
 2. ComfyUI 继续只监听电脑本机 `127.0.0.1:8188`；手机只访问 Easy Panel `8190`。
 3. 手机与电脑同一局域网时，在 App 填写 `http://<电脑当前局域网IP>:8190`。
 4. 跨网络时，确保两端登录同一个 Tailscale 网络，填写 `http://<电脑的100.x.x.x地址>:8190` 或 `http://<电脑MagicDNS主机名>:8190`。

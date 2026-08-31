@@ -102,6 +102,8 @@ class CreativeLibraryApiTests(unittest.TestCase):
 
             with patch.object(easy_panel, "CREATIVE_INDEX_FILE", index_path), \
                     patch.object(easy_panel, "OUTPUT", output), \
+                    patch.object(easy_panel, "SNAPSHOT_FILE", root / "missing-snapshots.json"), \
+                    patch.object(easy_panel, "RPG_JOB_FILE", root / "missing-jobs.json"), \
                     patch.dict(os.environ, {"EASY_PANEL_RPG_TOKEN": "library-token"}, clear=False):
                 server = easy_panel.ThreadingHTTPServer(("127.0.0.1", 0), easy_panel.Handler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)

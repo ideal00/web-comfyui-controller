@@ -6,7 +6,7 @@
 
 | 安装包 | 内容 | 是否包含模型权重 |
 | --- | --- | --- |
-| Core | Easy Panel 核心入口、后端与前端、LoRA 同名 TXT 生成器、TXT 智能分区 JSON 导入器、路径配置和启动入口 | 否 |
+| Core | Easy Panel 核心入口、后端与前端、LoRA 同名 TXT 生成器、TXT 智能分区 JSON 导入器、统一控制器和根目录一键入口 | 否 |
 | LoRA Tools | 可独立安装的同名 TXT 生成器和 TXT 智能分区 JSON 导入器 | 否 |
 | Pose | `comfyui_controlnet_aux` + `ComfyUI-openpose-editor` | 不包含 OpenPose ControlNet |
 | Color | `ComfyUI_LayerStyle` + Python 依赖 | 不包含额外模型 |
@@ -50,7 +50,7 @@
 - 只在验证后的 ComfyUI `custom_nodes` 下安装节点。
 - 模型权重不随安装包分发。
 
-核心安装器不再改写 Python 源码中的路径。它会在 `启动面板.cmd` 中设置 `EASY_PANEL_COMFY_ROOT`、`EASY_PANEL_COMFY_INPUT`、`EASY_PANEL_OUTPUT` 和 `EASY_PANEL_LORA_DIR`，所以以后更新模块不会覆盖本机路径配置。
+核心安装器不再改写 Python 源码中的路径。它会安装 `tools\EasyPanel-Service.ps1`，由该控制器在启动时设置 `EASY_PANEL_COMFY_ROOT`、`EASY_PANEL_COMFY_INPUT`、`EASY_PANEL_OUTPUT`、`EASY_PANEL_LORA_DIR` 和 RPG Token；标准目录下会生成 `G:\ComfyUI\EasyPanel_一键启动.bat` 与 `G:\ComfyUI\EasyPanel_一键关闭.bat`。
 
 核心安装后还会生成推荐入口 `生成-LoRA同名TXT.bat` 和 `智能导入-LoRA-TXT到JSON.bat`，并保留同名 `.cmd` 兼容旧快捷方式。这些入口写入安装时发现的 Python、ComfyUI 和 LoRA 路径，因此自定义安装位置也可以直接双击使用。生成器默认不覆盖已有 TXT；导入器默认先分析、要求输入 `YES`，并在写入前备份 `lora_notes.json`。
 

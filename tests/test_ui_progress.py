@@ -31,15 +31,31 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn('"progress_stream": "/api/progress-stream"', backend)
         self.assertIn('client_id = "easy-panel"', backend)
 
-    def test_installers_ship_the_two_page_runtime_launcher(self):
+    def test_installers_ship_the_unified_service_controller(self):
         builder = (ROOT / "installers" / "Build-Packages.ps1").read_text(encoding="utf-8")
         installer = (ROOT / "installers" / "Install-EasyPanelModule.ps1").read_text(encoding="utf-8")
-        launcher = (ROOT / "launchers" / "Start_ComfyUI_and_EasyPanel.bat").read_text(encoding="utf-8")
+        controller = (ROOT / "tools" / "EasyPanel-Service.ps1").read_text(encoding="utf-8")
+        launcher_installer = (ROOT / "tools" / "Install-OneClickLaunchers.ps1").read_text(encoding="utf-8")
 
-        self.assertIn('Copy-CleanDirectory (Join-Path $repositoryRoot "launchers")', builder)
-        self.assertIn('Start_ComfyUI_and_EasyPanel.bat', installer)
-        self.assertIn('http://127.0.0.1:8190', launcher)
-        self.assertIn('http://127.0.0.1:8188', launcher)
+        self.assertNotIn('Copy-CleanDirectory (Join-Path $repositoryRoot "launchers")', builder)
+        self.assertIn('EasyPanel-Service.ps1', builder)
+        self.assertIn('Install-OneClickLaunchers.ps1', installer)
+        self.assertIn('EasyPanel-Service.ps1', launcher_installer)
+        self.assertIn('EasyPanel_一键启动.bat', installer)
+        self.assertIn('EasyPanel_一键关闭.bat', installer)
+        for marker in (
+            '[ValidateSet("Start", "Stop", "Status")]',
+            'Start-Process -FilePath $Config.Python',
+            '--windows-standalone-build',
+            'EASY_PANEL_HOST = "0.0.0.0"',
+            'EASY_PANEL_RPG_TOKEN = $Token',
+            'RandomNumberGenerator',
+            'Stop-Process -Id ([int]$processId)',
+            'if ($DryRun)',
+            'NoBrowser',
+        ):
+            self.assertIn(marker, controller)
+        self.assertIn('ASCIIEncoding', launcher_installer)
 
     def test_single_and_batch_generation_both_start_progress_tracking(self):
         javascript = (ROOT / "web" / "assets" / "js" / "panel.js").read_text(encoding="utf-8")

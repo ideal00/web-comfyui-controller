@@ -8,7 +8,9 @@ Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Pane
 
 运行：
 
-`launchers/Start_EasyPanel_Mobile_RPG.bat`
+`G:\ComfyUI\EasyPanel_一键启动.bat`
+
+该入口会同时按需启动本机 ComfyUI `8188` 和局域网模式 Easy Panel `8190`。如需只查看计划而不启停进程，可运行 `ComfyUI_Easy_Panel\tools\EasyPanel-Service.ps1 -Mode Start -DryRun`。
 
 脚本会：
 

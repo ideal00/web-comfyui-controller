@@ -46,4 +46,4 @@
 
 ## 推荐运行方式
 
-Windows 下运行 `launchers/Start_EasyPanel_Mobile_RPG.bat`。手机与电脑同一局域网时，在 RPGBox 中填写脚本显示的 `http://电脑IP:8190` 和 Token。
+Windows 下运行 `G:\ComfyUI\EasyPanel_一键启动.bat`。手机与电脑同一局域网时，在 RPGBox 中填写控制器显示的 `http://电脑IP:8190` 和 Token。
