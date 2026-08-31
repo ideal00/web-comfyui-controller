@@ -1,5 +1,12 @@
 # Easy Panel 更新记录
 
+## Easy Panel 服务端 2.2.1 + Android 客户端 mobile-v1.4.1（2026-08-31）
+
+- 修复旧 `generation_snapshots.json` / `rpg_jobs.json` 迁移：已有 `outputs`、`images` 或 `artifacts` 的记录现在显示为 `completed`，不会再因缺少显式 status 被误标为 `queued`。
+- 明确错误记录优先保留 `error`；已完成、失败或取消的终态不会在重复导入时被降级或互相覆盖；旧 SQLite 索引可通过幂等重建纠正此前错误的排队状态。
+- 迁移仍为单向读取，源 JSON 不会被写回；缺失输出文件只记录警告，不删除作品库记录。
+- Android versionCode 升级为 `1004001`；Debug APK 构建产物和 SHA256 清单见发布页附件。
+
 ## Easy Panel 服务端 2.2.0 + Android 客户端 mobile-v1.4.0（2026-08-31）
 
 - 新增桌面 Web「作品库」：分页、操作 / 状态 / 模型筛选、排序、缩略图、详情、LoRA、输出下载和父子谱系。

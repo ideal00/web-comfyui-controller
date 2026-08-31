@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from easy_panel_app.creative_index import CreativeIndex
+from easy_panel_app.creative_index import CreativeIndex, infer_legacy_status
 
 
 def snapshot(snapshot_id: str, *, created_at: int = 1, operation: str = "", status: str = "queued",
@@ -186,6 +186,118 @@ class CreativeIndexTests(unittest.TestCase):
                 path: hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in (snapshots_path, jobs_path)
             })
+
+    def test_legacy_status_inference_prefers_terminal_error_and_repairs_queued_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "done.png").write_bytes(b"png")
+            snapshots_path = root / "generation_snapshots.json"
+            jobs_path = root / "rpg_jobs.json"
+            queued_snapshot = snapshot("4" * 32, prompt_id="queued-prompt")
+            queued_snapshot.pop("status", None)
+            snapshots_path.write_text(json.dumps([queued_snapshot], ensure_ascii=False), encoding="utf-8")
+            jobs_path.write_text("[]", encoding="utf-8")
+            index = CreativeIndex(root / "creative.sqlite3")
+
+            first = index.import_legacy_files(snapshots_path, jobs_path, output_root=root)
+            generation_id = index.list_generations()["items"][0]["generation_id"]
+            queued = index.get_generation(generation_id)
+            self.assertEqual("queued", queued["status"])
+
+            repaired_snapshot = dict(queued_snapshot)
+            repaired_snapshot["outputs"] = [{"filename": "done.png", "type": "output"}]
+            snapshots_path.write_text(json.dumps([repaired_snapshot], ensure_ascii=False), encoding="utf-8")
+            before_repeat = {
+                path: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (snapshots_path, jobs_path)
+            }
+            repaired = index.import_legacy_files(snapshots_path, jobs_path, output_root=root)
+            self.assertEqual("completed", index.get_generation(generation_id)["status"])
+            self.assertEqual(1, len(index.get_generation(generation_id)["artifacts"]))
+            self.assertEqual(0, repaired["inserted"])
+            self.assertEqual(before_repeat, {
+                path: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (snapshots_path, jobs_path)
+            })
+
+            error_snapshot = snapshot(
+                "5" * 32,
+                prompt_id="error-prompt",
+                outputs=[{"filename": "done.png", "type": "output"}],
+            )
+            error_snapshot.pop("status", None)
+            error_snapshot["error"] = {"message": "failed after partial output"}
+            snapshots_path.write_text(json.dumps([error_snapshot], ensure_ascii=False), encoding="utf-8")
+            index.import_legacy_files(snapshots_path, jobs_path, output_root=root)
+            error_row = next(
+                item for item in index.list_generations()["items"]
+                if item["snapshot_id"] == "5" * 32
+            )
+            self.assertEqual("error", error_row["status"])
+            error_source_hashes = {
+                path: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (snapshots_path, jobs_path)
+            }
+            index.import_legacy_files(snapshots_path, jobs_path, output_root=root)
+            self.assertEqual(error_source_hashes, {
+                path: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (snapshots_path, jobs_path)
+            })
+
+    def test_legacy_jobs_with_images_complete_and_source_json_stays_read_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "job.png").write_bytes(b"png")
+            snapshots_path = root / "generation_snapshots.json"
+            jobs_path = root / "rpg_jobs.json"
+            snapshots_path.write_text(json.dumps([
+                snapshot("6" * 32, prompt_id="job-prompt"),
+            ], ensure_ascii=False), encoding="utf-8")
+            jobs_path.write_text(json.dumps([
+                {"prompt_id": "job-prompt", "images": [{"filename": "job.png"}]},
+            ], ensure_ascii=False), encoding="utf-8")
+            before = {
+                path: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (snapshots_path, jobs_path)
+            }
+            index = CreativeIndex(root / "creative.sqlite3")
+            index.import_legacy_files(snapshots_path, jobs_path, output_root=root)
+            row = index.list_generations()["items"][0]
+            self.assertEqual("completed", row["status"])
+            self.assertEqual(1, row["artifact_count"])
+            self.assertEqual(before, {
+                path: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in (snapshots_path, jobs_path)
+            })
+
+    def test_legacy_status_fallbacks_and_terminal_states_are_stable(self):
+        self.assertEqual("completed", infer_legacy_status({"outputs": ["image.png"]}))
+        self.assertEqual("completed", infer_legacy_status({"images": [{"filename": "image.png"}]}))
+        self.assertEqual("completed", infer_legacy_status({"artifacts": [{"filename": "image.png"}]}))
+        self.assertEqual("error", infer_legacy_status({"outputs": ["partial.png"], "error": "failed"}))
+        self.assertEqual("error", infer_legacy_status({"status": "failed", "outputs": ["partial.png"]}))
+        self.assertEqual("cancelled", infer_legacy_status({"status": "canceled"}))
+        self.assertEqual("queued", infer_legacy_status({"promptId": "prompt-only"}))
+        self.assertEqual("unknown", infer_legacy_status({}))
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "done.png").write_bytes(b"png")
+            index = CreativeIndex(root / "creative.sqlite3")
+            done = snapshot("7" * 32, status="completed", outputs=["done.png"])
+            index.upsert_snapshot(done, status="completed", output_root=root)
+            index.upsert_snapshot(snapshot("7" * 32, status="queued"), output_root=root)
+            done_row = index.list_generations()["items"][0]
+            self.assertEqual("completed", done_row["status"])
+
+            failed = snapshot("8" * 32, status="error", outputs=["done.png"])
+            index.upsert_snapshot(failed, status="error", output_root=root)
+            index.upsert_snapshot(snapshot("8" * 32, status="completed", outputs=["done.png"]), output_root=root)
+            failed_row = next(
+                item for item in index.list_generations()["items"]
+                if item["snapshot_id"] == "8" * 32
+            )
+            self.assertEqual("error", failed_row["status"])
 
 
 if __name__ == "__main__":

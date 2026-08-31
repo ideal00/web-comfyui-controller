@@ -35,7 +35,7 @@ Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、
 
 ## 安装与下载
 
-发布页：<https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.0>
+发布页：<https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.1>
 
 该发布物是 Debug / 测试签名 APK，不是 Google Play 发布签名。可直接下载 `app-debug.apk` 安装；卸载旧测试版或使用 `adb install -r` 覆盖安装。
 
@@ -100,8 +100,8 @@ Get-FileHash -Algorithm SHA256 .\app-debug.apk
 
 发布 APK 的 SHA256 以发布页附件旁的 `app-debug.apk.sha256` 为准。
 
-本次 `mobile-v1.4.0` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
+本次 `mobile-v1.4.1` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
 
 ```text
-D5E295EF54793154B2467D7CE0C209E4BFC28409BDB095ECBF6F0AE6EA9C45A1
+67C9A35766472FE1A7B606BEE90B2EFBC69DE47506926163713D8A0266ABEF87
 ```

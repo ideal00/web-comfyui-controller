@@ -41,6 +41,21 @@ SUPPORTED_OPERATIONS = frozenset({
     "style_change",
 })
 KNOWN_STATUSES = frozenset({"queued", "running", "completed", "error", "cancelled", "unknown"})
+_STATUS_ALIASES = {
+    "complete": "completed",
+    "done": "completed",
+    "failed": "error",
+    "failure": "error",
+    "success": "completed",
+    "succeeded": "completed",
+    "canceled": "cancelled",
+    "cancel": "cancelled",
+    "pending": "queued",
+    "processing": "running",
+}
+_TERMINAL_STATUSES = frozenset({"completed", "error", "cancelled"})
+_LEGACY_ARTIFACT_KEYS = ("outputs", "images", "artifacts")
+_LEGACY_IDENTIFIER_KEYS = ("promptId", "prompt_id", "requestId", "request_id")
 SORT_FIELDS = {
     "created_at": "g.created_at",
     "updated_at": "g.updated_at",
@@ -77,7 +92,10 @@ def normalize_operation(value: Any, default: str = "unknown") -> str:
 
 
 def normalize_status(value: Any, default: str = "unknown") -> str:
+    if isinstance(value, Mapping):
+        value = value.get("status") or value.get("status_str") or value.get("state")
     raw = str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    raw = _STATUS_ALIASES.get(raw, raw)
     if raw in KNOWN_STATUSES:
         return raw
     return default if default in KNOWN_STATUSES else "unknown"
@@ -97,9 +115,72 @@ def _status_priority(value: str) -> int:
 def _merged_status(old: Any, new: Any) -> str:
     before = normalize_status(old)
     after = normalize_status(new)
+    if before in _TERMINAL_STATUSES:
+        return before
+    if after in _TERMINAL_STATUSES:
+        return after
     if _status_priority(after) >= _status_priority(before):
         return after
     return before
+
+
+def _has_legacy_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (Mapping, Sequence)):
+        return bool(value)
+    return bool(value)
+
+
+def _legacy_status_value(record: Mapping[str, Any]) -> str | None:
+    if "status" not in record or not _has_legacy_value(record.get("status")):
+        return None
+    normalized = normalize_status(record.get("status"))
+    return normalized if normalized != "unknown" else None
+
+
+def _legacy_has_outputs(record: Mapping[str, Any]) -> bool:
+    return any(_has_legacy_value(record.get(key)) for key in _LEGACY_ARTIFACT_KEYS)
+
+
+def _legacy_has_error(record: Mapping[str, Any]) -> bool:
+    return any(_has_legacy_value(record.get(key)) for key in ("error", "error_json"))
+
+
+def _legacy_artifacts(record: Mapping[str, Any]) -> list[Any]:
+    for key in _LEGACY_ARTIFACT_KEYS:
+        value = record.get(key)
+        if isinstance(value, list) and value:
+            return value
+    return []
+
+
+def infer_legacy_status(record: Mapping[str, Any]) -> str:
+    """Infer a status for old snapshot/job rows without an explicit status.
+
+    Explicit terminal states remain authoritative.  Error markers win over
+    output-shaped fields so a failed job with partial images is not presented
+    as completed.  The remaining evidence is intentionally conservative:
+    outputs imply completion, identifiers without outputs imply queued, and
+    everything else remains unknown.
+    """
+
+    if not isinstance(record, Mapping):
+        return "unknown"
+    explicit = _legacy_status_value(record)
+    if explicit in _TERMINAL_STATUSES:
+        return explicit
+    if _legacy_has_error(record):
+        return "error"
+    if _legacy_has_outputs(record):
+        return "completed"
+    if explicit in {"queued", "running"}:
+        return explicit
+    if any(_has_legacy_value(record.get(key)) for key in _LEGACY_IDENTIFIER_KEYS):
+        return "queued"
+    return "unknown"
 
 
 def _safe_text(value: Any, limit: int = 4096) -> str:
@@ -634,8 +715,7 @@ class CreativeIndex:
 
     @staticmethod
     def _snapshot_artifacts(snapshot: Mapping[str, Any]) -> list[Any]:
-        outputs = snapshot.get("outputs")
-        return outputs if isinstance(outputs, list) else []
+        return _legacy_artifacts(snapshot)
 
     @staticmethod
     def _find_existing(
@@ -1311,7 +1391,7 @@ class CreativeIndex:
                 result = self.upsert_snapshot(
                     item,
                     operation=self._snapshot_operation(item),
-                    status=item.get("status") or ("queued" if item.get("promptId") else "unknown"),
+                    status=infer_legacy_status(item),
                     output_root=output_root,
                 )
                 report["inserted" if result["created"] else "updated"] += 1
@@ -1328,13 +1408,15 @@ class CreativeIndex:
             prompt_id = _safe_text(item.get("prompt_id") or item.get("promptId"), 128)
             request_id = _safe_text(item.get("request_id") or item.get("requestId"), 128)
             snapshot_id = _safe_text(item.get("snapshot_id") or item.get("snapshotId"), 128)
+            legacy_status = infer_legacy_status(item)
+            legacy_artifacts = _legacy_artifacts(item)
             if snapshot_id or prompt_id or request_id:
                 updated = self.update_job(
                     prompt_id=prompt_id,
                     request_id=request_id,
                     snapshot_id=snapshot_id,
-                    status=item.get("status") or "unknown",
-                    images=item.get("images") if isinstance(item.get("images"), list) else (),
+                    status=legacy_status,
+                    images=legacy_artifacts,
                     output_root=output_root,
                 )
                 if updated:
@@ -1360,12 +1442,12 @@ class CreativeIndex:
                         "loras": sanitize_json_value(loras),
                     },
                     "workflow": {"kind": "legacy-job", "operation": "legacy.job"},
-                    "outputs": item.get("outputs") if isinstance(item.get("outputs"), list) else [],
+                    "outputs": legacy_artifacts,
                 }
                 result = self.upsert_snapshot(
                     synthetic,
                     operation="txt2img",
-                    status=item.get("status") or "unknown",
+                    status=legacy_status,
                     request_id=request_id,
                     output_root=output_root,
                 )
@@ -1389,6 +1471,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "SUPPORTED_OPERATIONS",
     "artifact_url",
+    "infer_legacy_status",
     "normalize_artifact_ref",
     "normalize_operation",
     "normalize_status",

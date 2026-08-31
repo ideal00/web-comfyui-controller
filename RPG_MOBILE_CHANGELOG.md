@@ -1,5 +1,11 @@
 # RPG Mobile Bridge 修改说明
 
+## mobile-v1.4.1（2026-08-31）
+
+- Android versionCode 升级为 `1004001`，配套 Easy Panel 服务端 `2.2.1`。
+- 修复只读作品库迁移状态：旧记录只要已有 `outputs`、`images` 或 `artifacts` 就显示为 `completed`；明确 error、completed、cancelled 终态在重复导入时保持不变。
+- 重建仍只写 SQLite 索引，不修改快照、任务或其他用户 JSON；缺失的图片文件只显示警告，不删除记录。
+
 ## mobile-v1.4.0（2026-08-31）
 
 - Android versionCode 升级为 `1004000`，配套 Easy Panel 服务端 `2.2.0`。
