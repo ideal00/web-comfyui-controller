@@ -32,6 +32,16 @@ import {
   type EasyPanelVisualConfig,
   type VisualJobStatus,
 } from '../services/easyPanelVisual'
+import {
+  getEasyPanelSnapshot,
+  getEasyPanelSnapshots,
+  type EasyPanelSnapshotRecord,
+  type EasyPanelSnapshotSummary,
+} from '../services/easyPanelSnapshots'
+import {
+  restoreSnapshotToSettings,
+  type EasyPanelSnapshotRestoreMode,
+} from '../lib/easyPanelSnapshot'
 
 export type EasyPanelControllerStatus =
   | 'idle'
@@ -62,6 +72,11 @@ export interface EasyPanelController {
   modelsError: string
   downloadLoading: boolean
   downloadMessage: string
+  snapshots: EasyPanelSnapshotSummary[]
+  snapshotsLoading: boolean
+  snapshotsMessage: string
+  snapshotsError: string
+  restoredSnapshot?: EasyPanelSnapshotRecord
   setSettings: (settings: EasyPanelControllerSettings) => void
   testConnection: () => Promise<void>
   refreshModels: () => Promise<void>
@@ -70,6 +85,9 @@ export interface EasyPanelController {
   clearPending: () => Promise<void>
   clearImage: () => Promise<void>
   downloadCurrent: () => Promise<void>
+  refreshSnapshots: () => Promise<void>
+  restoreSnapshot: (id: string, mode?: EasyPanelSnapshotRestoreMode) => Promise<boolean>
+  clearSnapshotAdvancedConfig: () => void
 }
 
 const CONTROLLER_GAME_ID = 'easy-panel-mobile'
@@ -88,6 +106,11 @@ export function useEasyPanelController(): EasyPanelController {
   const [modelsError, setModelsError] = useState('')
   const [downloadLoading, setDownloadLoading] = useState(false)
   const [downloadMessage, setDownloadMessage] = useState('')
+  const [snapshots, setSnapshots] = useState<EasyPanelSnapshotSummary[]>([])
+  const [snapshotsLoading, setSnapshotsLoading] = useState(false)
+  const [snapshotsMessage, setSnapshotsMessage] = useState('连接后刷新电脑端历史快照')
+  const [snapshotsError, setSnapshotsError] = useState('')
+  const [restoredSnapshot, setRestoredSnapshot] = useState<EasyPanelSnapshotRecord>()
   const stateRef = useRef(state)
   const activeRef = useRef(false)
   const hydratedRecoveryRef = useRef(false)
@@ -138,6 +161,10 @@ export function useEasyPanelController(): EasyPanelController {
       setModels([])
       setModelsMessage('地址或 Token 已改变，请重新读取模型')
       setModelsError('')
+      setSnapshots([])
+      setSnapshotsMessage('地址或 Token 已改变，请重新读取历史快照')
+      setSnapshotsError('')
+      setRestoredSnapshot(undefined)
     }
     setDownloadMessage('')
     setError('')
@@ -230,6 +257,73 @@ export function useEasyPanelController(): EasyPanelController {
       setConnectionMessage(`已读取 ${count} 个可用模型`)
     }
   }, [config, loadModelCatalog, settings.baseUrl, settings.token])
+
+  const refreshSnapshots = useCallback(async () => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setSnapshotsError(errorMessage(caught, settings.token, '读取历史'))
+      return
+    }
+    if (!settings.token.trim()) {
+      setSnapshotsError('请先填写 RPG Token，再读取电脑端历史快照。')
+      return
+    }
+    setSnapshotsLoading(true)
+    setSnapshotsError('')
+    setSnapshotsMessage('正在读取电脑端历史快照…')
+    try {
+      const response = await getEasyPanelSnapshots(config, 20)
+      setSnapshots(response.snapshots)
+      setSnapshotsMessage(response.snapshots.length ? `已读取 ${response.snapshots.length} 条服务器快照` : '电脑端暂无历史快照')
+    } catch (caught) {
+      setSnapshotsMessage('历史快照读取失败')
+      setSnapshotsError(errorMessage(caught, settings.token, '读取历史'))
+    } finally {
+      setSnapshotsLoading(false)
+    }
+  }, [config, settings.baseUrl, settings.token])
+
+  const restoreSnapshot = useCallback(async (
+    snapshotId: string,
+    mode: EasyPanelSnapshotRestoreMode = 'full',
+  ) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setSnapshotsError(errorMessage(caught, settings.token, '恢复快照'))
+      return false
+    }
+    if (!settings.token.trim()) {
+      setSnapshotsError('请先填写 RPG Token，再恢复电脑端快照。')
+      return false
+    }
+    setSnapshotsLoading(true)
+    setSnapshotsError('')
+    try {
+      const response = await getEasyPanelSnapshot(config, snapshotId)
+      const detail = response.snapshot
+      const restored = restoreSnapshotToSettings(settings, detail, mode)
+      setRestoredSnapshot(detail)
+      commitState({ ...stateRef.current, settings: restored.settings })
+      const modeLabel = mode === 'seed-only' ? '已恢复快照并只更换 Seed' : mode === 'continue-editing' ? '已恢复快照，可继续编辑' : '已完整载入快照'
+      setSnapshotsMessage(`${modeLabel}；服务器记录的高级参数共 ${restored.advancedFieldCount} 项，当前页面可继续编辑基础字段。`)
+      setError('')
+      return true
+    } catch (caught) {
+      setSnapshotsError(errorMessage(caught, settings.token, '恢复快照'))
+      return false
+    } finally {
+      setSnapshotsLoading(false)
+    }
+  }, [commitState, config, settings])
+
+  const clearSnapshotAdvancedConfig = useCallback(() => {
+    setRestoredSnapshot(undefined)
+    setSnapshotsError('')
+    setSnapshotsMessage('已解除快照高级配置；后续按当前页面的普通生图参数提交。')
+    setError('')
+  }, [])
 
   const saveCompleted = useCallback(async (completed: VisualJobStatus) => {
     if (completed.status === 'error') throw new Error(formatJobError(completed.error))
@@ -329,7 +423,7 @@ export function useEasyPanelController(): EasyPanelController {
       commitState({ ...stateRef.current, settings: nextSettings })
     }
     const requestId = createEasyPanelControllerRequestId()
-    const request = buildEasyPanelControllerRequest(settings, requestId)
+    const request = buildEasyPanelControllerRequest(settings, requestId, restoredSnapshot)
     const pending: PendingEasyPanelJob = {
       requestId,
       jobId: '',
@@ -354,7 +448,7 @@ export function useEasyPanelController(): EasyPanelController {
     } finally {
       activeRef.current = false
     }
-  }, [commitState, config, followJob, settings, status])
+  }, [commitState, config, followJob, restoredSnapshot, settings, status])
 
   const clearPending = useCallback(async () => {
     abortRef.current?.abort()
@@ -430,6 +524,11 @@ export function useEasyPanelController(): EasyPanelController {
     modelsError,
     downloadLoading,
     downloadMessage,
+    snapshots,
+    snapshotsLoading,
+    snapshotsMessage,
+    snapshotsError,
+    restoredSnapshot,
     setSettings,
     testConnection,
     refreshModels,
@@ -438,6 +537,9 @@ export function useEasyPanelController(): EasyPanelController {
     clearPending,
     clearImage,
     downloadCurrent,
+    refreshSnapshots,
+    restoreSnapshot,
+    clearSnapshotAdvancedConfig,
   }
 }
 

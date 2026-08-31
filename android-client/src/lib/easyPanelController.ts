@@ -1,4 +1,5 @@
 import { createVisualRequestId, type VisualGenerateRequest } from '../services/easyPanelVisual'
+import type { EasyPanelSnapshotRecord } from '../services/easyPanelSnapshots'
 
 export const EASY_PANEL_CONTROLLER_STATE_KEY = 'easy-panel-mobile-controller-v1'
 
@@ -13,6 +14,7 @@ export interface EasyPanelControllerSettings {
   height: number
   prompt: string
   negative: string
+  seed: string
   pollIntervalMs: number
 }
 
@@ -54,6 +56,7 @@ export const DEFAULT_EASY_PANEL_CONTROLLER_SETTINGS: EasyPanelControllerSettings
   height: 1216,
   prompt: '',
   negative: '',
+  seed: '',
   pollIntervalMs: 1800,
 }
 
@@ -79,6 +82,7 @@ export function normalizeEasyPanelControllerSettings(
     height: clampInt(source.height, 512, 1920, DEFAULT_EASY_PANEL_CONTROLLER_SETTINGS.height),
     prompt: text(source.prompt).slice(0, 1200),
     negative: text(source.negative).slice(0, 1600),
+    seed: text(source.seed).slice(0, 40),
     pollIntervalMs: clampInt(source.pollIntervalMs, 800, 10000, DEFAULT_EASY_PANEL_CONTROLLER_SETTINGS.pollIntervalMs),
   }
 }
@@ -118,27 +122,29 @@ export function reduceEasyPanelControllerInteraction(
 export function buildEasyPanelControllerRequest(
   settings: EasyPanelControllerSettings,
   requestId: string,
+  snapshot?: EasyPanelSnapshotRecord,
 ): VisualGenerateRequest {
   const prompt = settings.prompt.trim()
   if (!prompt) throw new Error('请先填写正向提示词。')
+  const source = snapshot ? snapshotObject(snapshot.source) : {}
+  const payload = snapshot ? snapshotObject(snapshot.payload) : {}
+  const compiled = snapshot ? snapshotObject(snapshot.compiled) : {}
   const request: VisualGenerateRequest = {
     client: {
       gameId: 'easy-panel-mobile',
       sceneId: requestId,
       requestId,
     },
-    visual: {
-      characters: [],
-      scene: prompt,
-    },
+    visual: snapshot ? snapshotVisual(source, prompt, compiled) : { characters: [], scene: prompt },
     generation: {
       quality: settings.quality,
       width: settings.width,
       height: settings.height,
-      seed: -1,
+      seed: settings.seed.trim() || -1,
       safetyLevel: 'safe',
       ...(settings.model.trim() ? { model: settings.model.trim() } : {}),
       ...(settings.negative.trim() ? { negative: settings.negative.trim() } : {}),
+      ...(snapshot ? snapshotGeneration(source, payload) : {}),
     },
   }
   return request
@@ -221,4 +227,100 @@ function finiteNumber(value: unknown, fallback: number): number {
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
   return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function snapshotObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function snapshotText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function snapshotVisual(
+  source: Record<string, unknown>,
+  prompt: string,
+  compiled: Record<string, unknown>,
+): VisualGenerateRequest['visual'] {
+  const characters = Array.isArray(source.characters)
+    ? source.characters.flatMap((value) => {
+      const item = snapshotObject(value)
+      const id = snapshotText(item.id) || snapshotText(item.name)
+      if (!id) return []
+      return [{
+        id,
+        ...(snapshotText(item.name) ? { name: snapshotText(item.name) } : {}),
+        ...(snapshotText(item.gender) ? { gender: snapshotText(item.gender) } : {}),
+        ...(snapshotText(item.appearance) ? { appearance: snapshotText(item.appearance) } : {}),
+        ...(snapshotText(item.outfit) ? { outfit: snapshotText(item.outfit) } : {}),
+        ...(snapshotText(item.outfitPrompt) ? { outfitPrompt: snapshotText(item.outfitPrompt) } : {}),
+        ...(snapshotText(item.expression) ? { expression: snapshotText(item.expression) } : {}),
+        ...(snapshotText(item.pose) ? { pose: snapshotText(item.pose) } : {}),
+        ...(snapshotText(item.action) ? { action: snapshotText(item.action) } : {}),
+        ...(snapshotText(item.prompt) ? { prompt: snapshotText(item.prompt) } : {}),
+        ...(snapshotText(item.style) ? { style: snapshotText(item.style) } : {}),
+        ...(Array.isArray(item.loras) ? {
+          loras: item.loras.flatMap((value) => {
+            const lora = snapshotObject(value)
+            const name = snapshotText(lora.name)
+            if (!name) return []
+            const weight = lora.weight
+            const numericWeight = typeof weight === 'number' && Number.isFinite(weight)
+              ? weight
+              : typeof weight === 'string' && Number.isFinite(Number(weight)) ? Number(weight) : undefined
+            return [{ name, ...(numericWeight === undefined ? {} : { weight: numericWeight }) }]
+          }),
+        } : {}),
+      }]
+    })
+    : []
+  const sourceScene = snapshotText(source.scene)
+  const restoredPositive = snapshotText(compiled.positive)
+  const useRestoredStructuredScene = Boolean(sourceScene && restoredPositive && prompt === restoredPositive)
+  return {
+    characters,
+    scene: useRestoredStructuredScene ? sourceScene : prompt,
+    ...(!useRestoredStructuredScene && sourceScene ? { location: sourceScene } : {}),
+    ...(snapshotText(source.lighting) ? { lighting: snapshotText(source.lighting) } : {}),
+    ...(snapshotText(source.composition) ? { composition: snapshotText(source.composition), shot: snapshotText(source.composition) } : {}),
+    ...(snapshotText(source.styleColoring) ? { style: snapshotText(source.styleColoring) } : {}),
+    ...(snapshotText(source.naturalLanguage) ? { relation: snapshotText(source.naturalLanguage) } : {}),
+    ...(snapshotText(source.regionGlobalPrompt) ? { groupAction: snapshotText(source.regionGlobalPrompt) } : {}),
+    ...(snapshotText(source.manual) ? { extraPrompt: snapshotText(source.manual) } : {}),
+  }
+}
+
+function snapshotGeneration(
+  source: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): VisualGenerateRequest['generation'] {
+  const sourceGeneration = snapshotObject(source.generation)
+  const enhancements = snapshotObject(source.enhancements)
+  const result: NonNullable<VisualGenerateRequest['generation']> = {}
+  const scalarKeys = [
+    'steps', 'cfg', 'sampler', 'scheduler', 'hiresScale', 'hiresDenoise', 'hiresSteps',
+    'hiresCfg', 'hiresSampler', 'hiresScheduler', 'styleFamily', 'illustriousMode',
+  ] as const
+  for (const key of scalarKeys) {
+    const value = payload[key] ?? sourceGeneration[key] ?? enhancements[key]
+    if (typeof value === 'string' || typeof value === 'number') result[key] = value as never
+  }
+  const sourceLoras = Array.isArray(source.loras) ? source.loras : []
+  const payloadLoras = Array.isArray(payload.loras) ? payload.loras : sourceLoras
+  const loras = payloadLoras.flatMap((value) => {
+    const item = snapshotObject(value)
+    const name = snapshotText(item.name)
+    if (!name) return []
+    const weight = item.weight
+    return [{ name, ...(typeof weight === 'number' || typeof weight === 'string' ? { weight } : {}) }]
+  })
+  if (loras.length) result.loras = loras
+  for (const key of [
+    'characterLoras', 'styleLoras', 'guidance', 'vae', 'modelEnhancement', 'transparentBackground',
+    'colorCorrection', 'outputEnhancement', 'repair', 'img2img', 'pose', 'depth',
+  ] as const) {
+    const value = payload[key] ?? enhancements[key] ?? (key === 'vae' ? source.vae : undefined)
+    if (value && typeof value === 'object' && !Array.isArray(value)) result[key] = value as never
+  }
+  return result
 }

@@ -3,6 +3,7 @@ import { normalizeEasyPanelBaseUrl } from './easyPanelVisual'
 
 export interface EasyPanelAdvancedOpenOptions {
   url: string
+  token?: string
 }
 
 export interface EasyPanelDownloadResult {
@@ -31,13 +32,15 @@ export function buildAdvancedPanelUrl(value: string): string {
 
 /**
  * Open the computer's complete Easy Panel without copying its workflow logic
- * into the Android quick-generation screen. The RPG token is intentionally not
- * passed to the native Activity or included in the URL.
+ * into the Android quick-generation screen. The RPG token is sent only as a
+ * native HTTP header for the first page load; it is never put in the URL,
+ * injected into JavaScript, or stored in web storage.
  */
-export async function openAdvancedPanel(value: string): Promise<string> {
+export async function openAdvancedPanel(value: string, token = ''): Promise<string> {
   const url = buildAdvancedPanelUrl(value)
   if (Capacitor.getPlatform() === 'android') {
-    await advancedPanelPlugin.open({ url })
+    const cleanToken = token.trim()
+    await advancedPanelPlugin.open(cleanToken ? { url, token: cleanToken } : { url })
     return url
   }
 

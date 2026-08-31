@@ -1,5 +1,12 @@
 # RPG Mobile Bridge 修改说明
 
+## mobile-v1.3.0（2026-08-31）
+
+- Android versionCode 升级为 `1003000`；快速页与电脑端高级面板继续使用同一个 Easy Panel `2.1.0` 服务。
+- 新增服务端快照摘要/详情鉴权、完整恢复、只换 Seed、继续编辑和解除快照高级配置。
+- 新增模型/质量策略、采样原因、LoRA trigger 来源、自动注入、去重/覆盖/冲突诊断和最终提示词的只读解释。
+- 高级 WebView 通过原生首请求头引导短时 HttpOnly 会话；DeepSeek 复制失败时显示完整指令，原生剪贴板桥通过 Easy Panel 来源校验。
+
 ## mobile-v1.2.5
 
 - Easy Panel 增加独立的跨设备浏览器共享状态 API，覆盖现有提示词预设和角色/LoRA 收藏。

@@ -55,8 +55,10 @@
     <textarea id="zhPrompt" placeholder="例如：蓝发成年女性，白衬衫、轻薄尼龙丝袜，在窗边的全身像"></textarea>
     <div class="field-title"><span>DeepSeek 网页版</span><span class="small">不用 API / 不保存密钥 · 自动复制适配当前模型的转换指令</span></div>
     <div class="small">点击后会打开 DeepSeek。请在网页中粘贴并发送；复制回答后回到这里读取结果。浏览器跨站限制下无法自动替你发送消息。</div>
-    <div class="actions"><button onclick="openDeepSeekWeb()">复制指令并打开 DeepSeek ↗</button><button class="secondary" onclick="readDeepSeekClipboard()">读取 DeepSeek 回答</button><button class="secondary" onclick="convertChinese()">本地常用词转换</button><button class="secondary" onclick="$('zhPrompt').value=''">清空中文输入</button></div>
+    <div class="actions"><button onclick="openDeepSeekWeb()">复制指令并打开 DeepSeek ↗</button><button id="deepSeekManualCopy" class="secondary" style="display:none" onclick="copyDeepSeekInstructionManually()">复制失败？手动复制指令</button><button class="secondary" onclick="readDeepSeekClipboard()">读取 DeepSeek 回答</button><button class="secondary" onclick="convertChinese()">本地常用词转换</button><button class="secondary" onclick="$('zhPrompt').value=''">清空中文输入</button></div>
     <div id="translationResult" class="small"></div>
+    <div id="deepSeekManualHelp" class="small deepseek-manual-help" style="display:none">自动复制失败，下面是完整转换指令；请长按文本区域，全选后复制。文本区只包含模型、规则和当前中文描述，不包含 Token 或 API 密钥。</div>
+    <textarea id="deepSeekManualInstruction" class="deepseek-manual-instruction" readonly rows="10" spellcheck="false" aria-label="DeepSeek 完整转换指令" style="display:none"></textarea>
     <div id="translationPreview" class="small" style="display:none;margin-top:8px"><b>英文结果：</b><span id="translatedPositive"></span><br><b>建议负面词：</b><span id="translatedNegative"></span><div class="actions"><button class="secondary" onclick="applyTranslated('positive')">加入正向提示词</button><button class="secondary" onclick="applyTranslated('negative')">加入负面提示词</button></div></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <details class="token-library-shell" open>
@@ -307,5 +309,6 @@
 <script src="/assets/js/model-advanced.js?v=3"></script>
 <script src="/assets/js/hand-workbench.js?v=6"></script>
 <script src="/assets/js/transparent-background.js?v=1"></script>
+<script src="/assets/js/snapshot-flow.js?v=1"></script>
 </body>
 </html>

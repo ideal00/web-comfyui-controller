@@ -1,5 +1,13 @@
 # Easy Panel 更新记录
 
+## Easy Panel 服务端 2.1.0 + Android 客户端 mobile-v1.3.0（2026-08-31）
+
+- 生成快照升级为可审计的完整源数据、最终提示词、采样原因、LoRA trigger、自动注入、去重和冲突诊断记录。
+- 远程访问保护完整网页、旧版 API、快照详情/对比和输出图片；浏览器使用 Basic 引导签名 HttpOnly 会话，Android 原生 WebView 只在首个根请求发送 Token 请求头。
+- Android 历史快照支持完整恢复、只换 Seed、继续编辑并聚焦提示词；解除附加高级配置后恢复普通生图提交语义。
+- DeepSeek 网页转换复制失败时显示完整只读指令，原生剪贴板桥仅接受受信 Easy Panel 页面，复制成功后才打开外部 DeepSeek。
+- 保持 Token 不进入 URL、网页 JavaScript、localStorage、剪贴板指令文本或公共仓库。
+
 ## Android 客户端 mobile-v1.2.5（2026-08-31）
 
 - 新增跨设备共享状态：把 Easy Panel 浏览器已有的提示词预设和角色/LoRA 收藏安全合并到独立的 `easy_panel_shared_state.json`。

@@ -32,7 +32,7 @@ Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、
 
 ## 安装与下载
 
-发布页：<https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.2.5>
+发布页：<https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.3.0>
 
 该发布物是 Debug / 测试签名 APK，不是 Google Play 发布签名。可直接下载 `app-debug.apk` 安装；卸载旧测试版或使用 `adb install -r` 覆盖安装。
 
@@ -81,7 +81,7 @@ GitHub Actions 只构建 Debug artifact，不使用秘密、不发布未签名 R
 ## 安全与已知限制
 
 - 手机端保存的 Token 使用本机存储，仅作为 `X-RPG-Token` 请求头发送到用户填写的 Easy Panel 地址。
-- 高级面板 URL 只允许 HTTP/HTTPS 根地址，并最多附带 `mobile=1`；不会附带 Token。
+- 高级面板 URL 只允许 HTTP/HTTPS 根地址，并最多附带 `mobile=1`；Android 原生容器仅在首次根页面请求以 `X-RPG-Token` 请求头引导短时 HttpOnly 会话，Token 不会写入 URL、网页 JavaScript 或 localStorage。
 - 高级面板下载桥只接受已验证的 Easy Panel 同源地址；Token、Authorization、API key 和 secret 不允许出现在下载 URL，也不会写入日志。
 - ComfyUI `8188` 不应从手机直接访问；高级页面中电脑专用入口会隐藏，原生容器也会拦截到 `8188` 的导航。
 - 本次发布已完成 TypeScript、Vitest/Node、Android 原生单测、Web、Capacitor、Gradle、APK 元数据、敏感信息和局域网只读检查；发布环境没有连接 Android 真机。
@@ -97,8 +97,8 @@ Get-FileHash -Algorithm SHA256 .\app-debug.apk
 
 发布 APK 的 SHA256 以发布页附件旁的 `app-debug.apk.sha256` 为准。
 
-本次 `mobile-v1.2.5` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
+本次 `mobile-v1.3.0` Debug APK（不含本机模型与个人 RPG 资源）的 SHA256：
 
 ```text
-8368123CE0BF543AD7F2DAB9E12C739F4C0930E18EE57FA16D4B8C7038DF804A
+C944AFD6DB8E7967161427E14BA50ABA23533B35CAE491D793C67D8DBF0F33B8
 ```

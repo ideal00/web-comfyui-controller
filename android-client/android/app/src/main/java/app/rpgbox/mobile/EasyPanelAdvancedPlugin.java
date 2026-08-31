@@ -36,9 +36,17 @@ public class EasyPanelAdvancedPlugin extends Plugin {
             call.reject("高级面板地址无效，只支持 http/https 的 Easy Panel 根地址。\n");
             return;
         }
+        String token = call.getString("token", "");
+        if (token == null) token = "";
+        token = token.trim();
+        if (token.length() > AdvancedPanelActivity.MAX_PANEL_TOKEN_LENGTH) {
+            call.reject("高级面板 Token 过长，无法安全传递。");
+            return;
+        }
 
         Intent intent = new Intent(getActivity(), AdvancedPanelActivity.class);
         intent.putExtra(AdvancedPanelActivity.EXTRA_URL, url.trim());
+        intent.putExtra(AdvancedPanelActivity.EXTRA_TOKEN, token);
         getActivity().startActivity(intent);
         JSObject result = new JSObject();
         result.put("opened", true);

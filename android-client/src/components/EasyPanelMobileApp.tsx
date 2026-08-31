@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowUpRight, CheckCircle2, Download, Image as ImageIcon, LayoutDashboard, LoaderCircle, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
+import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
 import { useEasyPanelController } from '../hooks/useEasyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
 
@@ -9,6 +10,7 @@ export default function EasyPanelMobileApp() {
   const [advancedOpen, setAdvancedOpen] = useState(true)
   const [advancedOpening, setAdvancedOpening] = useState(false)
   const [advancedError, setAdvancedError] = useState('')
+  const promptEditorRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     const previousTitle = document.title
@@ -27,6 +29,10 @@ export default function EasyPanelMobileApp() {
     && Boolean(controller.settings.baseUrl.trim())
     && Boolean(controller.settings.token.trim())
     && Boolean(controller.settings.prompt.trim())
+  const restoredExplanation = useMemo(
+    () => controller.restoredSnapshot ? explainSnapshot(controller.restoredSnapshot) : undefined,
+    [controller.restoredSnapshot],
+  )
 
   function patchSettings(patch: Partial<typeof controller.settings>) {
     const interaction = reduceEasyPanelControllerInteraction(controller.settings, { type: 'settings-changed', patch })
@@ -38,11 +44,22 @@ export default function EasyPanelMobileApp() {
     if (interaction.shouldSubmit) void controller.generate()
   }
 
+  async function restoreSnapshot(id: string, mode: 'full' | 'seed-only' | 'continue-editing') {
+    const restored = await controller.restoreSnapshot(id, mode)
+    if (!restored || !shouldFocusPromptAfterSnapshotRestore(mode)) return
+    window.setTimeout(() => {
+      const editor = promptEditorRef.current
+      if (!editor) return
+      editor.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      editor.focus()
+    }, 0)
+  }
+
   async function openFullEasyPanel() {
     setAdvancedError('')
     setAdvancedOpening(true)
     try {
-      await openAdvancedPanel(controller.settings.baseUrl)
+      await openAdvancedPanel(controller.settings.baseUrl, controller.settings.token)
     } catch (caught) {
       setAdvancedError(caught instanceof Error ? caught.message : '无法打开高级面板。')
     } finally {
@@ -159,6 +176,7 @@ export default function EasyPanelMobileApp() {
           <label className="epm-field">
             <span>正向提示词 <small>必填</small></span>
             <textarea
+              ref={promptEditorRef}
               value={controller.settings.prompt}
               onChange={(event) => patchSettings({ prompt: event.target.value })}
               placeholder="例如：anime illustration, a quiet bookstore at sunset, warm light, detailed background"
@@ -229,10 +247,121 @@ export default function EasyPanelMobileApp() {
               </label>
             </div>
             <label className="epm-field">
+              <span>Seed <small>留空则随机</small></span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={controller.settings.seed}
+                onChange={(event) => patchSettings({ seed: event.target.value })}
+                placeholder="留空随机"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </label>
+            <label className="epm-field">
               <span>轮询间隔 <small>电脑端任务状态查询</small></span>
               <input type="number" min={800} max={10000} step={100} value={controller.settings.pollIntervalMs} onChange={(event) => patchSettings({ pollIntervalMs: Number(event.target.value) })} />
             </label>
             {controller.capabilities && <p className="epm-capability-note">服务器 API v{String(controller.capabilities.api_version ?? 2)} · 支持异步任务、幂等提交和任务恢复</p>}
+          </div>}
+        </section>
+
+        <section className="epm-card epm-snapshot-card">
+          <div className="epm-section-heading">
+            <div>
+              <span className="epm-section-kicker">04 · HISTORY</span>
+              <h2>历史快照</h2>
+            </div>
+            <button
+              type="button"
+              className="epm-quiet-button epm-inline-button"
+              onClick={() => void controller.refreshSnapshots()}
+              disabled={controller.snapshotsLoading || working || !controller.settings.baseUrl.trim() || !controller.settings.token.trim()}
+            >
+              {controller.snapshotsLoading ? <LoaderCircle size={15} className="epm-spin" /> : <RefreshCw size={15} />}
+              刷新
+            </button>
+          </div>
+          <p className="epm-help epm-snapshot-message">{controller.snapshotsMessage}</p>
+          {controller.snapshotsError && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{controller.snapshotsError}</span></div>}
+          {controller.snapshots.length ? <div className="epm-snapshot-list">
+            {controller.snapshots.map((item) => <article className="epm-snapshot-item" key={item.id}>
+              <div className="epm-snapshot-head">
+                <strong>{item.label || item.model || '生成快照'}</strong>
+                <small>{formatSnapshotTime(item.createdAt)}</small>
+              </div>
+              <div className="epm-snapshot-meta">
+                {item.model || '自动模型'} · seed {item.seed == null ? '?' : String(item.seed)} · {item.width || '?'}×{item.height || '?'} · {item.quality || '自定义'}
+              </div>
+              <div className="epm-snapshot-meta">
+                {item.characterCount} 个角色 · {item.loraCount} 个 LoRA · {item.outputCount} 个输出 · schema v{item.schemaVersion}
+              </div>
+              {item.sourceSections.length > 0 && <div className="epm-snapshot-sources">来源分区：{item.sourceSections.join('、')}</div>}
+              <div className="epm-snapshot-actions">
+                <button type="button" className="epm-secondary-button" onClick={() => void restoreSnapshot(item.id, 'full')} disabled={controller.snapshotsLoading || working}>完整恢复</button>
+                <button type="button" className="epm-quiet-button" onClick={() => void controller.restoreSnapshot(item.id, 'seed-only')} disabled={controller.snapshotsLoading || working}>只换 Seed</button>
+                <button type="button" className="epm-quiet-button" onClick={() => void restoreSnapshot(item.id, 'continue-editing')} disabled={controller.snapshotsLoading || working}>继续编辑并聚焦</button>
+              </div>
+            </article>)}
+          </div> : <div className="epm-snapshot-empty">刷新后从电脑端读取历史；列表是服务器摘要，完整内容只在点击恢复时读取。</div>}
+          {controller.restoredSnapshot && <div className="epm-restored-snapshot" role="status">
+            <div className="epm-restored-heading">
+              <strong>当前附加快照高级配置</strong>
+              <button
+                type="button"
+                className="epm-quiet-button"
+                onClick={controller.clearSnapshotAdvancedConfig}
+                disabled={working}
+              >
+                解除快照高级配置 / 转为普通生图
+              </button>
+            </div>
+            <span>{snapshotPromptSourceLabels(controller.restoredSnapshot).join(' · ') || '已保留快照来源追踪'}。当前生成会复用该快照的 LoRA、采样、区域和增强配置，直到你解除。</span>
+            <span>完整恢复会附加全部快照配置；只换 Seed 只改变 Seed；继续编辑保留附加配置并允许修改当前可见字段。</span>
+            {restoredExplanation && <details className="epm-snapshot-explanation">
+              <summary>查看只读分层解释（不会改写提示词）</summary>
+              <div className="epm-explanation-grid">
+                <div>
+                  <strong>用户输入来源</strong>
+                  <span>{Object.entries(restoredExplanation.sourceSections).map(([key, value]) => `${key}: ${value}`).join(' · ') || '快照未记录用户分区'}</span>
+                  <small>{restoredExplanation.userInputSources.map((item) => `${item.label}: ${item.terms.join(', ')}`).join('；') || '未记录独立用户来源条目'}</small>
+                </div>
+                <div>
+                  <strong>可靠 LoRA trigger 来源</strong>
+                  <span>{restoredExplanation.loraTriggerSources.map((item) => `${item.name}${item.role ? `（${item.role}）` : ''}: ${item.trigger}`).join('；') || '快照未记录可靠 trigger'}</span>
+                  <small>最终实际注入：{restoredExplanation.triggerTerms.join(', ') || '无'}</small>
+                </div>
+                <div>
+                  <strong>模型 profile / 质量策略</strong>
+                  <span>{formatExplanationRecord(restoredExplanation.modelStrategy) || '快照未记录 profile'}</span>
+                </div>
+                <div>
+                  <strong>自动注入开关</strong>
+                  <span>{formatExplanationRecord(restoredExplanation.automation) || '快照未记录自动注入开关'}</span>
+                </div>
+                <div>
+                  <strong>采样与变化原因</strong>
+                  <span>{formatExplanationRecord(restoredExplanation.sampling.settings) || '快照未记录采样值'}</span>
+                  <small>{formatExplanationReasons(restoredExplanation.sampling.reasons) || '未记录采样变化原因'}</small>
+                </div>
+                <div>
+                  <strong>去重 / 覆盖 / 冲突诊断</strong>
+                  <span>{restoredExplanation.overridden ? '已启用手动最终文本覆盖。' : '未启用手动最终文本覆盖。'} {formatExplanationRecord(restoredExplanation.deduplication) || '未记录去重统计'}</span>
+                  <small>{restoredExplanation.diagnostics.map((item) => `${displayExplanationValue(item.code)}：${displayExplanationValue(item.message || item.title)}`).join('；') || '无冲突诊断'}</small>
+                  {restoredExplanation.warnings.length > 0 && <small>警告：{restoredExplanation.warnings.join('；')}</small>}
+                  {restoredExplanation.errors.length > 0 && <small>错误：{restoredExplanation.errors.join('；')}</small>}
+                </div>
+                <div className="epm-explanation-final">
+                  <strong>最终 positive</strong>
+                  <pre>{restoredExplanation.finalPositive || '（空）'}</pre>
+                </div>
+                <div className="epm-explanation-final">
+                  <strong>最终 negative</strong>
+                  <pre>{restoredExplanation.finalNegative || '（空）'}</pre>
+                </div>
+              </div>
+            </details>}
           </div>}
         </section>
 
@@ -252,7 +381,7 @@ export default function EasyPanelMobileApp() {
         <section className="epm-result-card">
           <div className="epm-result-heading">
             <div>
-              <span className="epm-section-kicker">04 · RESULT</span>
+              <span className="epm-section-kicker">05 · RESULT</span>
               <h2>生成结果</h2>
             </div>
             {controller.status !== 'idle' && <span className={`epm-status-pill ${controller.status}`}><StatusIcon status={controller.status} />{controller.statusLabel}</span>}
@@ -295,4 +424,39 @@ function StatusIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle2 size={14} />
   if (status === 'error') return <AlertTriangle size={14} />
   return <LoaderCircle size={14} className="epm-spin" />
+}
+
+function formatSnapshotTime(value: number): string {
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return '未知时间'
+  }
+}
+
+function displayExplanationValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function formatExplanationRecord(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return displayExplanationValue(value)
+  return Object.entries(value as Record<string, unknown>)
+    .map(([key, item]) => `${key}=${displayExplanationValue(item)}`)
+    .join(' · ')
+}
+
+function formatExplanationReasons(value: unknown): string {
+  if (!Array.isArray(value)) return ''
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return displayExplanationValue(item)
+    const record = item as Record<string, unknown>
+    const message = displayExplanationValue(record.message)
+    return message || formatExplanationRecord(record)
+  }).filter(Boolean).join('；')
 }

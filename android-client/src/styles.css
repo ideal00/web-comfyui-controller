@@ -6159,6 +6159,34 @@ textarea:focus-visible {
   .epm-generate-button { flex: 1 1 auto; width: 100%; }
 }
 
+.epm-inline-button { min-height: 32px; padding: 0 10px; font-size: 11px; }
+.epm-snapshot-card { border-color: rgba(117, 209, 187, .28); }
+.epm-snapshot-message { margin-top: -7px; overflow-wrap: anywhere; }
+.epm-snapshot-list { display: grid; gap: 8px; }
+.epm-snapshot-item { padding: 10px; border: 1px solid var(--epm-line); border-radius: 11px; background: rgba(8, 15, 15, .48); }
+.epm-snapshot-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.epm-snapshot-head strong { min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.epm-snapshot-head small { flex: 0 0 auto; color: var(--epm-muted); font-size: 10px; }
+.epm-snapshot-meta,
+.epm-snapshot-sources { margin-top: 4px; color: var(--epm-muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.epm-snapshot-sources { color: var(--epm-accent); }
+.epm-snapshot-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.epm-snapshot-actions button { min-height: 34px; padding: 0 9px; font-size: 10px; }
+.epm-snapshot-empty { padding: 12px; border: 1px dashed var(--epm-line-strong); border-radius: 10px; color: var(--epm-muted); font-size: 11px; line-height: 1.55; }
+.epm-restored-snapshot { margin-top: 9px; padding: 9px 10px; border: 1px solid rgba(117, 209, 187, .34); border-radius: 9px; background: rgba(55, 113, 101, .16); display: grid; gap: 3px; color: var(--epm-accent-strong); font-size: 10px; line-height: 1.5; }
+.epm-restored-snapshot span { color: var(--epm-muted); }
+.epm-restored-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.epm-restored-heading .epm-quiet-button { min-height: 28px; padding: 0 8px; font-size: 9px; color: var(--epm-accent-strong); }
+.epm-snapshot-explanation { margin-top: 6px; border-top: 1px solid rgba(117, 209, 187, .2); padding-top: 6px; color: var(--epm-muted); }
+.epm-snapshot-explanation summary { cursor: pointer; color: var(--epm-accent); font-size: 10px; }
+.epm-explanation-grid { display: grid; gap: 7px; margin-top: 7px; }
+.epm-explanation-grid > div { display: grid; gap: 2px; min-width: 0; }
+.epm-explanation-grid strong { color: var(--epm-accent-strong); font-size: 10px; }
+.epm-explanation-grid span,
+.epm-explanation-grid small { overflow-wrap: anywhere; white-space: pre-wrap; }
+.epm-explanation-grid small { color: var(--epm-muted); font-size: 9px; line-height: 1.45; }
+.epm-explanation-final pre { max-height: 130px; margin: 2px 0 0; padding: 6px; overflow: auto; border: 1px solid var(--epm-line); border-radius: 6px; background: rgba(5, 11, 11, .52); color: var(--epm-muted); font: inherit; font-size: 9px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 @media (prefers-reduced-motion: reduce) {
   .epm-spin,
   .epm-toggle-chevron,

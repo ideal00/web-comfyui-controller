@@ -5,11 +5,15 @@ import json
 import html
 import csv
 import bisect
+import base64
 import hashlib
+import hmac
+import ipaddress
 import mimetypes
 import os
 import random
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -17,6 +21,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -473,9 +478,58 @@ PROMPT_SECTION_LABELS = {
 }
 MATURE_NEGATIVE_TERMS = ("nsfw", "nude", "nudity", "explicit", "sex", "sexual",
                          "porn", "hentai", "uncensored")
-PANEL_VERSION = "2.1.0-dev"
+PANEL_VERSION = "2.1.0"
 SNAPSHOT_FILE = PROJECT_DIR / "generation_snapshots.json"
+SNAPSHOT_SCHEMA_VERSION = 2
+SNAPSHOT_SOURCE_SECTION_KEYS = (
+    "subject", "appearance", "clothing", "pose", "composition", "scene",
+    "lighting", "styleColoring", "naturalLanguage", "manual",
+)
+SNAPSHOT_SECRET_KEY_MARKERS = (
+    "token", "password", "passwd", "secret", "authorization", "cookie",
+    "api_key", "apikey", "access_key",
+)
+RPG_SESSION_COOKIE = "easy_panel_rpg_session"
+RPG_SESSION_MAX_AGE = 12 * 60 * 60
 _FILE_SIGNATURE_CACHE: dict[tuple[str, int, int], dict] = {}
+
+
+def _rpg_expected_token() -> str:
+    return os.environ.get("EASY_PANEL_RPG_TOKEN", "").strip()
+
+
+def _rpg_session_signature(value: str) -> str:
+    return hmac.new(
+        _rpg_expected_token().encode("utf-8"),
+        value.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _new_rpg_session_cookie_value() -> str:
+    body = f"{int(time.time())}.{secrets.token_urlsafe(18)}"
+    return f"{body}.{_rpg_session_signature(body)}"
+
+
+def _valid_rpg_session_cookie(value: str) -> bool:
+    if not _rpg_expected_token():
+        return False
+    parts = str(value or "").split(".", 2)
+    if len(parts) != 3:
+        return False
+    issued, nonce, signature = parts
+    if (not nonce or not re.fullmatch(r"[0-9]+", issued)
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", nonce)):
+        return False
+    try:
+        issued_at = int(issued)
+    except ValueError:
+        return False
+    now = int(time.time())
+    if issued_at > now + 60 or now - issued_at > RPG_SESSION_MAX_AGE:
+        return False
+    body = f"{issued}.{nonce}"
+    return hmac.compare_digest(signature, _rpg_session_signature(body))
 
 
 def prompt_automation(data: dict) -> dict[str, bool]:
@@ -851,14 +905,23 @@ def compile_prompt(data: dict) -> dict:
     trigger_terms = all_trigger_terms if automation["loraTriggers"] else []
     ordered: list[str] = []
     seen: set[str] = set()
+    positive_candidates = 0
+    positive_removed_count = 0
+    positive_removed_terms: list[str] = []
 
     def extend(chunk) -> None:
+        nonlocal positive_candidates, positive_removed_count
         source = ", ".join(chunk) if isinstance(chunk, (list, tuple)) else str(chunk or "")
         for term in split_prompt_terms(source, limit=360):
+            positive_candidates += 1
             key = normalize_prompt_key(term)
             if key and key not in seen:
                 seen.add(key)
                 ordered.append(term)
+            elif key:
+                positive_removed_count += 1
+                if len(positive_removed_terms) < 128:
+                    positive_removed_terms.append(term)
 
     source("loraTriggers", "LoRA 自动触发词", "positive", automation["loraTriggers"],
            all_trigger_terms)
@@ -970,14 +1033,34 @@ def compile_prompt(data: dict) -> dict:
         warnings.extend(lora_compatibility_warnings(data, profile["family"]))
         sources = [{"key": "manualOverride", "label": "手动最终文本", "kind": "both",
                     "enabled": True, "terms": ordered + negative_terms}]
+        deduplication = {
+            "positiveCandidates": len(ordered),
+            "positiveFinal": len(ordered),
+            "positiveRemoved": 0,
+            "positiveRemovedTerms": [],
+        }
     elif not user_term_count and not trigger_terms and not natural_language and not region_term_count:
         errors.append("请至少填写人物、场景、姿势、其他标签或自然语言描述中的一项。")
+        deduplication = {
+            "positiveCandidates": positive_candidates,
+            "positiveFinal": len(ordered),
+            "positiveRemoved": positive_removed_count,
+            "positiveRemovedTerms": positive_removed_terms,
+        }
+    else:
+        deduplication = {
+            "positiveCandidates": positive_candidates,
+            "positiveFinal": len(ordered),
+            "positiveRemoved": positive_removed_count,
+            "positiveRemovedTerms": positive_removed_terms,
+        }
     return {"positive": positive,
             "negative": negative if overridden else ", ".join(negative_terms),
             "errors": errors, "warnings": warnings, "sections": sections,
             "triggers": trigger_terms, "profile": profile,
             "sources": sources, "diagnostics": diagnostics, "automation": automation,
             "overridden": overridden,
+            "deduplication": deduplication,
             "positiveTerms": len(ordered), "negativeTerms": len(negative_terms)}
 
 
@@ -3049,19 +3132,441 @@ def write_snapshots(items: list[dict]) -> None:
     os.replace(temp, SNAPSHOT_FILE)
 
 
-def create_generation_snapshot(data: dict, prompt_id: str = "") -> dict:
+def _snapshot_scalar(value, max_text: int = 4096):
+    """Keep JSON scalars while preventing accidental oversized metadata."""
+    if isinstance(value, str):
+        return value[:max_text]
+    if isinstance(value, bool) or isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return value
+    return None
+
+
+def _snapshot_json_clone(value):
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return {}
+
+
+def _snapshot_safe_value(value, depth: int = 0, max_text: int = 4096):
+    """Copy known JSON data and drop secret-looking keys from nested options."""
+    if depth > 5:
+        return None
+    scalar = _snapshot_scalar(value, max_text)
+    if scalar is not None:
+        return scalar
+    if isinstance(value, list):
+        result = []
+        for item in value[:64]:
+            cleaned = _snapshot_safe_value(item, depth + 1, max_text)
+            if cleaned is not None:
+                result.append(cleaned)
+        return result
+    if isinstance(value, dict):
+        result = {}
+        for raw_key, raw_value in list(value.items())[:96]:
+            key = str(raw_key)
+            lowered = key.casefold().replace("-", "_")
+            if any(marker in lowered for marker in SNAPSHOT_SECRET_KEY_MARKERS):
+                continue
+            cleaned = _snapshot_safe_value(raw_value, depth + 1, max_text)
+            if cleaned is not None:
+                result[key] = cleaned
+        return result
+    return None
+
+
+def _snapshot_safe_mapping(value, allowed_keys: set[str] | None = None) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key)
+        if allowed_keys is not None and key not in allowed_keys:
+            continue
+        lowered = key.casefold().replace("-", "_")
+        if any(marker in lowered for marker in SNAPSHOT_SECRET_KEY_MARKERS):
+            continue
+        cleaned = _snapshot_safe_value(raw_value)
+        if cleaned is not None:
+            result[key] = cleaned
+    return result
+
+
+def _snapshot_text(value, limit: int = 4096) -> str:
+    if value is None or isinstance(value, (dict, list)):
+        return ""
+    return str(value).strip()[:limit]
+
+
+def _snapshot_value(payload: dict, request_generation: dict, key: str):
+    value = payload.get(key)
+    if value is None or value == "":
+        value = request_generation.get(key)
+    return value
+
+
+def _snapshot_characters(source_request: dict) -> list[dict]:
+    visual = source_request.get("visual") if isinstance(source_request.get("visual"), dict) else source_request
+    raw_characters = visual.get("characters") if isinstance(visual.get("characters"), list) else []
+    allowed = {
+        "id", "name", "gender", "trigger", "appearance", "outfit", "outfitPrompt",
+        "expression", "pose", "action", "heldItems", "held_items", "prompt", "extra",
+        "extraPrompt", "style", "mode", "appearance_variant_id", "appearance_preset_id",
+        "clothingPresetId", "appearancePresetId", "characterPresetId", "loras",
+    }
+    result = []
+    for raw in raw_characters[:6]:
+        if isinstance(raw, str):
+            raw = {"id": raw}
+        item = _snapshot_safe_mapping(raw, allowed)
+        if item:
+            result.append(item)
+    return result
+
+
+def _snapshot_loras(payload: dict) -> list[dict]:
+    def name_key(value) -> str:
+        return _snapshot_text(value, 800).replace("\\", "/").casefold()
+
+    character_names = {
+        name_key(item.get("name"))
+        for item in (payload.get("characterLoras") or [])
+        if isinstance(item, dict) and name_key(item.get("name"))
+    }
+    style_names = {
+        name_key(item.get("name"))
+        for item in (payload.get("styleLoras") or [])
+        if isinstance(item, dict) and name_key(item.get("name"))
+    }
+    trigger_by_name = {}
+    try:
+        trigger_by_name = {
+            name_key(name): _snapshot_text(trigger, 2400)
+            for name, trigger in selected_lora_trigger_entries(payload)
+            if name_key(name) and _snapshot_text(trigger, 2400)
+        }
+    except Exception:
+        # Snapshot creation must not fail because optional memo metadata is bad.
+        trigger_by_name = {}
+    raw_loras = payload.get("loras")
+    if not isinstance(raw_loras, list) or not raw_loras:
+        raw_loras = list(payload.get("characterLoras") or []) + list(payload.get("styleLoras") or [])
+    result = []
+    seen = set()
+    for raw in raw_loras[:64]:
+        if not isinstance(raw, dict):
+            continue
+        name = _snapshot_text(raw.get("name"), 800)
+        if not name:
+            continue
+        normalized_name = name_key(name)
+        role = "character" if normalized_name in character_names else "style" if normalized_name in style_names else "other"
+        unique_key = (role, normalized_name)
+        if unique_key in seen:
+            continue
+        seen.add(unique_key)
+        entry = {
+            "name": name,
+            "role": role,
+            "weight": _snapshot_scalar(raw.get("weight")) if raw.get("weight") is not None else None,
+            "trigger": _snapshot_text(raw.get("trigger"), 2400) or trigger_by_name.get(normalized_name, ""),
+        }
+        if entry["weight"] is None:
+            entry.pop("weight")
+        result.append(entry)
+    return result
+
+
+def _snapshot_regions(payload: dict) -> list[dict]:
+    allowed = {"name", "prompt", "subject", "lora", "x", "y", "width", "height", "strength", "preset"}
+    result = []
+    for raw in (payload.get("regions") or [])[:16]:
+        item = _snapshot_safe_mapping(raw, allowed)
+        if item:
+            result.append(item)
+    return result
+
+
+def _snapshot_vae(payload: dict, request_generation: dict) -> dict:
+    raw = _snapshot_value(payload, request_generation, "vae")
+    if isinstance(raw, dict):
+        return _snapshot_safe_mapping(raw, {"name", "model", "mode", "enabled", "tileSize", "overlap"})
+    name = _snapshot_text(raw, 800)
+    return {"name": name} if name else {}
+
+
+def _snapshot_enhancements(payload: dict, request_generation: dict) -> dict:
+    hires = {}
+    for key in ("illustriousMode", "hiresScale", "hiresDenoise", "hiresSteps", "hiresCfg",
+                "hiresSampler", "hiresScheduler"):
+        value = _snapshot_value(payload, request_generation, key)
+        if value is not None and value != "":
+            cleaned = _snapshot_scalar(value)
+            if cleaned is not None:
+                hires[key] = cleaned
+    result = {"hires": hires}
+    allowed_nested = {
+        "enabled", "mode", "image", "mask", "grow", "denoise", "scale", "steps", "cfg",
+        "sampler", "scheduler", "controlnet", "strength", "start", "end", "suppressSimple",
+        "tileSize", "overlap", "source", "target", "model", "vae", "faceDetailer",
+        "handDetailer", "footDetailer", "limbDetailer", "b1", "b2", "s1", "s2",
+        "multiplier", "colorMatch", "matchStrength", "positive", "negative", "sagScale",
+        "sagBlur", "pagScale", "poseJson", "seedvrColor", "guideSize", "hands", "feet",
+        "handPositive", "handNegative", "footPositive", "footNegative", "brightness",
+        "contrast", "saturation", "gamma", "red", "green", "blue", "hue", "hsvSaturation",
+        "value", "blackPoint", "whitePoint", "grayPoint", "keepOriginal", "detailMethod",
+        "detailErode", "detailDilate", "maxMegapixels", "method",
+    }
+    for key in ("repair", "img2img", "pose", "depth", "colorCorrection", "outputEnhancement",
+                "modelEnhancement", "transparentBackground", "guidance"):
+        raw = _snapshot_value(payload, request_generation, key)
+        result[key] = _snapshot_safe_mapping(raw, allowed_nested)
+    return result
+
+
+def build_snapshot_source(data: dict, source_request: dict | None = None, compiled: dict | None = None) -> dict:
+    """Build the allowlisted, explainable source used by Web and Android restore."""
+    payload = data if isinstance(data, dict) else {}
+    request = source_request if isinstance(source_request, dict) else {}
+    request_generation = request.get("generation") if isinstance(request.get("generation"), dict) else {}
+    visual = request.get("visual") if isinstance(request.get("visual"), dict) else {}
+    sections = payload.get("promptSections") if isinstance(payload.get("promptSections"), dict) else {}
+    if not sections and isinstance(visual.get("promptSections"), dict):
+        sections = visual["promptSections"]
+    source = {
+        "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+        "characters": _snapshot_characters(request),
+        "subject": _snapshot_text(sections.get("subject"), 12000),
+        "appearance": _snapshot_text(sections.get("appearance"), 12000),
+        "clothing": _snapshot_text(sections.get("clothing"), 12000),
+        "pose": _snapshot_text(sections.get("pose"), 12000),
+        "composition": _snapshot_text(sections.get("composition"), 12000),
+        "scene": _snapshot_text(sections.get("scene"), 12000),
+        "lighting": _snapshot_text(sections.get("lighting"), 12000),
+        "styleColoring": _snapshot_text(sections.get("style"), 12000),
+        "naturalLanguage": _snapshot_text(sections.get("naturalLanguage"), 12000),
+        "manual": _snapshot_text(sections.get("manual"), 12000),
+        "regionGlobalPrompt": _snapshot_text(
+            _snapshot_value(payload, request_generation, "regionGlobalPrompt"), 12000
+        ),
+        "negative": _snapshot_text(payload.get("negative") or request_generation.get("negative"), 32000),
+        "checkpoint": _snapshot_text(_snapshot_value(payload, request_generation, "model"), 800),
+        "vae": _snapshot_vae(payload, request_generation),
+        "loras": _snapshot_loras(payload),
+        "generation": {},
+        "regions": _snapshot_regions(payload),
+        "enhancements": _snapshot_enhancements(payload, request_generation),
+    }
+    generation_keys = (
+        "seed", "sampler", "scheduler", "steps", "cfg", "width", "height", "quality",
+        "promptMode", "safetyLevel", "mature", "regional", "illustriousMode",
+    )
+    for key in generation_keys:
+        value = _snapshot_value(payload, request_generation, key)
+        if value is None or value == "":
+            continue
+        cleaned = _snapshot_scalar(value)
+        if cleaned is not None:
+            source["generation"][key] = cleaned
+    quality_profile = payload.get("qualityProfile")
+    if isinstance(quality_profile, dict):
+        source["generation"]["qualityProfile"] = _snapshot_safe_mapping(
+            quality_profile, {"steps", "cfg", "sampler", "scheduler"}
+        )
+    profile = compiled.get("profile") if isinstance(compiled, dict) else None
+    if isinstance(profile, dict):
+        source["modelStrategy"] = _snapshot_safe_mapping(
+            profile, {"family", "name", "quality", "negative", "guidance_supported", "supports_hires"}
+        )
+    return source
+
+
+def snapshot_workflow(source_request: dict | None = None) -> dict:
+    is_rpg = isinstance(source_request, dict)
+    return {
+        "kind": "rpg" if is_rpg else "panel",
+        "operation": "rpg.generate" if is_rpg else "panel.generate",
+        "panelVersion": PANEL_VERSION,
+        "apiVersion": RPG_API_VERSION if is_rpg else None,
+        "promptCompiler": "compile_prompt",
+    }
+
+
+def _snapshot_compiled(compiled: dict) -> dict:
+    keys = (
+        "positive", "negative", "sources", "diagnostics", "automation", "sections", "triggers",
+        "profile", "sampling", "warnings", "errors", "overridden", "deduplication", "positiveTerms", "negativeTerms",
+    )
+    return {key: _snapshot_safe_value(compiled.get(key), max_text=32768)
+            for key in keys if compiled.get(key) is not None}
+
+
+def normalize_generation_snapshot(item: dict) -> dict:
+    """Return a current-schema view without rewriting legacy snapshot files."""
+    if not isinstance(item, dict):
+        return {}
+    normalized = _snapshot_json_clone(item) or {}
+    payload = normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {}
+    normalized["payload"] = payload
+    raw_compiled = item.get("compiled") if isinstance(item.get("compiled"), dict) else {}
+    try:
+        generated = compile_prompt(payload)
+    except Exception:
+        generated = {}
+    if generated:
+        generated = {**generated, "sampling": snapshot_sampling_trace(payload, generated)}
+    merged_compiled = {}
+    for key in (
+        "positive", "negative", "sources", "diagnostics", "automation", "sections", "triggers",
+        "profile", "sampling", "warnings", "errors", "overridden", "deduplication", "positiveTerms", "negativeTerms",
+    ):
+        value = raw_compiled.get(key) if key in raw_compiled else generated.get(key)
+        if value is not None:
+            merged_compiled[key] = _snapshot_safe_value(value, max_text=32768)
+    normalized["compiled"] = merged_compiled
+    raw_source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    fallback_source = build_snapshot_source(payload, compiled=generated)
+    source = {}
+    for key in (
+        "schemaVersion", "characters", *SNAPSHOT_SOURCE_SECTION_KEYS, "regionGlobalPrompt", "negative",
+        "checkpoint", "vae", "loras", "generation", "regions", "enhancements", "modelStrategy",
+    ):
+        if key in raw_source:
+            cleaned = _snapshot_safe_value(raw_source.get(key), max_text=32768)
+            if cleaned is not None:
+                source[key] = cleaned
+    for key, value in fallback_source.items():
+        if key not in source or source[key] in (None, "", [], {}):
+            source[key] = value
+    source["schemaVersion"] = SNAPSHOT_SCHEMA_VERSION
+    normalized["source"] = source
+    normalized["schemaVersion"] = SNAPSHOT_SCHEMA_VERSION
+    normalized.setdefault("workflow", snapshot_workflow())
+    if not isinstance(normalized.get("workflow"), dict):
+        normalized["workflow"] = snapshot_workflow()
+    normalized.setdefault("outputs", [])
+    if not isinstance(normalized.get("outputs"), list):
+        normalized["outputs"] = []
+    normalized["outputs"] = [Path(str(name)).name for name in normalized["outputs"] if Path(str(name)).name][:16]
+    normalized.setdefault("label", "")
+    normalized.setdefault("experiment", None)
+    return normalized
+
+
+def find_generation_snapshot(snapshot_id: str) -> dict | None:
+    wanted = str(snapshot_id or "").casefold()
+    for item in reversed(load_snapshots()):
+        if isinstance(item, dict) and str(item.get("id", "")).casefold() == wanted:
+            return normalize_generation_snapshot(item)
+    return None
+
+
+def generation_snapshot_summary(item: dict) -> dict:
+    snapshot = normalize_generation_snapshot(item)
+    source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
+    generation = source.get("generation") if isinstance(source.get("generation"), dict) else {}
+    compiled = snapshot.get("compiled") if isinstance(snapshot.get("compiled"), dict) else {}
+    prompt_sources = []
+    for entry in compiled.get("sources") or []:
+        if not isinstance(entry, dict):
+            continue
+        prompt_sources.append({
+            "key": _snapshot_text(entry.get("key"), 80),
+            "label": _snapshot_text(entry.get("label"), 160),
+            "kind": _snapshot_text(entry.get("kind"), 40),
+            "enabled": bool(entry.get("enabled", True)),
+            "termCount": len(entry.get("terms") or []) if isinstance(entry.get("terms"), list) else 0,
+        })
+    sections = [key for key in SNAPSHOT_SOURCE_SECTION_KEYS if source.get(key)]
+    return {
+        "id": _snapshot_text(snapshot.get("id"), 64),
+        "createdAt": snapshot.get("createdAt"),
+        "promptId": _snapshot_text(snapshot.get("promptId"), 64),
+        "label": _snapshot_text(snapshot.get("label"), 240),
+        "schemaVersion": snapshot.get("schemaVersion", SNAPSHOT_SCHEMA_VERSION),
+        "workflow": snapshot.get("workflow") or {},
+        "model": _snapshot_text(source.get("checkpoint"), 800),
+        "seed": generation.get("seed"),
+        "width": generation.get("width"),
+        "height": generation.get("height"),
+        "quality": _snapshot_text(generation.get("quality"), 40),
+        "loraCount": len(source.get("loras") or []),
+        "outputCount": len(snapshot.get("outputs") or []),
+        "outputs": snapshot.get("outputs") or [],
+        "characterCount": len(source.get("characters") or []),
+        "sourceSections": sections,
+        "promptSources": prompt_sources,
+    }
+
+
+def snapshot_sampling_trace(payload: dict, compiled: dict | None = None) -> dict:
+    """Explain the saved sampler values without changing any prompt text."""
+    data = payload if isinstance(payload, dict) else {}
+    profile = compiled.get("profile") if isinstance(compiled, dict) else {}
+    profile = profile if isinstance(profile, dict) else {}
+    quality_profile = data.get("qualityProfile") if isinstance(data.get("qualityProfile"), dict) else {}
+    settings = {}
+    for key in ("steps", "cfg", "sampler", "scheduler", "hiresScale", "hiresDenoise",
+                "hiresSteps", "hiresCfg", "hiresSampler", "hiresScheduler"):
+        value = data.get(key)
+        if value is not None and value != "":
+            cleaned = _snapshot_scalar(value)
+            if cleaned is not None:
+                settings[key] = cleaned
+    overridden = [key for key in ("steps", "cfg", "sampler", "scheduler")
+                  if key in settings and key in quality_profile and settings[key] != quality_profile[key]]
+    reasons = []
+    if quality_profile:
+        reasons.append({
+            "code": "quality-profile",
+            "message": "基础采样值来自保存时的模型质量策略。",
+            "quality": _snapshot_text(data.get("quality"), 40),
+            "profile": _snapshot_safe_mapping(quality_profile, {"steps", "cfg", "sampler", "scheduler"}),
+        })
+    if overridden:
+        reasons.append({
+            "code": "sampling-override",
+            "message": "这些采样项在保存请求中覆盖了质量策略。",
+            "fields": overridden,
+        })
+    reasons.append({
+        "code": "snapshot-values",
+        "message": "其余采样值来自本次快照保存的生成参数。",
+    })
+    return {
+        "model": _snapshot_text(data.get("model"), 800),
+        "quality": _snapshot_text(data.get("quality"), 40),
+        "modelFamily": _snapshot_text(profile.get("family"), 40),
+        "settings": settings,
+        "qualityProfile": _snapshot_safe_mapping(
+            quality_profile, {"steps", "cfg", "sampler", "scheduler"}
+        ),
+        "overriddenFields": overridden,
+        "reasons": reasons,
+    }
+
+
+def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: dict | None = None) -> dict:
     clean = json.loads(json.dumps(data, ensure_ascii=False))
     compiled = compile_prompt(clean)
+    compiled = {**compiled, "sampling": snapshot_sampling_trace(clean, compiled)}
     snapshot = {
         "id": uuid.uuid4().hex,
         "createdAt": int(time.time() * 1000),
+        "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
         "promptId": prompt_id,
         "outputs": [],
         "label": str((clean.get("experiment") or {}).get("label", "") or ""),
         "experiment": clean.get("experiment") or None,
         "payload": clean,
-        "compiled": {key: compiled.get(key) for key in
-                     ("positive", "negative", "sources", "diagnostics", "automation")},
+        "compiled": _snapshot_compiled(compiled),
+        "source": build_snapshot_source(clean, source_request=source_request, compiled=compiled),
+        "workflow": snapshot_workflow(source_request),
         "environment": snapshot_environment(clean),
     }
     items = load_snapshots()
@@ -3078,7 +3583,7 @@ def attach_snapshot_outputs(snapshot_id: str, outputs) -> dict:
         raise ValueError("找不到生成快照。")
     target["outputs"] = list(dict.fromkeys(names))[:16]
     write_snapshots(items)
-    return target
+    return normalize_generation_snapshot(target)
 
 
 def compare_snapshot_environment(snapshot_id: str) -> dict:
@@ -3100,7 +3605,7 @@ def compare_snapshot_environment(snapshot_id: str) -> dict:
     if original.get("panelVersion") != PANEL_VERSION:
         differences.append(f"面板版本不同：{original.get('panelVersion')} → {PANEL_VERSION}")
     return {"same": not differences, "differences": differences, "current": current,
-            "snapshot": target}
+            "snapshot": normalize_generation_snapshot(target)}
 
 
 def rpg_model_catalog() -> dict:
@@ -3155,6 +3660,84 @@ class Handler(BaseHTTPRequestHandler):
     def is_rpg_request(self):
         return urllib.parse.urlparse(self.path).path.startswith("/api/rpg/")
 
+    def is_loopback_client(self):
+        try:
+            client_address = getattr(self, "client_address", None)
+            if not client_address:
+                # Direct unit-test harnesses may call do_GET/do_POST on an
+                # uninitialized handler; there is no network peer to protect.
+                return True
+            address = ipaddress.ip_address(str(client_address[0]))
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return False
+        mapped = getattr(address, "ipv4_mapped", None)
+        return address.is_loopback or bool(mapped and mapped.is_loopback)
+
+    def rpg_session_value(self):
+        try:
+            cookies = SimpleCookie()
+            cookies.load(str(self.headers.get("Cookie", "") or ""))
+            morsel = cookies.get(RPG_SESSION_COOKIE)
+            return str(morsel.value if morsel else "").strip()
+        except Exception:
+            return ""
+
+    def rpg_header_token(self):
+        direct = str(self.headers.get("X-RPG-Token", "") or "").strip()
+        if direct:
+            return direct
+        authorization = str(self.headers.get("Authorization", "") or "").strip()
+        if authorization.lower().startswith("bearer "):
+            return authorization[7:].strip()
+        if authorization.lower().startswith("basic "):
+            encoded = authorization[6:].strip()
+            try:
+                decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                return ""
+            _username, separator, password = decoded.partition(":")
+            return password.strip() if separator else ""
+        return ""
+
+    def has_valid_rpg_header(self):
+        expected = _rpg_expected_token()
+        provided = self.rpg_header_token()
+        return bool(expected and provided and hmac.compare_digest(provided, expected))
+
+    def has_valid_rpg_session(self):
+        return _valid_rpg_session_cookie(self.rpg_session_value())
+
+    def issue_rpg_session(self):
+        if _rpg_expected_token():
+            value = _new_rpg_session_cookie_value()
+            self._rpg_session_header = (
+                f"{RPG_SESSION_COOKIE}={value}; Max-Age={RPG_SESSION_MAX_AGE}; "
+                "Path=/; HttpOnly; SameSite=Strict"
+            )
+
+    def add_rpg_session_header(self):
+        cookie = str(getattr(self, "_rpg_session_header", "") or "")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+
+    def send_auth_error(self, message: str, status=HTTPStatus.UNAUTHORIZED):
+        self.send_json({"error": message}, status, auth_challenge=status == HTTPStatus.UNAUTHORIZED)
+
+    def require_panel_auth(self):
+        """Protect the legacy panel API while preserving local desktop access."""
+        if self.is_loopback_client():
+            return True
+        if not _rpg_expected_token():
+            self.send_auth_error("远程面板未配置访问 Token。", HTTPStatus.SERVICE_UNAVAILABLE)
+            return False
+        if self.has_valid_rpg_session():
+            return True
+        if self.has_valid_rpg_header():
+            self.issue_rpg_session()
+            return True
+        self.send_auth_error("需要 Easy Panel Token 才能访问远程面板。")
+        return False
+
     def add_rpg_cors_headers(self):
         if self.is_rpg_request():
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -3162,27 +3745,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
     def rpg_token_value(self):
-        direct = str(self.headers.get("X-RPG-Token", "") or "").strip()
-        if direct:
-            return direct
-        authorization = str(self.headers.get("Authorization", "") or "").strip()
-        if authorization.lower().startswith("bearer "):
-            return authorization[7:].strip()
-        return ""
+        return self.rpg_header_token()
 
     def require_rpg_auth(self):
-        if check_rpg_token(self.rpg_token_value()):
+        if not _rpg_expected_token():
+            if self.is_loopback_client():
+                return True
+            self.send_auth_error("远程 RPG API 未配置访问 Token。", HTTPStatus.SERVICE_UNAVAILABLE)
+            return False
+        if self.has_valid_rpg_session():
             return True
-        self.send_json({"error": "RPG API Token 不正确。"}, HTTPStatus.UNAUTHORIZED)
+        if self.has_valid_rpg_header():
+            self.issue_rpg_session()
+            return True
+        self.send_auth_error("RPG API Token 不正确。")
         return False
 
-    def send_json(self, body: dict, status=HTTPStatus.OK):
+    def send_json(self, body: dict, status=HTTPStatus.OK, auth_challenge=False):
         encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.add_rpg_cors_headers()
+            if auth_challenge:
+                self.send_header("WWW-Authenticate", 'Basic realm="Easy Panel", charset="UTF-8"')
+            self.add_rpg_session_header()
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -3215,6 +3803,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store, max-age=0")
         self.send_header("Connection", "keep-alive")
+        self.add_rpg_session_header()
         self.end_headers()
 
         async def relay():
@@ -3248,6 +3837,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         try:
+            if (parsed.path == "/" or parsed.path == "/output"
+                    or (parsed.path.startswith("/api/")
+                        and not parsed.path.startswith("/api/rpg/"))):
+                if not self.require_panel_auth():
+                    return
             if parsed.path == "/api/shared-state":
                 state, recovered = SHARED_STATE_STORE.read_with_metadata()
                 self.send_json({"ok": True, "state": state, "recovered": recovered})
@@ -3271,6 +3865,31 @@ class Handler(BaseHTTPRequestHandler):
                     "regional_two_character": True,
                     "poll_interval_ms": int(profiles.get("defaults", {}).get("pollIntervalMs", 1800)),
                     "limits": {"characters_per_scene": 6, "width": [512, 1920], "height": [512, 1920]},
+                })
+            elif parsed.path == "/api/rpg/snapshots":
+                if not self.require_rpg_auth():
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                limit = bounded(query.get("limit", [20])[0], 20, 1, 50)
+                items = load_snapshots()
+                summaries = [generation_snapshot_summary(item) for item in reversed(items[-limit:])]
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "schema_version": SNAPSHOT_SCHEMA_VERSION,
+                    "snapshots": summaries,
+                })
+            elif re.fullmatch(r"/api/rpg/snapshots/[0-9a-fA-F]{32}", parsed.path):
+                if not self.require_rpg_auth():
+                    return
+                snapshot_id = parsed.path.rsplit("/", 1)[-1]
+                snapshot = find_generation_snapshot(snapshot_id)
+                if snapshot is None:
+                    self.send_json({"error": "没有找到该生成快照。"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "schema_version": SNAPSHOT_SCHEMA_VERSION,
+                    "snapshot": snapshot,
                 })
             elif re.fullmatch(r"/api/rpg/jobs/by-request/[0-9A-Za-z_-]{1,48}", parsed.path):
                 if not self.require_rpg_auth():
@@ -3314,6 +3933,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
                 self.send_header("Cache-Control", "private, max-age=86400")
                 self.add_rpg_cors_headers()
+                self.add_rpg_session_header()
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
@@ -3322,6 +3942,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store, max-age=0")
+                self.add_rpg_session_header()
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
@@ -3443,7 +4064,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"entries": list_output_images()})
             elif parsed.path == "/api/snapshots":
                 items = load_snapshots()
-                self.send_json({"entries": list(reversed(items[-200:]))})
+                self.send_json({"entries": [normalize_generation_snapshot(item)
+                                             for item in reversed(items[-200:])]})
             elif parsed.path == "/api/snapshot-compare":
                 snapshot_id = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
                 if not re.fullmatch(r"[0-9a-f]{32}", snapshot_id):
@@ -3464,6 +4086,7 @@ class Handler(BaseHTTPRequestHandler):
                 content = file.read_bytes()
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                self.add_rpg_session_header()
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
@@ -3480,6 +4103,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/profiles", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
             return
         if path.startswith("/api/rpg/") and not self.require_rpg_auth():
             return
@@ -3535,7 +4160,7 @@ class Handler(BaseHTTPRequestHandler):
                 prompt_id = str(result.get("prompt_id") or "")
                 if not re.fullmatch(r"[0-9a-fA-F-]{36}", prompt_id):
                     raise ValueError("ComfyUI 没有返回有效的任务编号。")
-                snapshot = create_generation_snapshot(payload, prompt_id)
+                snapshot = create_generation_snapshot(payload, prompt_id, source_request=data)
                 record_rpg_job(prompt_id, data, payload, snapshot["id"])
                 self.send_json({
                     "api_version": RPG_API_VERSION,
@@ -3567,6 +4192,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Cache-Control", "no-store, max-age=0")
+                self.add_rpg_session_header()
                 self.send_header("Content-Length", str(len(rendered)))
                 self.end_headers()
                 self.wfile.write(rendered)

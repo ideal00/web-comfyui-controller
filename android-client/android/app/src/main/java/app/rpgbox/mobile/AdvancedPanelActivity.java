@@ -1,6 +1,8 @@
 package app.rpgbox.mobile;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
@@ -44,12 +46,17 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Native container for the computer's full Easy Panel web UI. */
 @SuppressWarnings("deprecation")
 public class AdvancedPanelActivity extends Activity {
 
     public static final String EXTRA_URL = "easy_panel_url";
+    public static final String EXTRA_TOKEN = "easy_panel_token";
+    static final int MAX_PANEL_TOKEN_LENGTH = 4096;
+    private static final int MAX_CLIPBOARD_TEXT_LENGTH = 65536;
     private static final int FILE_CHOOSER_REQUEST = 4101;
     private static final int DOWNLOAD_PERMISSION_REQUEST = 4102;
 
@@ -59,6 +66,7 @@ public class AdvancedPanelActivity extends Activity {
     private TextView errorMessage;
     private TextView titleView;
     private String panelUrl;
+    private String panelToken;
     private String panelScheme;
     private String panelHost;
     private int panelPort;
@@ -74,6 +82,14 @@ public class AdvancedPanelActivity extends Activity {
         getWindow().setNavigationBarColor(Color.rgb(11, 18, 21));
 
         panelUrl = getIntent().getStringExtra(EXTRA_URL);
+        panelToken = getIntent().getStringExtra(EXTRA_TOKEN);
+        if (panelToken == null) panelToken = "";
+        panelToken = panelToken.trim();
+        if (panelToken.length() > MAX_PANEL_TOKEN_LENGTH) {
+            Toast.makeText(this, "高级面板 Token 无效", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
         if (!isSafePanelUrl(panelUrl)) {
             Toast.makeText(this, "高级面板地址无效", Toast.LENGTH_LONG).show();
             finish();
@@ -89,7 +105,7 @@ public class AdvancedPanelActivity extends Activity {
         if (savedInstanceState != null && webView.restoreState(savedInstanceState) != null) {
             return;
         }
-        webView.loadUrl(panelUrl);
+        loadPanelUrl();
     }
 
     static boolean isSafePanelUrl(String rawUrl) {
@@ -144,7 +160,7 @@ public class AdvancedPanelActivity extends Activity {
 
         Button refresh = toolbarButton("↻");
         refresh.setContentDescription("刷新高级面板");
-        refresh.setOnClickListener(view -> webView.reload());
+        refresh.setOnClickListener(view -> loadPanelUrl());
         toolbar.addView(refresh, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT));
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -200,12 +216,23 @@ public class AdvancedPanelActivity extends Activity {
 
         Button retry = toolbarButton("重新加载");
         retry.setContentDescription("重新加载高级面板");
-        retry.setOnClickListener(view -> webView.reload());
+        retry.setOnClickListener(view -> loadPanelUrl());
         LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, dp(46));
         retryParams.gravity = Gravity.CENTER;
         panel.addView(retry, retryParams);
         return panel;
+    }
+
+    private void loadPanelUrl() {
+        if (webView == null || panelUrl == null) return;
+        if (panelToken == null || panelToken.isEmpty()) {
+            webView.loadUrl(panelUrl);
+            return;
+        }
+        Map<String, String> headers = new HashMap<>();
+        headers.put("X-RPG-Token", panelToken);
+        webView.loadUrl(panelUrl, headers);
     }
 
     private Button toolbarButton(String label) {
@@ -301,6 +328,7 @@ public class AdvancedPanelActivity extends Activity {
         });
 
         webView.addJavascriptInterface(new DownloadBridge(), "EasyPanelDownload");
+        webView.addJavascriptInterface(new ClipboardBridge(), "EasyPanelClipboard");
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -472,7 +500,7 @@ public class AdvancedPanelActivity extends Activity {
         try {
             cookie = DownloadSupport.safeHeaderValue(CookieManager.getInstance().getCookie(spec.url), 8192);
         } catch (Exception ignored) {
-            // A missing cookie is valid for the public Easy Panel output route.
+            // The protected Easy Panel route will reject a missing session cookie.
         }
         final DownloadSpec request = new DownloadSpec(
             spec.url,
@@ -845,6 +873,23 @@ public class AdvancedPanelActivity extends Activity {
         @JavascriptInterface
         public void saveBase64(String filename, String mimeType, String base64) {
             saveJavascriptDownload(filename, mimeType, base64);
+        }
+    }
+
+    /** Minimal, origin-checked bridge for page actions that need system clipboard access. */
+    private final class ClipboardBridge {
+        @JavascriptInterface
+        public boolean copyText(String text) {
+            if (!isTrustedBridgePage() || text == null || text.isEmpty()
+                || text.length() > MAX_CLIPBOARD_TEXT_LENGTH) return false;
+            try {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (clipboard == null) return false;
+                clipboard.setPrimaryClip(ClipData.newPlainText("Easy Panel", text));
+                return true;
+            } catch (Exception ignored) {
+                return false;
+            }
         }
     }
 

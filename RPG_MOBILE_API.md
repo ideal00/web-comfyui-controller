@@ -2,6 +2,8 @@
 
 Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Panel `8190`，Easy Panel 再在电脑本机访问 ComfyUI `8188`。
 
+当前配套版本：Easy Panel 服务端 `2.1.0`，Android 客户端 `mobile-v1.3.0`（versionCode `1003000`）。协议仍为 RPG API v2。
+
 ## 1. 启动手机模式
 
 运行：
@@ -28,6 +30,8 @@ Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Pane
 也支持：
 
 `Authorization: Bearer <token>`
+
+远程访问 Easy Panel 的完整网页、旧版 `/api/*`、快照详情/对比和 `/output` 也需要同一个 Token。桌面浏览器第一次收到 HTTP Basic 鉴权挑战后，可将 Token 填入密码完成会话；服务器只返回短时 HttpOnly、签名 Cookie。Android 高级 WebView 只在首次根页面请求通过原生 `X-RPG-Token` 请求头引导该会话，Token 不会出现在 URL、网页 JavaScript 或 localStorage 中。局域网/ Tailscale 仍建议只在私网内开放 8190。
 
 ## 3. 连通性
 
@@ -227,3 +231,10 @@ Easy Panel 会调用项目现有的 Regional Prompting 路线，把两名角色�
 - 图片 URL 会保留 ComfyUI `subfolder`，输出到子目录也能下载。
 - 图片下载会验证最终路径仍位于 ComfyUI output 目录内，阻止目录穿越。
 - 附带 `rpgbox_mobile_sdk/`，可直接复制进 RPGBox React/Capacitor 项目。
+
+## 10. 生成快照与恢复
+
+- `/api/rpg/snapshots` 只返回摘要；`/api/rpg/snapshots/{id}` 在鉴权后返回完整可恢复记录。
+- Web 完整面板的 `/api/snapshots`、`/api/snapshot-compare` 和 `/output` 也受面板鉴权保护，不能通过无 Token 的远程请求读取完整提示词、生成参数或图片。
+- Android 的“完整恢复”会附加服务器记录的 LoRA、采样、区域和增强配置；“只换 Seed”只改 Seed；“继续编辑”保留该附加配置并允许修改当前可见字段。
+- Android 点击“解除快照高级配置 / 转为普通生图”后，仅提交当前可见的普通生图字段，不再隐式带上旧快照高级参数。

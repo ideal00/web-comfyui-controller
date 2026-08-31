@@ -57,6 +57,21 @@ export interface VisualGenerationSettings {
   hiresCfg?: number
   hiresSampler?: string
   hiresScheduler?: string
+  loras?: Array<{ name: string; weight?: number | string }>
+  characterLoras?: Array<{ name: string; weight?: number | string }>
+  styleLoras?: Array<{ name: string; weight?: number | string }>
+  styleFamily?: string
+  illustriousMode?: string
+  guidance?: Record<string, unknown>
+  vae?: Record<string, unknown>
+  modelEnhancement?: Record<string, unknown>
+  transparentBackground?: Record<string, unknown>
+  colorCorrection?: Record<string, unknown>
+  outputEnhancement?: Record<string, unknown>
+  repair?: Record<string, unknown>
+  img2img?: Record<string, unknown>
+  pose?: Record<string, unknown>
+  depth?: Record<string, unknown>
 }
 
 export interface VisualGenerateRequest {
@@ -155,7 +170,7 @@ function requestHeaders(token: string, json = false): Record<string, string> {
   return result
 }
 
-async function jsonRequest<T>(config: EasyPanelVisualConfig, path: string, init: RequestInit = {}): Promise<T> {
+export async function jsonRequest<T>(config: EasyPanelVisualConfig, path: string, init: RequestInit = {}): Promise<T> {
   const baseUrl = normalizeEasyPanelBaseUrl(config.baseUrl)
   const response = await fetchWithTimeout(baseUrl + path, {
       ...init,
