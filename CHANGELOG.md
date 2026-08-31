@@ -1,5 +1,12 @@
 # Easy Panel 更新记录
 
+## Easy Panel 服务端 2.2.2 + Android 客户端 mobile-v1.4.2（2026-08-31）
+
+- Creative Library Foundation 使用可重建的稳定 generation / artifact ID；保留安全但缺失的输出引用并阻止图片接口提供缺失文件。
+- 提供历史随机 ID 的迁移 dry-run、备份、原子应用和回滚工具；本次部署前会先对正式数据库做只读预检。
+- Web / Android 作品恢复只记录一次性父作品关系；多图提交共享本次关系，恢复不会自动选择具体输出作为图生图 / 重绘输入。
+- Android versionCode 升级为 `1004002`；当前仅生成本地 Debug 验收包，未发布 GitHub Release。
+
 ## Easy Panel 服务端 2.2.1 + Android 客户端 mobile-v1.4.1（2026-08-31）
 
 - 修复旧 `generation_snapshots.json` / `rpg_jobs.json` 迁移：已有 `outputs`、`images` 或 `artifacts` 的记录现在显示为 `completed`，不会再因缺少显式 status 被误标为 `queued`。

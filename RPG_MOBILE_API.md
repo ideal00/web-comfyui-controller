@@ -2,7 +2,7 @@
 
 Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Panel `8190`，Easy Panel 再在电脑本机访问 ComfyUI `8188`。
 
-当前配套版本：Easy Panel 服务端 `2.2.1`，Android 客户端 `mobile-v1.4.1`（versionCode `1004001`）。协议仍为 RPG API v2。
+当前配套版本：Easy Panel 服务端 `2.2.2`，Android 客户端 `mobile-v1.4.2`（versionCode `1004002`）。协议仍为 RPG API v2。
 
 ## 1. 启动手机模式
 

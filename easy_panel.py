@@ -488,7 +488,7 @@ PROMPT_SECTION_LABELS = {
 }
 MATURE_NEGATIVE_TERMS = ("nsfw", "nude", "nudity", "explicit", "sex", "sexual",
                          "porn", "hentai", "uncensored")
-PANEL_VERSION = "2.2.1"
+PANEL_VERSION = "2.2.2"
 SNAPSHOT_FILE = PROJECT_DIR / "generation_snapshots.json"
 SNAPSHOT_SCHEMA_VERSION = 2
 SNAPSHOT_SOURCE_SECTION_KEYS = (

@@ -175,8 +175,8 @@ test('desktop HTML contains the isolated Library entry, dialog, and script after
   assert.match(html, /id="creativeLibraryDialog"/)
   assert.match(html, /id="creativeLibraryFilters"/)
   assert.match(html, /id="creativeLibraryDetail"/)
-  assert.match(html, /snapshot-flow\.js\?v=1[\s\S]*creative-library\.js\?v=3/)
-  assert.match(html, /panel\.css\?v=39/)
+  assert.match(html, /snapshot-flow\.js\?v=1[\s\S]*creative-library\.js\?v=4/)
+  assert.match(html, /panel\.css\?v=40/)
   assert.match(html, /id="pendingDerivation"/)
 })
 

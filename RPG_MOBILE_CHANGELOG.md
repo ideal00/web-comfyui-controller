@@ -1,5 +1,11 @@
 # RPG Mobile Bridge 修改说明
 
+## mobile-v1.4.2（2026-08-31）
+
+- Android versionCode 升级为 `1004002`，配套 Easy Panel 服务端 `2.2.2`。
+- 作品库恢复不会自动选择具体输出作为编辑输入；多图显式提交共享同一次父作品关系，下一次点击不会继承旧关系。
+- 当前只提供本地 Debug 验收构建，未发布 GitHub Release。
+
 ## mobile-v1.4.1（2026-08-31）
 
 - Android versionCode 升级为 `1004001`，配套 Easy Panel 服务端 `2.2.1`。
