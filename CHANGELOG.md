@@ -1,5 +1,11 @@
 # Easy Panel 更新记录
 
+## Android 客户端 mobile-v1.4.3（2026-08-31）
+
+- 作品库详情支持点击缩略图查看带鉴权读取的原图，并可在原图预览层下载。
+- 作品库新增加载更多分页，可继续浏览最近 30 条之外的历史作品；服务端仍兼容 `2.2.2`。
+- 本地生成 Debug APK，未推送仓库或发布 GitHub Release。
+
 ## Easy Panel 服务端 2.2.2 + Android 客户端 mobile-v1.4.2（2026-08-31）
 
 - Creative Library Foundation 使用可重建的稳定 generation / artifact ID；保留安全但缺失的输出引用并阻止图片接口提供缺失文件。

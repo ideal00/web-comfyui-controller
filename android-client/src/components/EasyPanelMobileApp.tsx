@@ -1,10 +1,10 @@
-import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
 import { useEasyPanelController } from '../hooks/useEasyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
-import type { EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
+import type { EasyPanelGenerationArtifact, EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
 
 export default function EasyPanelMobileApp() {
   const controller = useEasyPanelController()
@@ -447,6 +447,69 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
   onClose: () => void
 }) {
   const detail = controller.libraryDetail
+  const [viewerArtifact, setViewerArtifact] = useState<EasyPanelGenerationArtifact>()
+  const [viewerSource, setViewerSource] = useState('')
+  const [viewerLoading, setViewerLoading] = useState(false)
+  const [viewerError, setViewerError] = useState('')
+  const viewerRequestRef = useRef(0)
+  const viewerSourceRef = useRef('')
+
+  useEffect(() => () => {
+    viewerRequestRef.current += 1
+    if (viewerSourceRef.current) URL.revokeObjectURL(viewerSourceRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (!viewerArtifact) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeViewer()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [viewerArtifact])
+
+  function clearViewerSource() {
+    if (viewerSourceRef.current) URL.revokeObjectURL(viewerSourceRef.current)
+    viewerSourceRef.current = ''
+    setViewerSource('')
+  }
+
+  function closeViewer() {
+    viewerRequestRef.current += 1
+    clearViewerSource()
+    setViewerArtifact(undefined)
+    setViewerLoading(false)
+    setViewerError('')
+  }
+
+  async function openOriginal(artifact: EasyPanelGenerationArtifact) {
+    if (!artifact.url || artifact.exists === false || viewerLoading) return
+    const requestNumber = viewerRequestRef.current + 1
+    viewerRequestRef.current = requestNumber
+    clearViewerSource()
+    setViewerArtifact(artifact)
+    setViewerLoading(true)
+    setViewerError('')
+    try {
+      const blob = await controller.loadLibraryArtifactPreview(artifact)
+      const source = URL.createObjectURL(blob)
+      if (viewerRequestRef.current !== requestNumber) {
+        URL.revokeObjectURL(source)
+        return
+      }
+      viewerSourceRef.current = source
+      setViewerSource(source)
+    } catch (caught) {
+      if (viewerRequestRef.current === requestNumber) {
+        setViewerError(caught instanceof Error ? caught.message : '原图读取失败，请稍后重试。')
+      }
+    } finally {
+      if (viewerRequestRef.current === requestNumber) setViewerLoading(false)
+    }
+  }
 
   async function restore(mode: 'reproduce' | 'seed-variant' | 'continue-edit') {
     const restored = await controller.restoreLibraryGeneration(mode)
@@ -470,31 +533,48 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           lineage={controller.libraryLineage}
           thumbnailSource={controller.libraryThumbnailSources[detail.generation_id]}
           downloadLoading={controller.libraryDownloadLoading}
+          previewLoading={viewerLoading ? viewerArtifact?.artifact_id || '' : ''}
           onBack={controller.clearLibraryDetail}
           onRestore={restore}
+          onPreview={(artifact) => void openOriginal(artifact)}
           onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
         /> : <LibraryList
           items={controller.library}
           thumbnailSources={controller.libraryThumbnailSources}
+          total={controller.libraryTotal}
+          hasMore={controller.libraryHasMore}
           loading={controller.libraryLoading}
           error={controller.libraryError}
           message={controller.libraryMessage}
           onRefresh={() => void controller.refreshLibrary()}
+          onLoadMore={() => void controller.loadMoreLibrary()}
           onOpen={(id) => void controller.openLibraryGeneration(id)}
         />}
         {controller.libraryDownloadMessage && <p className={`epm-library-message ${controller.libraryDownloadMessage.includes('失败') ? 'failure' : 'success'}`} role="status">{controller.libraryDownloadMessage}</p>}
       </section>
+      {viewerArtifact && <LibraryImageViewer
+        artifact={viewerArtifact}
+        source={viewerSource}
+        loading={viewerLoading}
+        error={viewerError}
+        downloadLoading={controller.libraryDownloadLoading}
+        onClose={closeViewer}
+        onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
+      />}
     </div>
   )
 }
 
-function LibraryList({ items, thumbnailSources, loading, error, message, onRefresh, onOpen }: {
+function LibraryList({ items, thumbnailSources, total, hasMore, loading, error, message, onRefresh, onLoadMore, onOpen }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
+  total: number
+  hasMore: boolean
   loading: boolean
   error: string
   message: string
   onRefresh: () => void
+  onLoadMore: () => void
   onOpen: (id: string) => void
 }) {
   return (
@@ -506,33 +586,43 @@ function LibraryList({ items, thumbnailSources, loading, error, message, onRefre
         </button>
       </div>
       {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
-      {items.length ? <div className="epm-library-list">
-        {items.map((item) => <button type="button" className="epm-library-item" key={item.generation_id} onClick={() => onOpen(item.generation_id)}>
-          <div className="epm-library-thumb">
-            {thumbnailSources[item.generation_id]
-              ? <img src={thumbnailSources[item.generation_id]} alt="" />
-              : <ImageIcon size={24} />}
-          </div>
-          <div className="epm-library-item-copy">
-            <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
-            <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
-            <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
-          </div>
-        </button>)}
-      </div> : <div className="epm-library-empty"><BookOpen size={28} /><strong>暂无作品记录</strong><span>新任务完成后会进入作品库；也可在电脑端执行重建索引。</span></div>}
+      {items.length ? <>
+        <div className="epm-library-list">
+          {items.map((item) => <button type="button" className="epm-library-item" key={item.generation_id} onClick={() => onOpen(item.generation_id)}>
+            <div className="epm-library-thumb">
+              {thumbnailSources[item.generation_id]
+                ? <img src={thumbnailSources[item.generation_id]} alt="" />
+                : <ImageIcon size={24} />}
+            </div>
+            <div className="epm-library-item-copy">
+              <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
+              <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
+              <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
+            </div>
+          </button>)}
+        </div>
+        {hasMore && <button type="button" className="epm-library-load-more" onClick={onLoadMore} disabled={loading}>
+          {loading ? <LoaderCircle size={15} className="epm-spin" /> : <ChevronDown size={15} />}
+          {loading ? '正在读取…' : `加载更多${total > items.length ? `（还剩 ${total - items.length} 张）` : ''}`}
+        </button>}
+      </> : <div className="epm-library-empty"><BookOpen size={28} /><strong>暂无作品记录</strong><span>新任务完成后会进入作品库；也可在电脑端执行重建索引。</span></div>}
     </div>
   )
 }
 
-function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBack, onRestore, onDownload }: {
+function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload }: {
   detail: EasyPanelGenerationDetail
   lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
   thumbnailSource?: string
   downloadLoading: string
+  previewLoading: string
   onBack: () => void
   onRestore: (mode: 'reproduce' | 'seed-variant' | 'continue-edit') => void
+  onPreview: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
   onDownload: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
 }) {
+  const previewArtifact = detail.artifacts.find((artifact) => artifact.exists !== false && Boolean(artifact.url))
+
   return (
     <div className="epm-library-content">
       <div className="epm-library-detail-toolbar">
@@ -540,9 +630,10 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBa
         <span>{libraryOperationLabel(detail.operation)} · {libraryStatusLabel(detail.status)}</span>
       </div>
       <div className="epm-library-detail-grid">
-        <div className="epm-library-detail-preview">
-          {thumbnailSource ? <img src={thumbnailSource} alt="作品缩略图" /> : <ImageIcon size={34} />}
-        </div>
+        {previewArtifact ? <button type="button" className="epm-library-detail-preview" onClick={() => onPreview(previewArtifact)} aria-label="点击查看原图">
+          {thumbnailSource ? <img src={thumbnailSource} alt="作品缩略图，点击查看原图" /> : <ImageIcon size={34} />}
+          <span>{previewLoading === previewArtifact.artifact_id ? <LoaderCircle size={13} className="epm-spin" /> : <Maximize2 size={13} />}点击查看原图</span>
+        </button> : <div className="epm-library-detail-preview"><ImageIcon size={34} /></div>}
         <div className="epm-library-detail-copy">
           <h3>{detail.model || '自动模型'}</h3>
           <p>{formatLibraryTime(detail.created_at)} · seed {detail.seed == null ? '?' : String(detail.seed)}</p>
@@ -580,6 +671,43 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBa
         <h3>提示词预览</h3>
         <pre className="epm-library-prompt">{promptPreview(detail.replay?.payload)}</pre>
         <span className="epm-library-muted">{detail.replay?.note || '只读预览'}</span>
+      </section>
+    </div>
+  )
+}
+
+function LibraryImageViewer({ artifact, source, loading, error, downloadLoading, onClose, onDownload }: {
+  artifact: EasyPanelGenerationArtifact
+  source: string
+  loading: boolean
+  error: string
+  downloadLoading: string
+  onClose: () => void
+  onDownload: (artifact: EasyPanelGenerationArtifact) => void
+}) {
+  return (
+    <div className="epm-library-viewer-layer" role="dialog" aria-modal="true" aria-label="原图预览">
+      <button type="button" className="epm-library-viewer-backdrop" onClick={onClose} aria-label="关闭原图预览" />
+      <section className="epm-library-viewer">
+        <header className="epm-library-viewer-header">
+          <div>
+            <span className="epm-section-kicker">ORIGINAL IMAGE</span>
+            <strong>原图预览</strong>
+            <small>{artifact.filename}</small>
+          </div>
+          <button type="button" className="epm-library-close" onClick={onClose} title="关闭"><X size={20} /></button>
+        </header>
+        <div className="epm-library-viewer-viewport">
+          {loading ? <div className="epm-library-viewer-state"><LoaderCircle size={28} className="epm-spin" /><span>正在读取原图…</span></div>
+            : source ? <img src={source} alt={artifact.filename || '作品原图'} draggable={false} />
+              : <div className="epm-library-viewer-state"><ImageIcon size={28} /><span>{error || '原图暂不可用'}</span></div>}
+        </div>
+        <footer className="epm-library-viewer-footer">
+          <span>{source ? '已加载输出文件原图，可双指缩放查看细节。' : '原图加载失败。'}</span>
+          {source && <button type="button" className="epm-secondary-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={Boolean(downloadLoading)}>
+            {downloadLoading === artifact.artifact_id ? <LoaderCircle size={14} className="epm-spin" /> : <Download size={14} />}下载原图
+          </button>}
+        </footer>
       </section>
     </div>
   )

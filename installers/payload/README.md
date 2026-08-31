@@ -9,7 +9,7 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 ## 当前版本
 
 - Easy Panel 服务端：`2.2.2`。
-- Android 客户端：`mobile-v1.4.2`（versionCode `1004002`）。
+- Android 客户端：`mobile-v1.4.3`（versionCode `1004003`）。
 - 本版本完善 Creative Library Foundation 的可重建稳定 ID、安全缺失输出引用、历史随机 ID 迁移预检，以及 Web / Android 一次性父作品派生关系；恢复不会自动选择具体输出作为编辑输入。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
