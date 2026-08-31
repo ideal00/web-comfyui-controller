@@ -170,6 +170,53 @@ class CreativeLibraryApiTests(unittest.TestCase):
             self.assertEqual([output_name], [item["filename"] for item in recovered["artifacts"]])
             self.assertEqual([output_name], json.loads(snapshot_path.read_text(encoding="utf-8"))[0]["outputs"])
 
+    def test_rpg_prompt_instruction_is_authenticated_and_model_aware(self):
+        with patch.dict(os.environ, {"EASY_PANEL_RPG_TOKEN": "prompt-token"}, clear=False):
+            server = easy_panel.ThreadingHTTPServer(("127.0.0.1", 0), easy_panel.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address
+
+                def request(headers=None, body=None):
+                    connection = http.client.HTTPConnection(host, port, timeout=5)
+                    connection.request(
+                        "POST",
+                        "/api/rpg/prompt-instruction",
+                        body=body,
+                        headers={"Content-Type": "application/json", **(headers or {})},
+                    )
+                    response = connection.getresponse()
+                    data = response.read()
+                    status = response.status
+                    connection.close()
+                    return status, data
+
+                status, body = request(body=json.dumps({"text": "黄昏的书店"}).encode("utf-8"))
+                self.assertEqual(401, status)
+                self.assertNotIn("黄昏的书店".encode("utf-8"), body)
+
+                status, body = request(
+                    {"X-RPG-Token": "prompt-token"},
+                    json.dumps({
+                        "text": "黄昏的书店，窗边暖光",
+                        "model": "IllustriousXL.safetensors",
+                        "safetyLevel": "safe",
+                    }, ensure_ascii=False).encode("utf-8"),
+                )
+                self.assertEqual(200, status)
+                payload = json.loads(body.decode("utf-8"))
+                self.assertEqual("illustrious", payload["family"])
+                self.assertIn("Illustrious 标签为主", payload["family_label"])
+                self.assertIn("当前检查点：IllustriousXL.safetensors", payload["instruction"])
+                self.assertIn("黄昏的书店，窗边暖光", payload["instruction"])
+                self.assertIn("POSITIVE:", payload["instruction"])
+                self.assertIn("NEGATIVE:", payload["instruction"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
     def test_library_is_read_only_paginated_and_uses_existing_rpg_auth(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

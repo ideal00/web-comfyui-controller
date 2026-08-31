@@ -1,6 +1,9 @@
 /// <reference types="vite/client" />
 
 interface Window {
+  EasyPanelClipboard?: {
+    copyText(value: string): boolean
+  }
   rpgboxDesktop?: {
     platform: 'desktop'
     version: string

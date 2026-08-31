@@ -2,7 +2,7 @@
 
 Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Panel `8190`，Easy Panel 再在电脑本机访问 ComfyUI `8188`。
 
-当前配套版本：Easy Panel 服务端 `2.2.2`，Android 客户端 `mobile-v1.4.4`（versionCode `1004004`）。协议仍为 RPG API v2。
+当前配套版本：Easy Panel 服务端 `2.2.2`，Android 客户端 `mobile-v1.4.5`（versionCode `1004005`）。协议仍为 RPG API v2。
 
 ## 1. 启动手机模式
 
@@ -62,6 +62,20 @@ Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Pane
 ### GET `/api/rpg/models`
 
 返回 Easy Panel 当前实际可用的 Checkpoint、Anima、Krea 2 模型。
+
+### POST `/api/rpg/prompt-instruction`
+
+为快速生图的中文描述生成可复制给 DeepSeek 的模型族适配指令。接口会使用请求中的 `model` 对应模型；如果 `model` 为空，则按 Easy Panel 的默认模型选择规则解析实际 Checkpoint。请求需要 RPG Token：
+
+```json
+{
+  "text": "黄昏时安静的书店，窗边暖光，一位金发女孩正在看书",
+  "model": "waiIllustriousSDXL_v140.safetensors",
+  "safetyLevel": "safe"
+}
+```
+
+返回 `family`、实际 `model`、`family_label` 和 `instruction`。`instruction` 固定要求 AI 返回 `POSITIVE:` / `NEGATIVE:` 两行；Anima、Illustrious、SDXL 和 Krea 2 分别使用各自的标签或自然语言规则。该接口只生成转换指令，不会提交生图任务。
 
 ### GET `/api/rpg/profiles`
 

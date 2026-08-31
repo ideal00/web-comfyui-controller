@@ -3,6 +3,7 @@ import {
   createVisualRequestId,
   EasyPanelHttpError,
   getEasyPanelCapabilities,
+  getEasyPanelPromptInstruction,
   normalizeEasyPanelBaseUrl,
   pingEasyPanel,
   recoverVisualJob,
@@ -71,6 +72,32 @@ describe('Easy Panel connection checks', () => {
       .resolves.toMatchObject({ job_id: 'job-1', status: 'running' })
     expect(fetchMock.mock.calls[0][0]).toBe('http://desktop.tailnet-name.ts.net:8190/api/rpg/jobs/by-request/easy_panel_mobile_abc')
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ headers: { 'X-RPG-Token': 'token-content' } })
+  })
+
+  it('requests a model-aware prompt instruction through the RPG API', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        api_version: 2,
+        model: 'IllustriousXL.safetensors',
+        family: 'illustrious',
+        family_label: 'Illustrious 标签为主',
+        safety_level: 'safe',
+        instruction: 'POSITIVE: ...\nNEGATIVE: ...',
+      }), { status: 200 }),
+    )
+
+    await expect(getEasyPanelPromptInstruction(
+      { baseUrl: 'http://desktop:8190', token: 'token-content' },
+      '黄昏的书店',
+      'IllustriousXL.safetensors',
+    )).resolves.toMatchObject({ family: 'illustrious', model: 'IllustriousXL.safetensors' })
+    expect(fetchMock.mock.calls[0][0]).toBe('http://desktop:8190/api/rpg/prompt-instruction')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ headers: { 'X-RPG-Token': 'token-content' } })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      text: '黄昏的书店',
+      model: 'IllustriousXL.safetensors',
+      safetyLevel: 'safe',
+    })
   })
 
   it('turns a stalled network request into a clear timeout error', async () => {

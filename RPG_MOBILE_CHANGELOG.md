@@ -1,5 +1,12 @@
 # RPG Mobile Bridge 修改说明
 
+## mobile-v1.4.5（2026-08-31）
+
+- 快速生图新增中文描述转换：复用桌面高级面板的 DeepSeek 指令格式，并由服务端根据当前 Checkpoint 解析 Anima、Illustrious、SDXL 或 Krea 2 模型族规则。
+- 手机支持复制/打开 DeepSeek、读取或粘贴 `POSITIVE` / `NEGATIVE` 回答，检查后分别加入快速页的正向和负向提示词；转换过程不会自动提交生图。
+- 历史快照区域默认收起，点击标题展开；刷新与恢复功能保持不变。
+- Android versionCode 升级为 `1005005`，配套 Easy Panel 服务端 `2.2.2`；仅生成本地 Debug APK，未推送仓库或发布 GitHub Release。
+
 ## mobile-v1.4.4（2026-08-31）
 
 - 作品库列表不再一次性并发下载整页原图：首屏先加载前 6 张，滚动到可视区域再加入队列，最多 3 个缩略图并发。

@@ -1,9 +1,11 @@
-import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
+import { appendPromptText, parsePromptTranslation, type ParsedPromptTranslation } from '../lib/promptTranslation'
 import { useEasyPanelController } from '../hooks/useEasyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
+import { getEasyPanelPromptInstruction } from '../services/easyPanelVisual'
 import type { EasyPanelGenerationArtifact, EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
 
 export default function EasyPanelMobileApp() {
@@ -12,6 +14,14 @@ export default function EasyPanelMobileApp() {
   const [advancedOpening, setAdvancedOpening] = useState(false)
   const [advancedError, setAdvancedError] = useState('')
   const [libraryOpen, setLibraryOpen] = useState(false)
+  const [snapshotsOpen, setSnapshotsOpen] = useState(false)
+  const [chineseDescription, setChineseDescription] = useState('')
+  const [translationInstruction, setTranslationInstruction] = useState('')
+  const [translationFamily, setTranslationFamily] = useState('')
+  const [translationAnswer, setTranslationAnswer] = useState('')
+  const [translationResult, setTranslationResult] = useState<ParsedPromptTranslation>()
+  const [translationMessage, setTranslationMessage] = useState('')
+  const [translationLoading, setTranslationLoading] = useState(false)
   const promptEditorRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -39,6 +49,104 @@ export default function EasyPanelMobileApp() {
   function patchSettings(patch: Partial<typeof controller.settings>) {
     const interaction = reduceEasyPanelControllerInteraction(controller.settings, { type: 'settings-changed', patch })
     controller.setSettings(interaction.settings)
+  }
+
+  async function copyText(value: string) {
+    const bridge = window.EasyPanelClipboard
+    if (bridge?.copyText) {
+      try {
+        if (bridge.copyText(value)) return
+      } catch {
+        // Continue with the browser clipboard fallbacks below.
+      }
+    }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return
+    }
+    const area = document.createElement('textarea')
+    area.value = value
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.focus()
+    area.select()
+    try {
+      if (!document.execCommand('copy')) throw new Error('浏览器拒绝复制')
+    } finally {
+      area.remove()
+    }
+  }
+
+  async function prepareTranslationInstruction(openDeepSeek = false) {
+    const source = chineseDescription.trim()
+    if (!source) {
+      setTranslationMessage('请先输入中文画面描述。')
+      return
+    }
+    if (!controller.settings.baseUrl.trim() || !controller.settings.token.trim()) {
+      setTranslationMessage('请先填写 Easy Panel 地址和 RPG Token。')
+      return
+    }
+    setTranslationLoading(true)
+    setTranslationMessage('正在读取当前模型并生成适配指令…')
+    try {
+      const result = await getEasyPanelPromptInstruction(
+        { baseUrl: controller.settings.baseUrl, token: controller.settings.token, requestTimeoutMs: 15000 },
+        source,
+        controller.settings.model,
+        'safe',
+      )
+      setTranslationInstruction(result.instruction)
+      setTranslationFamily(`${result.family_label} · ${result.model}`)
+      if (openDeepSeek) {
+        await copyText(result.instruction)
+        window.open('https://chat.deepseek.com/', '_blank', 'noopener,noreferrer')
+        setTranslationMessage(`已复制适配【${result.family_label}】的指令，已打开 DeepSeek。粘贴发送后，把回答复制回来再点击“读取 AI 回答”。`)
+      } else {
+        setTranslationMessage(`已生成适配【${result.family_label}】的 AI 指令。`)
+      }
+    } catch (caught) {
+      setTranslationMessage(caught instanceof Error ? caught.message : '生成 AI 转换指令失败。')
+    } finally {
+      setTranslationLoading(false)
+    }
+  }
+
+  async function readTranslationAnswer() {
+    try {
+      if (!navigator.clipboard?.readText) throw new Error('当前 WebView 不支持读取剪贴板')
+      const value = (await navigator.clipboard.readText()).trim()
+      if (!value) {
+        setTranslationMessage('剪贴板为空，请先复制 AI 的回答。')
+        return
+      }
+      setTranslationAnswer(value)
+      const parsed = parsePromptTranslation(value)
+      setTranslationResult(parsed)
+      setTranslationMessage(parsed.positive || parsed.negative ? '已读取并解析 AI 回答，请检查后加入提示词。' : '没有识别到可用的正向或负面提示词。')
+    } catch {
+      setTranslationMessage('无法读取剪贴板；请把 AI 回答粘贴到下方文本框后点击“解析回答”。')
+    }
+  }
+
+  function parseTranslationAnswer() {
+    const parsed = parsePromptTranslation(translationAnswer)
+    setTranslationResult(parsed)
+    setTranslationMessage(parsed.positive || parsed.negative ? '已解析 AI 回答，请检查后加入提示词。' : '没有识别到可用的正向或负面提示词。')
+  }
+
+  function applyTranslation(kind: 'positive' | 'negative') {
+    const value = translationResult?.[kind] || ''
+    if (!value) {
+      setTranslationMessage(`没有可加入的${kind === 'positive' ? '正向' : '负面'}提示词。`)
+      return
+    }
+    const patch: Partial<typeof controller.settings> = kind === 'positive'
+      ? { prompt: appendPromptText(controller.settings.prompt, value) }
+      : { negative: appendPromptText(controller.settings.negative, value) }
+    patchSettings(patch)
+    setTranslationMessage(`已将 AI 的${kind === 'positive' ? '正向' : '负面'}提示词加入快速生图表单。`)
   }
 
   function handleGenerateClick() {
@@ -213,6 +321,63 @@ export default function EasyPanelMobileApp() {
             />
             <em>{controller.settings.negative.length} / 1600</em>
           </label>
+          <div className="epm-prompt-translation">
+            <div className="epm-translation-heading">
+              <div>
+                <span className="epm-section-kicker">AI PROMPT BRIDGE</span>
+                <strong>中文描述转换</strong>
+              </div>
+              <Sparkles size={17} />
+            </div>
+            <p className="epm-translation-help">复用高级面板的 DeepSeek 流程；指令会带上当前 Checkpoint 的模型族规则。</p>
+            <label className="epm-field">
+              <span>中文画面描述 <small>先写想法，不会自动提交生成</small></span>
+              <textarea
+                value={chineseDescription}
+                onChange={(event) => setChineseDescription(event.target.value)}
+                placeholder="例如：黄昏时安静的书店，窗边暖光，一位金发女孩正在看书"
+                rows={3}
+                maxLength={1200}
+              />
+              <em>{chineseDescription.length} / 1200</em>
+            </label>
+            <div className="epm-action-row epm-translation-actions">
+              <button type="button" className="epm-secondary-button" onClick={() => void prepareTranslationInstruction(true)} disabled={translationLoading || working}>
+                {translationLoading ? <LoaderCircle size={15} className="epm-spin" /> : <Sparkles size={15} />}
+                复制并打开 DeepSeek
+              </button>
+              <button type="button" className="epm-quiet-button" onClick={() => void prepareTranslationInstruction(false)} disabled={translationLoading || working}>
+                <Copy size={15} />复制指令
+              </button>
+            </div>
+            {translationFamily && <div className="epm-translation-family" role="status">当前适配：{translationFamily}</div>}
+            {translationInstruction && <details className="epm-translation-instruction">
+              <summary>查看已生成的 AI 指令</summary>
+              <textarea value={translationInstruction} readOnly rows={7} aria-label="AI 转换指令" />
+            </details>}
+            <label className="epm-field epm-translation-answer-field">
+              <span>AI 回答 <small>可直接粘贴 POSITIVE / NEGATIVE</small></span>
+              <textarea
+                value={translationAnswer}
+                onChange={(event) => setTranslationAnswer(event.target.value)}
+                placeholder="复制 DeepSeek 回答后点读取，或直接粘贴到这里"
+                rows={4}
+              />
+            </label>
+            <div className="epm-action-row epm-translation-actions">
+              <button type="button" className="epm-quiet-button" onClick={() => void readTranslationAnswer()} disabled={working}>
+                <Copy size={15} />读取 AI 回答
+              </button>
+              <button type="button" className="epm-quiet-button" onClick={parseTranslationAnswer} disabled={!translationAnswer.trim()}>
+                解析回答
+              </button>
+            </div>
+            {translationResult && <div className="epm-translation-preview">
+              <div><strong>正向</strong><span>{translationResult.positive || '（未识别）'}</span><button type="button" className="epm-quiet-button" onClick={() => applyTranslation('positive')} disabled={!translationResult.positive}>加入正向</button></div>
+              <div><strong>负面</strong><span>{translationResult.negative || '（无额外负面词）'}</span><button type="button" className="epm-quiet-button" onClick={() => applyTranslation('negative')} disabled={!translationResult.negative}>加入负面</button></div>
+            </div>}
+            {translationMessage && <p className="epm-translation-message" role="status">{translationMessage}</p>}
+          </div>
         </section>
 
         <section className="epm-card">
@@ -285,11 +450,14 @@ export default function EasyPanelMobileApp() {
         </section>
 
         <section className="epm-card epm-snapshot-card">
-          <div className="epm-section-heading">
-            <div>
-              <span className="epm-section-kicker">04 · HISTORY</span>
-              <h2>历史快照</h2>
-            </div>
+          <div className="epm-section-heading epm-snapshot-heading">
+            <button type="button" className="epm-section-toggle epm-snapshot-toggle" onClick={() => setSnapshotsOpen((value) => !value)} aria-expanded={snapshotsOpen}>
+              <span>
+                <span className="epm-section-kicker">04 · HISTORY</span>
+                <strong>历史快照 <small className="epm-snapshot-count">{controller.snapshots.length ? `${controller.snapshots.length} 条记录` : '点击展开查看'}</small></strong>
+              </span>
+              <span className={`epm-toggle-chevron ${snapshotsOpen ? 'open' : ''}`}>⌄</span>
+            </button>
             <button
               type="button"
               className="epm-quiet-button epm-inline-button"
@@ -300,29 +468,30 @@ export default function EasyPanelMobileApp() {
               刷新
             </button>
           </div>
-          <p className="epm-help epm-snapshot-message">{controller.snapshotsMessage}</p>
-          {controller.snapshotsError && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{controller.snapshotsError}</span></div>}
-          {controller.snapshots.length ? <div className="epm-snapshot-list">
-            {controller.snapshots.map((item) => <article className="epm-snapshot-item" key={item.id}>
-              <div className="epm-snapshot-head">
-                <strong>{item.label || item.model || '生成快照'}</strong>
-                <small>{formatSnapshotTime(item.createdAt)}</small>
-              </div>
-              <div className="epm-snapshot-meta">
-                {item.model || '自动模型'} · seed {item.seed == null ? '?' : String(item.seed)} · {item.width || '?'}×{item.height || '?'} · {item.quality || '自定义'}
-              </div>
-              <div className="epm-snapshot-meta">
-                {item.characterCount} 个角色 · {item.loraCount} 个 LoRA · {item.outputCount} 个输出 · schema v{item.schemaVersion}
-              </div>
-              {item.sourceSections.length > 0 && <div className="epm-snapshot-sources">来源分区：{item.sourceSections.join('、')}</div>}
-              <div className="epm-snapshot-actions">
-                <button type="button" className="epm-secondary-button" onClick={() => void restoreSnapshot(item.id, 'full')} disabled={controller.snapshotsLoading || working}>完整恢复</button>
-                <button type="button" className="epm-quiet-button" onClick={() => void controller.restoreSnapshot(item.id, 'seed-only')} disabled={controller.snapshotsLoading || working}>只换 Seed</button>
-                <button type="button" className="epm-quiet-button" onClick={() => void restoreSnapshot(item.id, 'continue-editing')} disabled={controller.snapshotsLoading || working}>继续编辑并聚焦</button>
-              </div>
-            </article>)}
-          </div> : <div className="epm-snapshot-empty">刷新后从电脑端读取历史；列表是服务器摘要，完整内容只在点击恢复时读取。</div>}
-          {controller.restoredSnapshot && <div className="epm-restored-snapshot" role="status">
+          {snapshotsOpen && <div className="epm-snapshot-body">
+            <p className="epm-help epm-snapshot-message">{controller.snapshotsMessage}</p>
+            {controller.snapshotsError && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{controller.snapshotsError}</span></div>}
+            {controller.snapshots.length ? <div className="epm-snapshot-list">
+              {controller.snapshots.map((item) => <article className="epm-snapshot-item" key={item.id}>
+                <div className="epm-snapshot-head">
+                  <strong>{item.label || item.model || '生成快照'}</strong>
+                  <small>{formatSnapshotTime(item.createdAt)}</small>
+                </div>
+                <div className="epm-snapshot-meta">
+                  {item.model || '自动模型'} · seed {item.seed == null ? '?' : String(item.seed)} · {item.width || '?'}×{item.height || '?'} · {item.quality || '自定义'}
+                </div>
+                <div className="epm-snapshot-meta">
+                  {item.characterCount} 个角色 · {item.loraCount} 个 LoRA · {item.outputCount} 个输出 · schema v{item.schemaVersion}
+                </div>
+                {item.sourceSections.length > 0 && <div className="epm-snapshot-sources">来源分区：{item.sourceSections.join('、')}</div>}
+                <div className="epm-snapshot-actions">
+                  <button type="button" className="epm-secondary-button" onClick={() => void restoreSnapshot(item.id, 'full')} disabled={controller.snapshotsLoading || working}>完整恢复</button>
+                  <button type="button" className="epm-quiet-button" onClick={() => void controller.restoreSnapshot(item.id, 'seed-only')} disabled={controller.snapshotsLoading || working}>只换 Seed</button>
+                  <button type="button" className="epm-quiet-button" onClick={() => void restoreSnapshot(item.id, 'continue-editing')} disabled={controller.snapshotsLoading || working}>继续编辑并聚焦</button>
+                </div>
+              </article>)}
+            </div> : <div className="epm-snapshot-empty">刷新后从电脑端读取历史；列表是服务器摘要，完整内容只在点击恢复时读取。</div>}
+            {controller.restoredSnapshot && <div className="epm-restored-snapshot" role="status">
             <div className="epm-restored-heading">
               <strong>当前附加快照高级配置</strong>
               <button
@@ -379,6 +548,7 @@ export default function EasyPanelMobileApp() {
                 </div>
               </div>
             </details>}
+            </div>}
           </div>}
         </section>
 

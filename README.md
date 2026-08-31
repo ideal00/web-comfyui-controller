@@ -9,8 +9,8 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 ## 当前版本
 
 - Easy Panel 服务端：`2.2.2`。
-- Android 客户端：`mobile-v1.4.4`（versionCode `1004004`）。
-- 本版本修复移动端作品库缩略图加载：首屏可视区域优先、限并发、服务端小图预览；原图预览支持双指缩放、拖动和双击缩放。
+- Android 客户端：`mobile-v1.4.5`（versionCode `1004005`）。
+- 本版本为快速生图增加复用高级面板的中文描述转换：AI 指令会携带当前 Checkpoint 的模型族规则，可复制并打开 DeepSeek，读取或粘贴回答后分别加入正向/负面提示词；历史快照改为可收缩区域。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
 ## 目录
@@ -1576,7 +1576,7 @@ vendor\anima-tags\
 
 ## RPGBox 手机生图接口
 
-本版本新增 `/api/rpg/*` 手机视觉 API，可把 Easy Panel 作为 RPGBox Android 的远程生图后端。
+本版本新增 `/api/rpg/*` 手机视觉 API，可把 Easy Panel 作为 RPGBox Android 的远程生图后端；`/api/rpg/prompt-instruction` 提供与桌面高级面板共用的模型族提示词转换指令。
 运行 `G:\ComfyUI\EasyPanel_一键启动.bat` 启动局域网模式；完整协议见 [RPG_MOBILE_API.md](RPG_MOBILE_API.md)。
 
 ## Android 客户端

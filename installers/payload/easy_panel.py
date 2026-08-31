@@ -107,6 +107,7 @@ from easy_panel_app.rpg_api import (
     RPG_JOB_FILE,
     build_rpg_payload,
     check_rpg_token,
+    choose_rpg_model,
     find_rpg_job,
     find_rpg_job_by_request_id,
     history_to_rpg_status,
@@ -983,6 +984,70 @@ def prompt_family(model_name: str) -> str:
     if is_illustrious_model(model_name):
         return "illustrious"
     return "sdxl"
+
+
+PROMPT_FAMILY_LABELS = {
+    "anima": "Anima 硬标签+质感+关系句",
+    "illustrious": "Illustrious 标签为主",
+    "sdxl": "SDXL 标签为主",
+    "krea2": "Krea 2 自然语言优先",
+}
+PROMPT_FAMILY_RULES = {
+    "anima": "以 Danbooru 英文硬标签为主，补充简短英文关系句；不要凭空添加角色、服装或动作；不要添加与模型 LoRA 冲突的质量前缀。",
+    "illustrious": "以逗号分隔的 Danbooru 英文标签为主，主体、外貌、服装、动作、构图、场景、光影顺序清楚。",
+    "sdxl": "使用清晰、简洁的英文图像提示词，标签为主，必要时用短句消除动作或空间歧义。",
+    "krea2": "使用自然流畅的英文视觉描述，明确主体、动作、镜头、场景、光影和材质，避免标签堆砌。",
+}
+PROMPT_INSTRUCTION_SAFETY_LEVELS = {"safe", "sensitive", "nsfw", "explicit"}
+
+
+def resolve_prompt_instruction_model(requested: str = "") -> str:
+    """Resolve the same effective checkpoint used by the RPG submit path."""
+
+    model = str(requested or "").strip()
+    if model:
+        return model
+    profiles = load_rpg_profiles()
+    defaults = profiles.get("defaults") if isinstance(profiles.get("defaults"), dict) else {}
+    return choose_rpg_model("", defaults, rpg_model_catalog())
+
+
+def build_prompt_instruction(text: str, model: str = "", safety_level: str = "safe") -> dict:
+    """Build the model-aware DeepSeek instruction shared by desktop and mobile."""
+
+    source = str(text or "").strip()
+    if not source:
+        raise ValueError("请先输入中文描述。")
+    if len(source) > 4000:
+        raise ValueError("中文描述不能超过 4000 个字符。")
+    resolved_model = resolve_prompt_instruction_model(model)
+    family = prompt_family(resolved_model)
+    safety = str(safety_level or "safe").strip().lower()
+    if safety not in PROMPT_INSTRUCTION_SAFETY_LEVELS:
+        safety = "safe"
+    label = PROMPT_FAMILY_LABELS.get(family, PROMPT_FAMILY_LABELS["sdxl"])
+    rule = PROMPT_FAMILY_RULES.get(family, PROMPT_FAMILY_RULES["sdxl"])
+    instruction = (
+        "你是 ComfyUI 提示词转换助手。请把下面的中文构想转换成适合当前模型的英文提示词。\n"
+        f"当前模型族：{label}\n"
+        f"当前检查点：{resolved_model}\n"
+        f"安全级别：{safety}\n"
+        f"规则：{rule}\n"
+        "保留用户明确要求，不扩写敏感程度，不解释思路，不使用 Markdown 代码块。"
+        "只按以下两行格式回答：\n"
+        "POSITIVE: 英文正向提示词\n"
+        "NEGATIVE: 仅列出针对本画面需要额外避免的问题；没有则留空\n\n"
+        "用户中文构想：\n"
+        f"{source}"
+    )
+    return {
+        "api_version": RPG_API_VERSION,
+        "model": resolved_model,
+        "family": family,
+        "family_label": label,
+        "safety_level": safety,
+        "instruction": instruction,
+    }
 
 
 def lora_folder(lora_name: str) -> str:
@@ -4617,7 +4682,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/profiles", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -4657,6 +4722,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/rpg/profiles":
                 document = data.get("profiles") if isinstance(data.get("profiles"), dict) else data
                 self.send_json(save_rpg_profiles(document))
+                return
+            if self.path in {"/api/prompt-instruction", "/api/rpg/prompt-instruction"}:
+                self.send_json(build_prompt_instruction(
+                    data.get("text", ""),
+                    data.get("model", ""),
+                    data.get("safetyLevel", "safe"),
+                ))
                 return
             if self.path == "/api/rpg/generate":
                 client = data.get("client") if isinstance(data.get("client"), dict) else {}

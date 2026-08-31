@@ -116,6 +116,17 @@ export interface EasyPanelPing {
   token_required: boolean
 }
 
+export type PromptFamily = 'anima' | 'illustrious' | 'sdxl' | 'krea2'
+
+export interface EasyPanelPromptInstruction {
+  api_version: number
+  model: string
+  family: PromptFamily
+  family_label: string
+  safety_level: string
+  instruction: string
+}
+
 export class EasyPanelHttpError extends Error {
   status: number
   payload: unknown
@@ -203,6 +214,20 @@ export async function getEasyPanelCapabilities(config: EasyPanelVisualConfig) {
 
 export async function getEasyPanelModels(config: EasyPanelVisualConfig) {
   return jsonRequest<Record<string, unknown>>(config, '/api/rpg/models')
+}
+
+export async function getEasyPanelPromptInstruction(
+  config: EasyPanelVisualConfig,
+  text: string,
+  model = '',
+  safetyLevel = 'safe',
+) {
+  const source = text.trim()
+  if (!source) throw new Error('请先输入中文描述。')
+  return jsonRequest<EasyPanelPromptInstruction>(config, '/api/rpg/prompt-instruction', {
+    method: 'POST',
+    body: JSON.stringify({ text: source, model: model.trim(), safetyLevel }),
+  })
 }
 
 export async function submitVisualJob(config: EasyPanelVisualConfig, request: VisualGenerateRequest) {
