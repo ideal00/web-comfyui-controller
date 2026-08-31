@@ -1176,7 +1176,8 @@ class CreativeIndex:
         page_limit = max(1, min(1000, _safe_int(limit, 1000) or 1000))
         with self._connection() as connection:
             rows = connection.execute(
-                """SELECT generation_id, snapshot_id, prompt_id, request_id, status
+                """SELECT generation_id, snapshot_id, prompt_id, request_id, status,
+                          created_at, updated_at
                    FROM generations
                    WHERE status IN ('queued', 'running') AND prompt_id <> ''
                    ORDER BY updated_at ASC, generation_id ASC
@@ -1190,6 +1191,8 @@ class CreativeIndex:
                 "prompt_id": str(row["prompt_id"] or ""),
                 "request_id": str(row["request_id"] or ""),
                 "status": normalize_status(row["status"]),
+                "created_at": int(row["created_at"] or 0),
+                "updated_at": int(row["updated_at"] or 0),
             }
             for row in rows
         ]

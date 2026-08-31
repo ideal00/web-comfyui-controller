@@ -126,6 +126,50 @@ class CreativeLibraryApiTests(unittest.TestCase):
             self.assertEqual(1, len(recovered["artifacts"]))
             self.assertEqual(["recovered.png"], json.loads(snapshot_path.read_text(encoding="utf-8"))[0]["outputs"])
 
+    def test_server_reconciles_completed_rpg_output_without_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            output_name = "RPGBox_game_scene_00001_.png"
+            (output / output_name).write_bytes(b"recovered")
+            snapshot_path = root / "generation_snapshots.json"
+            jobs_path = root / "rpg_jobs.json"
+            index_path = root / "creative.sqlite3"
+            prompt_id = "prompt-output-fallback"
+            snapshot = {
+                "id": "d" * 32,
+                "createdAt": 100,
+                "schemaVersion": 2,
+                "promptId": prompt_id,
+                "payload": {
+                    "model": "m.safetensors",
+                    "prompt": "recover from output",
+                    "seed": "5",
+                    "filenamePrefix": "RPGBox_game_scene",
+                },
+                "source": {"checkpoint": "m.safetensors"},
+                "compiled": {},
+                "workflow": {"operation": "rpg.generate"},
+                "outputs": [],
+            }
+            snapshot_path.write_text(json.dumps([snapshot]), encoding="utf-8")
+            jobs_path.write_text("[]", encoding="utf-8")
+            with patch.object(easy_panel, "CREATIVE_INDEX_FILE", index_path), \
+                    patch.object(easy_panel, "OUTPUT", output), \
+                    patch.object(easy_panel, "SNAPSHOT_FILE", snapshot_path), \
+                    patch.object(easy_panel, "RPG_JOB_FILE", jobs_path), \
+                    patch.object(easy_panel, "comfy_json", return_value={}):
+                created = easy_panel.index_snapshot_best_effort(snapshot, status="queued")
+                self.assertEqual("queued", easy_panel.get_creative_index().get_generation(created["generation_id"])["status"])
+                reconciled = easy_panel.reconcile_creative_index_jobs()
+                recovered = easy_panel.get_creative_index().get_generation(created["generation_id"])
+
+            self.assertEqual(1, reconciled)
+            self.assertEqual("completed", recovered["status"])
+            self.assertEqual([output_name], [item["filename"] for item in recovered["artifacts"]])
+            self.assertEqual([output_name], json.loads(snapshot_path.read_text(encoding="utf-8"))[0]["outputs"])
+
     def test_library_is_read_only_paginated_and_uses_existing_rpg_auth(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
