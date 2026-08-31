@@ -1,5 +1,12 @@
 # RPG Mobile Bridge 修改说明
 
+## mobile-v1.4.0（2026-08-31）
+
+- Android versionCode 升级为 `1004000`，配套 Easy Panel 服务端 `2.2.0`。
+- Android 与桌面 Web 共用只读作品库 API：历史作品、LoRA、输出、父子谱系和有限筛选。
+- 作品库的复现、换 Seed、继续编辑只回填当前表单；用户仍需手动点击“生成图片”，不会自动提交。
+- 发布物包含 Debug APK、`app-debug.apk.sha256` 和 `SHA256SUMS.txt`；不含 Token、模型权重或个人运行数据。
+
 ## mobile-v1.3.0（2026-08-31）
 
 - Android versionCode 升级为 `1003000`；快速页与电脑端高级面板继续使用同一个 Easy Panel `2.1.0` 服务。

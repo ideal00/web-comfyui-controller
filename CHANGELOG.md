@@ -1,5 +1,12 @@
 # Easy Panel 更新记录
 
+## Easy Panel 服务端 2.2.0 + Android 客户端 mobile-v1.4.0（2026-08-31）
+
+- 新增桌面 Web「作品库」：分页、操作 / 状态 / 模型筛选、排序、缩略图、详情、LoRA、输出下载和父子谱系。
+- Android 快速页面与桌面 Web 共享只读 SQLite 创作索引；复现、换 Seed、继续编辑只回填当前表单，必须手动点击“生成图片”。
+- 输出图片继续使用带 RPG 鉴权的安全路径；旧服务端、空索引、断网、缺 Token 和缺失输出均显示可读回退。
+- Android versionCode 升级为 `1004000`；Debug APK 构建产物和 SHA256 清单见发布页附件。
+
 ## Easy Panel 服务端 2.1.0 + Android 客户端 mobile-v1.3.0（2026-08-31）
 
 - 生成快照升级为可审计的完整源数据、最终提示词、采样原因、LoRA trigger、自动注入、去重和冲突诊断记录。
