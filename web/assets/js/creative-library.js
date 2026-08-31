@@ -146,13 +146,12 @@
     return payload;
   }
 
-  function derivationOperationForRestore(detail, mode, hasArtifact) {
+  function derivationOperationForRestore(detail, mode) {
     if (mode === 'seed-variant') return 'seed_variant';
     const source = oneOf(detail && detail.operation, OPERATIONS);
-    // Continue-edit means a concrete existing output will be used as the
-    // least-surprising img2img source.  Without one, retain the recorded
-    // operation rather than claiming an edit input that does not exist.
-    if (mode === 'continue-edit' && hasArtifact) return 'img2img';
+    // Restore currently fills the existing form only.  It does not select a
+    // concrete output as an img2img/inpaint/repair input, so keep the
+    // recorded operation instead of claiming an edit input that was not used.
     return source && source !== 'unknown' ? source : 'txt2img';
   }
 
@@ -160,22 +159,9 @@
     if (!detail || typeof detail !== 'object') return null;
     let parentGenerationId;
     try { parentGenerationId = safeGenerationId(detail.generation_id); } catch (_) { return null; }
-    const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
-    const parentArtifact = artifacts.find((artifact) => {
-      if (!artifact || artifact.exists === false) return false;
-      try {
-        safeGenerationId(artifact.artifact_id);
-        return Boolean(safeOutputFilename(artifact.filename))
-          && (!asText(artifact.subfolder) || Boolean(safeOutputSubfolder(artifact.subfolder)));
-      } catch (_) {
-        return false;
-      }
-    });
-    const parentArtifactId = parentArtifact ? safeGenerationId(parentArtifact.artifact_id) : '';
     return {
       parentGenerationId,
-      ...(parentArtifactId ? { parentArtifactId } : {}),
-      operation: derivationOperationForRestore(detail, mode, Boolean(parentArtifactId)),
+      operation: derivationOperationForRestore(detail, mode),
     };
   }
 
@@ -768,7 +754,7 @@
         global.setPendingDerivationContext(derivation);
       }
       const status = byId('status');
-      const relationHint = `将从作品 ${derivation.parentGenerationId.slice(0, 10)}… 派生（${operationLabel(derivation.operation)}）；可取消关联。`;
+      const relationHint = `将从作品 ${derivation.parentGenerationId.slice(0, 10)}… 派生（${operationLabel(derivation.operation)}）；未自动选择输出图，可取消关联。`;
       if (status) status.textContent = mode === 'seed-variant'
         ? `作品参数和新 Seed 已恢复到面板；${relationHint} 请确认后手动点击“生成图片”。`
         : `作品参数已恢复到面板；${relationHint} 请确认后手动点击“生成图片”。`;

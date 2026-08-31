@@ -461,7 +461,7 @@ export function useEasyPanelController(): EasyPanelController {
       setPendingDerivation(restored.derivation)
       commitState({ ...stateRef.current, settings: restored.settings })
       const modeLabel = mode === 'seed-variant' ? '已载入作品并更换 Seed' : mode === 'continue-edit' ? '已载入作品，可继续编辑' : '已载入作品参数'
-      setLibraryMessage(`${modeLabel}；将从该作品派生，可取消关联；请回到当前表单，确认后点击“生成图片”。`)
+      setLibraryMessage(`${modeLabel}；将从该作品派生（不会自动选择输出图作为编辑输入），可取消关联；请回到当前表单，确认后点击“生成图片”。`)
       setLibraryError('')
       setError('')
       return true

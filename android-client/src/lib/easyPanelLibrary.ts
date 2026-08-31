@@ -85,22 +85,12 @@ export function pendingDerivationContextForLibraryGeneration(
   mode: EasyPanelLibraryRestoreMode = 'reproduce',
 ): EasyPanelPendingDerivationContext {
   const parentGenerationId = safeId(generation.generation_id)
-  const artifact = generation.artifacts.find((candidate) => (
-    candidate.exists !== false
-    && safeIdOrEmpty(candidate.artifact_id)
-    && safeFilename(candidate.filename)
-    && safeSubfolder(candidate.subfolder)
-  ))
-  const parentArtifactId = artifact ? safeId(artifact.artifact_id) : undefined
   const source = text(generation.operation).toLowerCase()
   const operation = mode === 'seed-variant'
     ? 'seed_variant'
-    : mode === 'continue-edit' && parentArtifactId
-      ? 'img2img'
-      : source && source !== 'unknown' && LIBRARY_OPERATIONS.has(source) ? source : 'txt2img'
+    : source && source !== 'unknown' && LIBRARY_OPERATIONS.has(source) ? source : 'txt2img'
   return {
     parentGenerationId,
-    ...(parentArtifactId ? { parentArtifactId } : {}),
     operation,
   }
 }

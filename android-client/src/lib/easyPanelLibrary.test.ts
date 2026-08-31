@@ -95,7 +95,7 @@ describe('creative Library restore', () => {
     expect(result.settings.seed).toBe('77')
   })
 
-  it('creates a safe one-shot lineage context and fixes operation semantics', () => {
+  it('creates a safe one-shot lineage context without an implicit artifact', () => {
     const result = pendingDerivationContextForLibraryGeneration(detail({
       operation: 'txt2img',
       artifacts: [{
@@ -112,9 +112,10 @@ describe('creative Library restore', () => {
     }), 'continue-edit')
     expect(result).toEqual({
       parentGenerationId: 'a'.repeat(32),
-      parentArtifactId: 'c'.repeat(32),
-      operation: 'img2img',
+      operation: 'txt2img',
     })
+    expect(pendingDerivationContextForLibraryGeneration(detail({ operation: 'img2img' }), 'continue-edit'))
+      .toEqual({ parentGenerationId: 'a'.repeat(32), operation: 'img2img' })
     expect(pendingDerivationContextForLibraryGeneration(detail({ operation: 'txt2img' }), 'seed-variant').operation)
       .toBe('seed_variant')
   })

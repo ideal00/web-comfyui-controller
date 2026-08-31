@@ -175,17 +175,48 @@ test('desktop HTML contains the isolated Library entry, dialog, and script after
   assert.match(html, /id="creativeLibraryDialog"/)
   assert.match(html, /id="creativeLibraryFilters"/)
   assert.match(html, /id="creativeLibraryDetail"/)
-  assert.match(html, /snapshot-flow\.js\?v=1[\s\S]*creative-library\.js\?v=2/)
+  assert.match(html, /snapshot-flow\.js\?v=1[\s\S]*creative-library\.js\?v=3/)
   assert.match(html, /panel\.css\?v=39/)
   assert.match(html, /id="pendingDerivation"/)
 })
 
 test('desktop generation routes consume and clear one-shot lineage context', () => {
   assert.match(panelSource, /function applyPendingDerivation\(/)
-  assert.match(panelSource, /body:JSON\.stringify\(batchPayload\(body,index\)\)/)
+  assert.match(panelSource, /const body=payload\(\),count=generationCount\(\),outputSize=effectiveOutputSize\(\),submissionContext=beginGenerationProgress\(count\)/)
+  assert.match(panelSource, /body:JSON\.stringify\(batchPayload\(body,index,submissionContext\)\)/)
   assert.match(panelSource, /const body=applyPendingDerivation\(payload\(\),pendingDerivationContext\)/)
   assert.match(panelSource, /function markPendingGenerationAccepted\(/)
   assert.match(panelSource, /clearPendingDerivationContext\(true\)/)
+})
+
+test('multi-image generate keeps one local lineage context after the first accepted child', () => {
+  const match = panelSource.match(/function batchPayload\(base,index,context\)\{.*?\}(?=\r?\nfunction imageSource)/s)
+  assert.ok(match, 'batchPayload must remain available for the generation route')
+  const apply = (body, context) => context
+    ? { ...body, parentGenerationId: context.parentGenerationId, operation: context.operation }
+    : { ...body }
+  const batchPayload = vm.runInNewContext(`(${match[0]})`, {
+    BigInt,
+    applyPendingDerivation: apply,
+  })
+  const submissionContext = Object.freeze({
+    parentGenerationId: 'a'.repeat(32),
+    operation: 'txt2img',
+  })
+  let globalContext = submissionContext
+  const submitted = []
+  for (let index = 0; index < 3; index += 1) {
+    submitted.push(batchPayload({ prompt: 'same', seed: '41' }, index, submissionContext))
+    if (index === 0) globalContext = null // markPendingGenerationAccepted clears only global UI state
+  }
+  assert.equal(globalContext, null)
+  assert.deepEqual(submitted.map((item) => item.parentGenerationId), [
+    'a'.repeat(32), 'a'.repeat(32), 'a'.repeat(32),
+  ])
+  assert.deepEqual(submitted.map((item) => item.seed), ['41', '42', '43'])
+  const nextClick = batchPayload({ prompt: 'new', seed: '99' }, 0, globalContext)
+  assert.equal(nextClick.parentGenerationId, undefined)
+  assert.equal(nextClick.operation, undefined)
 })
 
 test('restore and seed variant clone form payloads without mutating the source', () => {
@@ -208,7 +239,7 @@ test('restore and seed variant clone form payloads without mutating the source',
   assert.equal(detail.snapshot.payload.nested.keep, true)
 })
 
-test('library restore creates a safe one-shot lineage context with fixed operations', () => {
+test('library restore creates a safe one-shot lineage context without an implicit artifact', () => {
   const detail = {
     generation_id: 'a'.repeat(32),
     operation: 'txt2img',
@@ -221,7 +252,10 @@ test('library restore creates a safe one-shot lineage context with fixed operati
   }
   assert.deepEqual(library.pendingDerivationContextForDetail(detail, 'continue-edit'), {
     parentGenerationId: 'a'.repeat(32),
-    parentArtifactId: 'b'.repeat(32),
+    operation: 'txt2img',
+  })
+  assert.deepEqual(library.pendingDerivationContextForDetail({ ...detail, operation: 'img2img' }, 'continue-edit'), {
+    parentGenerationId: 'a'.repeat(32),
     operation: 'img2img',
   })
   assert.equal(library.pendingDerivationContextForDetail(detail, 'seed-variant').operation, 'seed_variant')

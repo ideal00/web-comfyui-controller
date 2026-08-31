@@ -555,7 +555,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBa
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('seed-variant')}>换 Seed 到当前表单</button>
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('continue-edit')}>继续编辑</button>
       </div>
-      <p className="epm-library-note">恢复只会填入当前表单，不会自动生成；下一次生成会记录派生关系，也可在表单中取消关联。</p>
+      <p className="epm-library-note">恢复只会填入当前表单，不会自动生成，也不会自动选择某个输出作为图生图 / 重绘输入；下一次生成会记录派生关系，也可在表单中取消关联。</p>
       <section className="epm-library-detail-section">
         <h3><GitBranch size={16} />谱系</h3>
         <p>父作品 {detail.parent_count} · 子作品 {detail.child_count}</p>
