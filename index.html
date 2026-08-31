@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=37">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=38">
 
 </head>
 <body>
@@ -20,6 +20,7 @@
       <button type="button" onclick="jumpToPanelSection('promptComposer')">提示词</button>
       <button type="button" onclick="jumpToPanelSection('generationSection')">生成设置</button>
       <button type="button" onclick="jumpToPanelSection('result')">图片预览</button>
+      <button id="creativeLibraryOpen" type="button">作品库</button>
       <button type="button" onclick="openHandWorkbench()">手部修复</button>
       <button type="button" onclick="jumpToPanelSection('loraSection')">LoRA 与模型</button>
     </nav>
@@ -257,6 +258,46 @@
     <button id="panelImageViewerNext" class="panel-image-viewer-nav next" type="button" onclick="stepPanelImageViewer(1)" aria-label="下一张">›</button>
   </div>
 </dialog>
+<dialog id="creativeLibraryDialog" class="creative-library-dialog" aria-labelledby="creativeLibraryTitle">
+  <div class="creative-library-shell">
+    <header class="creative-library-header">
+      <div>
+        <span class="studio-kicker">CREATIVE LIBRARY</span>
+        <h2 id="creativeLibraryTitle">作品库</h2>
+        <p>只读浏览历史生成、输出与父子谱系；恢复后仍需手动生成。</p>
+      </div>
+      <div class="creative-library-header-actions">
+        <button id="creativeLibraryRefresh" class="secondary" type="button">刷新</button>
+        <button id="creativeLibraryClose" class="secondary" type="button">关闭</button>
+      </div>
+    </header>
+    <form id="creativeLibraryAuth" class="creative-library-auth" hidden>
+      <label>RPG Token（已有浏览器会话时可留空）<input id="creativeLibraryToken" type="password" autocomplete="current-password" spellcheck="false" placeholder="仅本次页面会话使用，不写入 URL 或本地存储"></label>
+      <button class="secondary" type="submit">使用 Token 读取</button>
+    </form>
+    <div id="creativeLibraryNotice" class="creative-library-notice" role="status" aria-live="polite"></div>
+    <section id="creativeLibraryListView" class="creative-library-view">
+      <form id="creativeLibraryFilters" class="creative-library-filters">
+        <label>操作<select id="creativeLibraryOperation"><option value="">全部操作</option><option value="txt2img">文生图</option><option value="seed_variant">换 Seed</option><option value="img2img">图生图</option><option value="inpaint">局部重绘</option><option value="face_fix">修脸</option><option value="hand_fix">修手</option><option value="upscale">放大</option><option value="outfit_change">换服装</option><option value="scene_change">换场景</option><option value="style_change">换风格</option><option value="unknown">未知操作</option></select></label>
+        <label>状态<select id="creativeLibraryStatus"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">生成中</option><option value="completed">已完成</option><option value="error">失败</option><option value="cancelled">已取消</option><option value="unknown">未知状态</option></select></label>
+        <label class="creative-library-model-filter">模型<input id="creativeLibraryModel" type="search" maxlength="200" autocomplete="off" placeholder="按模型名称筛选"></label>
+        <label>排序<select id="creativeLibrarySort"><option value="created_at">创建时间</option><option value="updated_at">更新时间</option><option value="status">状态</option><option value="operation">操作</option><option value="model">模型</option></select></label>
+        <label>顺序<select id="creativeLibraryOrder"><option value="desc">降序</option><option value="asc">升序</option></select></label>
+        <button id="creativeLibraryApplyFilters" class="primary creative-library-filter-button" type="submit">应用筛选</button>
+      </form>
+      <div id="creativeLibraryList" class="creative-library-list" aria-live="polite"></div>
+      <nav id="creativeLibraryPagination" class="creative-library-pagination" aria-label="作品库分页" hidden>
+        <button id="creativeLibraryPrevious" class="secondary" type="button">上一页</button>
+        <span id="creativeLibraryPageInfo"></span>
+        <button id="creativeLibraryNext" class="secondary" type="button">下一页</button>
+      </nav>
+    </section>
+    <section id="creativeLibraryDetailView" class="creative-library-view" hidden>
+      <div class="creative-library-detail-toolbar"><button id="creativeLibraryBack" class="secondary" type="button">← 返回列表</button><span id="creativeLibraryDetailStatus"></span></div>
+      <div id="creativeLibraryDetail" class="creative-library-detail"></div>
+    </section>
+  </div>
+</dialog>
 <dialog id="handWorkbench" class="hand-workbench">
   <div class="hand-workbench-head"><div><h2>手部修复工作台</h2><div class="small">智能选区用于生成 AI 重绘蒙版；像素修图可使用内置 miniPaint 的仿制、画笔、模糊和内容填充。</div></div><button class="secondary" type="button" onclick="closeHandWorkbench()">关闭</button></div>
   <div class="hand-source-bar"><input id="handSourceFile" type="file" accept="image/png,image/jpeg,image/webp" onchange="handLoadFile(this.files[0])"><select id="handSourceOutput"><option value="">— 从最近输出选择 —</option></select><button class="secondary" type="button" onclick="handLoadOutput()">载入输出</button></div>
@@ -310,5 +351,6 @@
 <script src="/assets/js/hand-workbench.js?v=6"></script>
 <script src="/assets/js/transparent-background.js?v=1"></script>
 <script src="/assets/js/snapshot-flow.js?v=1"></script>
+<script src="/assets/js/creative-library.js?v=1"></script>
 </body>
 </html>

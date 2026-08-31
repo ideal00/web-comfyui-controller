@@ -10,7 +10,7 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 
 - Easy Panel 服务端：`2.1.0`。
 - Android 客户端：`mobile-v1.3.0`（versionCode `1003000`）。
-- 本版本新增生成快照完整/Seed-only/继续编辑恢复、远程受保护访问、模型感知的提示词来源解释，以及 Android 高级面板的安全会话和 DeepSeek 原生剪贴板复制。
+- 本版本新增生成快照完整/Seed-only/继续编辑恢复、远程受保护访问、模型感知的提示词来源解释、桌面 Web / Android 只读作品库，以及 Android 高级面板的安全会话和 DeepSeek 原生剪贴板复制。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
 ## 目录
@@ -1604,7 +1604,7 @@ vendor\anima-tags\
 
 Android 客户端源码、可复现构建、权限说明、下载位置、安全边界和已知限制见 [android-client/README.md](android-client/README.md)。不要把 `8190` 或 `8188` 直接暴露到公网。
 
-Easy Panel 3.x Phase 1 的只读作品库、SQLite 旁路索引、重建命令和 Phase 2 边界见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
+Easy Panel 3.x Phase 1 的桌面 Web / Android 只读作品库、SQLite 旁路索引、重建命令和 Phase 2 边界见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
 
 ### 跨设备预设与角色收藏
 

@@ -241,10 +241,10 @@ Easy Panel 会调用项目现有的 Regional Prompting 路线，把两名角色�
 
 ## 11. 作品库（Easy Panel 3.x Phase 1）
 
-Easy Panel 3.x 在不改变 JSON 源记录的前提下维护一个可重建的 SQLite 创作索引。Android 快速页面的“作品库”入口读取以下只读接口：
+Easy Panel 3.x 在不改变 JSON 源记录的前提下维护一个可重建的 SQLite 创作索引。Android 快速页面和桌面 Web 面板的“作品库”入口读取以下只读接口：
 
 - `GET /api/rpg/library/generations`：分页列表，支持 `limit`、`offset`、`operation`、`status`、`model`、`sort` 和 `order`；
 - `GET /api/rpg/library/generations/{generation_id}`：作品详情、完整快照、LoRA、输出和结构化 replay / variation 预览；
 - `GET /api/rpg/library/generations/{generation_id}/lineage`：父 / 子作品谱系。
 
-这些接口复用 RPG Token，且没有 Library 写入接口。`replay.can_submit` / `variation.can_submit` 始终为 `false`；Android 恢复只把参数填回当前表单，用户仍需明确点击“生成图片”。完整 schema、迁移、重建命令和 Phase 2 边界见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
+这些接口复用 RPG Token，且没有 Library 写入接口。`replay.can_submit` / `variation.can_submit` 始终为 `false`；Android 和桌面 Web 的恢复只把参数填回当前表单，用户仍需明确点击“生成图片”。桌面 Web 入口支持分页、操作 / 状态 / 模型筛选和排序；输出通过现有带鉴权的 `/api/rpg/image` 路径打开或下载。旧服务端 404、空索引、断网或缺少谱系接口时只显示回退提示，不会自动提交生成。完整 schema、迁移、重建命令和 Phase 2 边界见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。

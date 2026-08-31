@@ -1,6 +1,6 @@
 # Easy Panel 3.x 创作状态（Phase 1）
 
-本阶段在现有 Easy Panel 2.x JSON 快照 / RPG job 记录旁边增加一个可重建、只读查询优先的 SQLite 索引，并在 Android 快速页面提供最小作品库。JSON 仍是复现的唯一事实来源；SQLite 只做旁路索引，不会改写、删除或替代 `generation_snapshots.json`、`rpg_jobs.json`。
+本阶段在现有 Easy Panel 2.x JSON 快照 / RPG job 记录旁边增加一个可重建、只读查询优先的 SQLite 索引，并在 Android 快速页面和桌面 Web 面板提供最小作品库。JSON 仍是复现的唯一事实来源；SQLite 只做旁路索引，不会改写、删除或替代 `generation_snapshots.json`、`rpg_jobs.json`。
 
 ## 数据边界
 
@@ -58,6 +58,15 @@ artifact URL 仍指向已有的 `/api/rpg/image`，客户端下载时带 Token�
 - “复现到当前表单”和“换 Seed 到当前表单”只更新当前编辑状态，用户仍需显式点击底部“生成图片”。
 - 下载复用现有 `downloadBlob` / Android `Downloads` 原生实现。
 - 旧服务端、断网、缺 Token、缺失输出或不支持谱系时保留页面并显示可读回退，不自动提交任务。
+
+## 桌面 Web 最小作品库
+
+完整 Web 面板顶部提供“作品库”入口，使用同一组只读 `/api/rpg/library/*` 接口。桌面端按服务端分页读取列表，可按操作、状态、模型筛选并按创建 / 更新时间、状态、操作或模型排序；列表显示缩略图、模型、Seed、时间、状态、操作和父 / 子标记。详情页显示参数摘要、LoRA、输出文件、提示词只读预览以及有界的父 / 子谱系。
+
+- 作品库请求始终使用 GET，并复用当前 RPG Token / HttpOnly 会话；页面中临时填写的 Token 只保存在内存，不写入 URL 或 localStorage。
+- 输出沿用服务端生成的 `/api/rpg/image` 安全引用。桌面端带鉴权请求图片 Blob，随后复用现有图片查看器和浏览器下载机制；缺失输出只显示元数据，不修改索引。
+- “复现到当前表单”“换 Seed 到当前表单”“继续编辑”只调用已有表单恢复能力，不调用 `/api/generate`、`/api/generate-batch` 或 `/api/rpg/generate`。页面会明确提示用户确认后手动点击“生成图片”。
+- 旧电脑端返回 404、索引为空、断网、鉴权失败、服务未配置 Token、详情不存在或谱系接口缺失时，作品库显示可读提示并保留普通生成面板；不会因为作品库不可用阻断现有面板。
 
 ## Phase 2 明确延期
 
