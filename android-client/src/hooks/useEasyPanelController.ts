@@ -103,6 +103,7 @@ export interface EasyPanelController {
   libraryDetail?: EasyPanelGenerationDetail
   libraryLineage?: EasyPanelLibraryLineage
   libraryThumbnailSources: Record<string, string>
+  libraryThumbnailLoading: Record<string, boolean>
   libraryDownloadLoading: string
   libraryDownloadMessage: string
   pendingDerivation?: EasyPanelPendingDerivationContext
@@ -124,11 +125,20 @@ export interface EasyPanelController {
   clearPendingDerivation: () => void
   downloadLibraryArtifact: (artifact: EasyPanelGenerationArtifact) => Promise<void>
   loadLibraryArtifactPreview: (artifact: EasyPanelGenerationArtifact) => Promise<Blob>
+  loadLibraryThumbnail: (item: EasyPanelGenerationSummary) => void
   loadMoreLibrary: () => Promise<void>
 }
 
 const CONTROLLER_GAME_ID = 'easy-panel-mobile'
 const LIBRARY_PAGE_SIZE = 30
+const LIBRARY_INITIAL_THUMBNAIL_COUNT = 6
+const LIBRARY_THUMBNAIL_CONCURRENCY = 3
+
+type LibraryThumbnailTask = {
+  item: EasyPanelGenerationSummary
+  config: EasyPanelVisualConfig
+  requestNumber: number
+}
 
 export function useEasyPanelController(): EasyPanelController {
   const [state, setState] = useState<EasyPanelControllerState>(() => defaultEasyPanelControllerState())
@@ -158,6 +168,7 @@ export function useEasyPanelController(): EasyPanelController {
   const [libraryDetail, setLibraryDetail] = useState<EasyPanelGenerationDetail>()
   const [libraryLineage, setLibraryLineage] = useState<EasyPanelLibraryLineage>()
   const [libraryThumbnailSources, setLibraryThumbnailSources] = useState<Record<string, string>>({})
+  const [libraryThumbnailLoading, setLibraryThumbnailLoading] = useState<Record<string, boolean>>({})
   const [libraryDownloadLoading, setLibraryDownloadLoading] = useState('')
   const [libraryDownloadMessage, setLibraryDownloadMessage] = useState('')
   const [pendingDerivation, setPendingDerivation] = useState<EasyPanelPendingDerivationContext>()
@@ -169,6 +180,13 @@ export function useEasyPanelController(): EasyPanelController {
   const libraryRequestRef = useRef(0)
   const libraryOffsetRef = useRef(0)
   const libraryThumbnailUrlsRef = useRef<Record<string, string>>({})
+  const libraryThumbnailQueueRef = useRef<LibraryThumbnailTask[]>([])
+  const libraryThumbnailQueuedRef = useRef(new Set<string>())
+  const libraryThumbnailLoadingRef = useRef(new Set<string>())
+  const libraryThumbnailLoadedRef = useRef(new Set<string>())
+  const libraryThumbnailFailedRef = useRef(new Set<string>())
+  const libraryThumbnailActiveRef = useRef(0)
+  const libraryThumbnailAbortRef = useRef(new Map<string, AbortController>())
 
   const settings = state.settings
   const config = useMemo<EasyPanelVisualConfig>(() => ({
@@ -188,6 +206,17 @@ export function useEasyPanelController(): EasyPanelController {
     for (const source of Object.values(libraryThumbnailUrlsRef.current)) URL.revokeObjectURL(source)
     libraryThumbnailUrlsRef.current = {}
     setLibraryThumbnailSources({})
+  }, [])
+
+  const resetLibraryThumbnailQueue = useCallback(() => {
+    for (const controller of libraryThumbnailAbortRef.current.values()) controller.abort()
+    libraryThumbnailAbortRef.current.clear()
+    libraryThumbnailQueueRef.current = []
+    libraryThumbnailQueuedRef.current.clear()
+    libraryThumbnailLoadingRef.current.clear()
+    libraryThumbnailLoadedRef.current.clear()
+    libraryThumbnailFailedRef.current.clear()
+    setLibraryThumbnailLoading({})
   }, [])
 
   useEffect(() => {
@@ -224,6 +253,7 @@ export function useEasyPanelController(): EasyPanelController {
       setSnapshotsMessage('地址或 Token 已改变，请重新读取历史快照')
       setSnapshotsError('')
       setRestoredSnapshot(undefined)
+      libraryRequestRef.current += 1
       setLibrary([])
       setLibraryTotal(0)
       setLibraryHasMore(false)
@@ -234,11 +264,12 @@ export function useEasyPanelController(): EasyPanelController {
       setLibraryLineage(undefined)
       setLibraryDownloadMessage('')
       setPendingDerivation(undefined)
+      resetLibraryThumbnailQueue()
       clearLibraryThumbnailSources()
     }
     setDownloadMessage('')
     setError('')
-  }, [clearLibraryThumbnailSources, commitState])
+  }, [clearLibraryThumbnailSources, commitState, resetLibraryThumbnailQueue])
 
   const loadModelCatalog = useCallback(async (nextConfig: EasyPanelVisualConfig): Promise<number | undefined> => {
     setModelsLoading(true)
@@ -354,38 +385,96 @@ export function useEasyPanelController(): EasyPanelController {
     }
   }, [config, settings.baseUrl, settings.token])
 
-  const loadLibraryThumbnails = useCallback(async (
+  const pumpLibraryThumbnailQueue = useCallback(() => {
+    while (libraryThumbnailActiveRef.current < LIBRARY_THUMBNAIL_CONCURRENCY && libraryThumbnailQueueRef.current.length > 0) {
+      const task = libraryThumbnailQueueRef.current.shift()
+      if (!task) break
+      const id = task.item.generation_id
+      const taskKey = `${task.requestNumber}:${id}`
+      libraryThumbnailQueuedRef.current.delete(taskKey)
+      if (libraryRequestRef.current !== task.requestNumber
+        || !task.item.thumbnail_url
+        || libraryThumbnailUrlsRef.current[id]
+        || libraryThumbnailLoadingRef.current.has(id)
+        || libraryThumbnailLoadedRef.current.has(id)
+        || libraryThumbnailFailedRef.current.has(id)) continue
+
+      libraryThumbnailActiveRef.current += 1
+      libraryThumbnailLoadingRef.current.add(id)
+      const abortController = new AbortController()
+      libraryThumbnailAbortRef.current.set(taskKey, abortController)
+      setLibraryThumbnailLoading((current) => ({ ...current, [id]: true }))
+      void (async () => {
+        try {
+          const blob = await downloadVisualImage(task.config, {
+            filename: `${id}.png`,
+            type: 'output',
+            url: withLibraryThumbnailPreview(task.item.thumbnail_url as string),
+          }, abortController.signal)
+          const source = URL.createObjectURL(blob)
+          if (libraryRequestRef.current !== task.requestNumber) {
+            URL.revokeObjectURL(source)
+            return
+          }
+          const previous = libraryThumbnailUrlsRef.current[id]
+          if (previous) URL.revokeObjectURL(previous)
+          const nextSources = { ...libraryThumbnailUrlsRef.current, [id]: source }
+          libraryThumbnailUrlsRef.current = nextSources
+          libraryThumbnailLoadedRef.current.add(id)
+          libraryThumbnailFailedRef.current.delete(id)
+          setLibraryThumbnailSources(nextSources)
+        } catch {
+          if (libraryRequestRef.current === task.requestNumber) libraryThumbnailFailedRef.current.add(id)
+        } finally {
+          libraryThumbnailAbortRef.current.delete(taskKey)
+          libraryThumbnailActiveRef.current -= 1
+          if (libraryRequestRef.current === task.requestNumber) {
+            libraryThumbnailLoadingRef.current.delete(id)
+            setLibraryThumbnailLoading((current) => {
+              if (!current[id]) return current
+              const next = { ...current }
+              delete next[id]
+              return next
+            })
+          }
+          pumpLibraryThumbnailQueue()
+        }
+      })()
+    }
+  }, [])
+
+  const enqueueLibraryThumbnail = useCallback((
+    item: EasyPanelGenerationSummary,
+    nextConfig: EasyPanelVisualConfig,
+    requestNumber: number,
+  ) => {
+    if (typeof URL.createObjectURL !== 'function' || !item.thumbnail_url) return
+    const id = item.generation_id
+    if (libraryRequestRef.current !== requestNumber
+      || libraryThumbnailUrlsRef.current[id]
+      || libraryThumbnailLoadingRef.current.has(id)
+      || libraryThumbnailLoadedRef.current.has(id)
+      || libraryThumbnailFailedRef.current.has(id)) return
+    const taskKey = `${requestNumber}:${id}`
+    if (libraryThumbnailQueuedRef.current.has(taskKey)) return
+    libraryThumbnailQueuedRef.current.add(taskKey)
+    libraryThumbnailQueueRef.current.push({ item, config: nextConfig, requestNumber })
+    pumpLibraryThumbnailQueue()
+  }, [pumpLibraryThumbnailQueue])
+
+  const loadLibraryThumbnail = useCallback((item: EasyPanelGenerationSummary) => {
+    enqueueLibraryThumbnail(item, config, libraryRequestRef.current)
+  }, [config, enqueueLibraryThumbnail])
+
+  const loadLibraryThumbnails = useCallback((
     items: EasyPanelGenerationSummary[],
     nextConfig: EasyPanelVisualConfig,
     requestNumber: number,
-    append = false,
   ) => {
-    if (typeof URL.createObjectURL !== 'function') return
-    const loaded = await Promise.all(items.map(async (item) => {
-      if (!item.thumbnail_url) return undefined
-      try {
-        const blob = await downloadVisualImage(nextConfig, {
-          filename: `${item.generation_id}.png`,
-          type: 'output',
-          url: item.thumbnail_url,
-        })
-        return { id: item.generation_id, source: URL.createObjectURL(blob) }
-      } catch {
-        return undefined
-      }
-    }))
-    if (libraryRequestRef.current !== requestNumber) {
-      for (const item of loaded) if (item) URL.revokeObjectURL(item.source)
-      return
+    for (const item of items.slice(0, LIBRARY_INITIAL_THUMBNAIL_COUNT)) {
+      enqueueLibraryThumbnail(item, nextConfig, requestNumber)
     }
-    const nextSources: Record<string, string> = append ? { ...libraryThumbnailUrlsRef.current } : {}
-    for (const item of loaded) if (item) nextSources[item.id] = item.source
-    for (const source of Object.values(libraryThumbnailUrlsRef.current)) {
-      if (!Object.values(nextSources).includes(source)) URL.revokeObjectURL(source)
-    }
-    libraryThumbnailUrlsRef.current = nextSources
-    setLibraryThumbnailSources(nextSources)
-  }, [])
+  }, [enqueueLibraryThumbnail])
 
   const refreshLibrary = useCallback(async () => {
     try {
@@ -401,6 +490,7 @@ export function useEasyPanelController(): EasyPanelController {
     const requestNumber = libraryRequestRef.current + 1
     libraryRequestRef.current = requestNumber
     libraryOffsetRef.current = 0
+    resetLibraryThumbnailQueue()
     clearLibraryThumbnailSources()
     setLibrary([])
     setLibraryTotal(0)
@@ -420,14 +510,14 @@ export function useEasyPanelController(): EasyPanelController {
       setLibraryMessage(response.items.length
         ? `已读取 ${response.items.length} / ${response.total} 条作品${response.has_more ? '，可继续加载更早作品' : ''}`
         : '电脑端暂无可用作品')
-      void loadLibraryThumbnails(response.items, config, requestNumber, false)
+      loadLibraryThumbnails(response.items, config, requestNumber)
     } catch (caught) {
       setLibraryMessage('作品库读取失败')
       setLibraryError(errorMessage(caught, settings.token, '读取作品库'))
     } finally {
       if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
     }
-  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, settings.baseUrl, settings.token])
+  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, resetLibraryThumbnailQueue, settings.baseUrl, settings.token])
 
   const loadMoreLibrary = useCallback(async () => {
     if (libraryLoading || !libraryHasMore) return
@@ -462,7 +552,7 @@ export function useEasyPanelController(): EasyPanelController {
       libraryOffsetRef.current = response.offset + response.items.length
       const loadedCount = library.length + appended.length
       setLibraryMessage(`已读取 ${loadedCount} / ${response.total} 条作品${response.has_more ? '，可继续加载更早作品' : '，已到作品库末尾'}`)
-      void loadLibraryThumbnails(response.items, config, requestNumber, true)
+      loadLibraryThumbnails(response.items, config, requestNumber)
     } catch (caught) {
       setLibraryMessage('更多作品读取失败')
       setLibraryError(errorMessage(caught, settings.token, '读取更多作品'))
@@ -810,6 +900,10 @@ export function useEasyPanelController(): EasyPanelController {
   useEffect(() => () => abortRef.current?.abort(), [])
 
   useEffect(() => () => {
+    libraryRequestRef.current += 1
+    for (const controller of libraryThumbnailAbortRef.current.values()) controller.abort()
+    libraryThumbnailAbortRef.current.clear()
+    libraryThumbnailQueueRef.current = []
     for (const source of Object.values(libraryThumbnailUrlsRef.current)) URL.revokeObjectURL(source)
   }, [])
 
@@ -845,6 +939,7 @@ export function useEasyPanelController(): EasyPanelController {
     libraryDetail,
     libraryLineage,
     libraryThumbnailSources,
+    libraryThumbnailLoading,
     libraryDownloadLoading,
     libraryDownloadMessage,
     pendingDerivation,
@@ -866,6 +961,7 @@ export function useEasyPanelController(): EasyPanelController {
     clearPendingDerivation,
     downloadLibraryArtifact,
     loadLibraryArtifactPreview,
+    loadLibraryThumbnail,
     loadMoreLibrary,
   }
 }
@@ -881,6 +977,11 @@ function base64ToBlob(base64: string, mime: string): Blob {
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
   return new Blob([bytes], { type: mime || 'image/png' })
+}
+
+function withLibraryThumbnailPreview(url: string): string {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}preview=1`
 }
 
 function errorMessage(error: unknown, token: string, action: string): string {

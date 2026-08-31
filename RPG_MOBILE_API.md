@@ -2,7 +2,7 @@
 
 Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Panel `8190`，Easy Panel 再在电脑本机访问 ComfyUI `8188`。
 
-当前配套版本：Easy Panel 服务端 `2.2.2`，Android 客户端 `mobile-v1.4.3`（versionCode `1004003`）。协议仍为 RPG API v2。
+当前配套版本：Easy Panel 服务端 `2.2.2`，Android 客户端 `mobile-v1.4.4`（versionCode `1004004`）。协议仍为 RPG API v2。
 
 ## 1. 启动手机模式
 
@@ -251,4 +251,4 @@ Easy Panel 2.2.x 在不改变 JSON 源记录的前提下维护一个可重建的
 - `GET /api/rpg/library/generations/{generation_id}`：作品详情、完整快照、LoRA、输出和结构化 replay / variation 预览；
 - `GET /api/rpg/library/generations/{generation_id}/lineage`：父 / 子作品谱系。
 
-这些接口复用 RPG Token，且没有 Library 写入接口。`replay.can_submit` / `variation.can_submit` 始终为 `false`；Android 和桌面 Web 的恢复只把参数填回当前表单，用户仍需明确点击“生成图片”。恢复后的下一次显式提交最多携带一次父作品关系，提交成功后清除，失败保留供重试，也可取消关联；换 Seed 固定映射为 `seed_variant`，复现 / 继续编辑保留已有记录的 operation。作品库恢复不会自动挑选具体 artifact 作为图生图、局部重绘或修复输入，当前也不会因此建立 `parentArtifactId`；未来只有真实使用用户明确选择的具体输入时才可建立该关系。桌面 Web 入口支持分页、操作 / 状态 / 模型筛选和排序；输出通过现有带鉴权的 `/api/rpg/image` 路径打开或下载，缺失文件不会被图片接口提供。旧服务端 404、空索引、断网或缺少谱系接口时只显示回退提示，不会自动提交生成。完整 schema、迁移、重建命令和后续规划见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
+这些接口复用 RPG Token，且没有 Library 写入接口。`replay.can_submit` / `variation.can_submit` 始终为 `false`；Android 和桌面 Web 的恢复只把参数填回当前表单，用户仍需明确点击“生成图片”。恢复后的下一次显式提交最多携带一次父作品关系，提交成功后清除，失败保留供重试，也可取消关联；换 Seed 固定映射为 `seed_variant`，复现 / 继续编辑保留已有记录的 operation。作品库恢复不会自动挑选具体 artifact 作为图生图、局部重绘或修复输入，当前也不会因此建立 `parentArtifactId`；未来只有真实使用用户明确选择的具体输入时才可建立该关系。桌面 Web 入口支持分页、操作 / 状态 / 模型筛选和排序；输出通过现有带鉴权的 `/api/rpg/image` 路径打开或下载，缺失文件不会被图片接口提供。Android 作品库首屏只加载可视区域缩略图，缩略图请求可附加 `preview=1` 获取 360px 预览；原图仍通过不带 `preview=1` 的鉴权路径打开或下载。旧服务端忽略该参数时仍可回退为原图请求。旧服务端 404、空索引、断网或缺少谱系接口时只显示回退提示，不会自动提交生成。完整 schema、迁移、重建命令和后续规划见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。

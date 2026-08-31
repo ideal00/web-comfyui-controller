@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import os
 import tempfile
@@ -8,6 +9,8 @@ import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from PIL import Image
 
 from easy_panel_app.creative_index import CreativeIndex
 import easy_panel
@@ -128,7 +131,10 @@ class CreativeLibraryApiTests(unittest.TestCase):
             root = Path(folder)
             output = root / "output"
             output.mkdir()
-            (output / "library.png").write_bytes(b"private-image")
+            image_buffer = io.BytesIO()
+            Image.new("RGB", (1200, 800), (12, 34, 56)).save(image_buffer, format="PNG")
+            original_image = image_buffer.getvalue()
+            (output / "library.png").write_bytes(original_image)
             index_path = root / "creative.sqlite3"
             index = CreativeIndex(index_path)
             result = index.upsert_snapshot({
@@ -187,6 +193,15 @@ class CreativeLibraryApiTests(unittest.TestCase):
                     self.assertIsNone(missing["url"])
                     status, _body = request("GET", "/api/rpg/image?name=missing.png&type=output", auth)
                     self.assertEqual(404, status)
+
+                    status, body = request("GET", "/api/rpg/image?name=library.png&type=output", auth)
+                    self.assertEqual(200, status)
+                    self.assertEqual(original_image, body)
+                    status, preview = request("GET", "/api/rpg/image?name=library.png&type=output&preview=1", auth)
+                    self.assertEqual(200, status)
+                    self.assertTrue(preview.startswith(b"\xff\xd8"))
+                    with Image.open(io.BytesIO(preview)) as preview_image:
+                        self.assertEqual((360, 240), preview_image.size)
 
                     status, body = request("GET", f"/api/rpg/library/generations/{generation_id}/lineage", auth)
                     self.assertEqual(200, status)

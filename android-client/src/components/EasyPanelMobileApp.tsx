@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
 import { useEasyPanelController } from '../hooks/useEasyPanelController'
@@ -543,11 +543,13 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           thumbnailSources={controller.libraryThumbnailSources}
           total={controller.libraryTotal}
           hasMore={controller.libraryHasMore}
+          thumbnailLoading={controller.libraryThumbnailLoading}
           loading={controller.libraryLoading}
           error={controller.libraryError}
           message={controller.libraryMessage}
           onRefresh={() => void controller.refreshLibrary()}
           onLoadMore={() => void controller.loadMoreLibrary()}
+          onLoadThumbnail={controller.loadLibraryThumbnail}
           onOpen={(id) => void controller.openLibraryGeneration(id)}
         />}
         {controller.libraryDownloadMessage && <p className={`epm-library-message ${controller.libraryDownloadMessage.includes('失败') ? 'failure' : 'success'}`} role="status">{controller.libraryDownloadMessage}</p>}
@@ -565,20 +567,49 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
   )
 }
 
-function LibraryList({ items, thumbnailSources, total, hasMore, loading, error, message, onRefresh, onLoadMore, onOpen }: {
+function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading, loading, error, message, onRefresh, onLoadMore, onLoadThumbnail, onOpen }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
   total: number
   hasMore: boolean
+  thumbnailLoading: Record<string, boolean>
   loading: boolean
   error: string
   message: string
   onRefresh: () => void
   onLoadMore: () => void
+  onLoadThumbnail: (item: EasyPanelGenerationSummary) => void
   onOpen: (id: string) => void
 }) {
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const root = contentRef.current
+    if (!root || !items.length) return
+    const itemsById = new Map(items.map((item) => [item.generation_id, item]))
+    const requestThumbnail = (id: string) => {
+      const item = itemsById.get(id)
+      if (item) onLoadThumbnail(item)
+    }
+    if (typeof IntersectionObserver !== 'function') {
+      items.forEach((item) => onLoadThumbnail(item))
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        const id = (entry.target as HTMLElement).dataset.libraryThumbnailId
+        if (!id) continue
+        observer.unobserve(entry.target)
+        requestThumbnail(id)
+      }
+    }, { root, rootMargin: '180px 0px', threshold: 0.01 })
+    root.querySelectorAll<HTMLElement>('[data-library-thumbnail-id]').forEach((element) => observer.observe(element))
+    return () => observer.disconnect()
+  }, [items, onLoadThumbnail])
+
   return (
-    <div className="epm-library-content">
+    <div ref={contentRef} className="epm-library-content">
       <div className="epm-library-toolbar">
         <span>{message}</span>
         <button type="button" className="epm-quiet-button epm-inline-button" onClick={onRefresh} disabled={loading}>
@@ -588,11 +619,11 @@ function LibraryList({ items, thumbnailSources, total, hasMore, loading, error, 
       {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
       {items.length ? <>
         <div className="epm-library-list">
-          {items.map((item) => <button type="button" className="epm-library-item" key={item.generation_id} onClick={() => onOpen(item.generation_id)}>
+          {items.map((item) => <button type="button" className="epm-library-item" data-library-thumbnail-id={item.generation_id} key={item.generation_id} onClick={() => onOpen(item.generation_id)}>
             <div className="epm-library-thumb">
               {thumbnailSources[item.generation_id]
                 ? <img src={thumbnailSources[item.generation_id]} alt="" />
-                : <ImageIcon size={24} />}
+                : thumbnailLoading[item.generation_id] ? <LoaderCircle size={22} className="epm-spin" /> : <ImageIcon size={24} />}
             </div>
             <div className="epm-library-item-copy">
               <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
@@ -676,6 +707,23 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
   )
 }
 
+type LibraryViewerPoint = { x: number; y: number }
+type LibraryViewerGesture =
+  | { kind: 'pan'; lastPoint: LibraryViewerPoint; moved: boolean }
+  | { kind: 'pinch'; startDistance: number; startZoom: number; startOffset: LibraryViewerPoint; startCenter: LibraryViewerPoint; moved: boolean }
+
+function libraryViewerDistance(left: LibraryViewerPoint, right: LibraryViewerPoint): number {
+  return Math.hypot(right.x - left.x, right.y - left.y)
+}
+
+function libraryViewerCenter(left: LibraryViewerPoint, right: LibraryViewerPoint): LibraryViewerPoint {
+  return { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 }
+}
+
+function libraryViewerZoom(value: number): number {
+  return Math.min(4, Math.max(1, value))
+}
+
 function LibraryImageViewer({ artifact, source, loading, error, downloadLoading, onClose, onDownload }: {
   artifact: EasyPanelGenerationArtifact
   source: string
@@ -685,6 +733,170 @@ function LibraryImageViewer({ artifact, source, loading, error, downloadLoading,
   onClose: () => void
   onDownload: (artifact: EasyPanelGenerationArtifact) => void
 }) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const pointersRef = useRef(new Map<number, LibraryViewerPoint>())
+  const gestureRef = useRef<LibraryViewerGesture | undefined>(undefined)
+  const lastTapRef = useRef<{ time: number; point: LibraryViewerPoint } | undefined>(undefined)
+  const zoomRef = useRef(1)
+  const offsetRef = useRef<LibraryViewerPoint>({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [offset, setOffset] = useState<LibraryViewerPoint>({ x: 0, y: 0 })
+
+  useEffect(() => {
+    pointersRef.current.clear()
+    gestureRef.current = undefined
+    lastTapRef.current = undefined
+    zoomRef.current = 1
+    offsetRef.current = { x: 0, y: 0 }
+    setZoom(1)
+    setOffset({ x: 0, y: 0 })
+  }, [artifact.artifact_id, source])
+
+  function constrainedOffset(nextOffset: LibraryViewerPoint, nextZoom: number): LibraryViewerPoint {
+    const viewport = viewportRef.current
+    if (!viewport || nextZoom <= 1) return { x: 0, y: 0 }
+    const maxX = Math.max(0, viewport.clientWidth * (nextZoom - 1) * 0.5 + 48)
+    const maxY = Math.max(0, viewport.clientHeight * (nextZoom - 1) * 0.5 + 48)
+    return {
+      x: Math.min(maxX, Math.max(-maxX, nextOffset.x)),
+      y: Math.min(maxY, Math.max(-maxY, nextOffset.y)),
+    }
+  }
+
+  function updateTransform(nextZoom: number, nextOffset: LibraryViewerPoint) {
+    const safeZoom = libraryViewerZoom(nextZoom)
+    const safeOffset = constrainedOffset(nextOffset, safeZoom)
+    zoomRef.current = safeZoom
+    offsetRef.current = safeOffset
+    setZoom(safeZoom)
+    setOffset(safeOffset)
+  }
+
+  function pointFromEvent(event: ReactPointerEvent<HTMLDivElement>): LibraryViewerPoint {
+    const rect = event.currentTarget.getBoundingClientRect()
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  }
+
+  function beginGesture() {
+    const points = [...pointersRef.current.values()]
+    if (points.length >= 2) {
+      gestureRef.current = {
+        kind: 'pinch',
+        startDistance: Math.max(1, libraryViewerDistance(points[0], points[1])),
+        startZoom: zoomRef.current,
+        startOffset: { ...offsetRef.current },
+        startCenter: libraryViewerCenter(points[0], points[1]),
+        moved: false,
+      }
+    } else if (points.length === 1) {
+      gestureRef.current = { kind: 'pan', lastPoint: points[0], moved: false }
+    } else {
+      gestureRef.current = undefined
+    }
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (loading || !source) return
+    event.preventDefault()
+    const point = pointFromEvent(event)
+    pointersRef.current.set(event.pointerId, point)
+    try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* WebView may reject capture after teardown. */ }
+    if (pointersRef.current.size > 1) lastTapRef.current = undefined
+    beginGesture()
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!pointersRef.current.has(event.pointerId)) return
+    event.preventDefault()
+    const point = pointFromEvent(event)
+    pointersRef.current.set(event.pointerId, point)
+    const points = [...pointersRef.current.values()]
+    const gesture = gestureRef.current
+    if (points.length >= 2) {
+      if (!gesture || gesture.kind !== 'pinch') {
+        beginGesture()
+        return
+      }
+      const center = libraryViewerCenter(points[0], points[1])
+      const distance = Math.max(1, libraryViewerDistance(points[0], points[1]))
+      const nextZoom = libraryViewerZoom(gesture.startZoom * distance / gesture.startDistance)
+      const viewport = viewportRef.current
+      const viewportCenter = viewport ? { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 } : { x: 0, y: 0 }
+      const scale = nextZoom / gesture.startZoom
+      const centerDelta = { x: center.x - gesture.startCenter.x, y: center.y - gesture.startCenter.y }
+      const anchor = { x: gesture.startCenter.x - viewportCenter.x, y: gesture.startCenter.y - viewportCenter.y }
+      updateTransform(nextZoom, {
+        x: gesture.startOffset.x * scale + centerDelta.x + anchor.x * (1 - scale),
+        y: gesture.startOffset.y * scale + centerDelta.y + anchor.y * (1 - scale),
+      })
+      gesture.moved = true
+      return
+    }
+    if (!gesture || gesture.kind !== 'pan') {
+      beginGesture()
+      return
+    }
+    const delta = { x: point.x - gesture.lastPoint.x, y: point.y - gesture.lastPoint.y }
+    if (Math.abs(delta.x) > 1 || Math.abs(delta.y) > 1) gesture.moved = true
+    updateTransform(zoomRef.current, { x: offsetRef.current.x + delta.x, y: offsetRef.current.y + delta.y })
+    gesture.lastPoint = point
+  }
+
+  function handleTap(point: LibraryViewerPoint) {
+    const now = Date.now()
+    const previous = lastTapRef.current
+    const doubleTap = previous
+      && now - previous.time < 320
+      && libraryViewerDistance(previous.point, point) < 28
+    if (doubleTap) {
+      lastTapRef.current = undefined
+      const nextZoom = zoomRef.current > 1.05 ? 1 : 2
+      if (nextZoom === 1) {
+        updateTransform(1, { x: 0, y: 0 })
+      } else {
+        const viewport = viewportRef.current
+        const center = viewport ? { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 } : { x: 0, y: 0 }
+        const ratio = nextZoom / zoomRef.current
+        updateTransform(nextZoom, {
+          x: offsetRef.current.x + (point.x - center.x) * (1 - ratio),
+          y: offsetRef.current.y + (point.y - center.y) * (1 - ratio),
+        })
+      }
+      return
+    }
+    lastTapRef.current = { time: now, point }
+  }
+
+  function finishPointer(event: ReactPointerEvent<HTMLDivElement>, allowTap: boolean) {
+    const point = pointersRef.current.get(event.pointerId)
+    const wasSingle = pointersRef.current.size === 1
+    const gesture = gestureRef.current
+    const endedPinch = gesture?.kind === 'pinch'
+    pointersRef.current.delete(event.pointerId)
+    try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* Pointer may already be released. */ }
+    if (allowTap && wasSingle && point && gesture?.kind === 'pan' && !gesture.moved) handleTap(point)
+    if (pointersRef.current.size > 0) {
+      beginGesture()
+      if (endedPinch && gestureRef.current?.kind === 'pan') gestureRef.current.moved = true
+    }
+    else gestureRef.current = undefined
+  }
+
+  function handleWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (!source) return
+    event.preventDefault()
+    const nextZoom = libraryViewerZoom(zoomRef.current - event.deltaY * 0.002)
+    if (nextZoom === zoomRef.current) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const center = { x: rect.width / 2, y: rect.height / 2 }
+    const point = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const ratio = nextZoom / zoomRef.current
+    updateTransform(nextZoom, {
+      x: offsetRef.current.x + (point.x - center.x) * (1 - ratio),
+      y: offsetRef.current.y + (point.y - center.y) * (1 - ratio),
+    })
+  }
+
   return (
     <div className="epm-library-viewer-layer" role="dialog" aria-modal="true" aria-label="原图预览">
       <button type="button" className="epm-library-viewer-backdrop" onClick={onClose} aria-label="关闭原图预览" />
@@ -697,16 +909,28 @@ function LibraryImageViewer({ artifact, source, loading, error, downloadLoading,
           </div>
           <button type="button" className="epm-library-close" onClick={onClose} title="关闭"><X size={20} /></button>
         </header>
-        <div className="epm-library-viewer-viewport">
+        <div
+          ref={viewportRef}
+          className="epm-library-viewer-viewport"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={(event) => finishPointer(event, true)}
+          onPointerCancel={(event) => finishPointer(event, false)}
+          onWheel={handleWheel}
+          onContextMenu={(event) => event.preventDefault()}
+        >
           {loading ? <div className="epm-library-viewer-state"><LoaderCircle size={28} className="epm-spin" /><span>正在读取原图…</span></div>
-            : source ? <img src={source} alt={artifact.filename || '作品原图'} draggable={false} />
+            : source ? <img src={source} alt={artifact.filename || '作品原图'} draggable={false} style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${zoom})` }} />
               : <div className="epm-library-viewer-state"><ImageIcon size={28} /><span>{error || '原图暂不可用'}</span></div>}
         </div>
         <footer className="epm-library-viewer-footer">
-          <span>{source ? '已加载输出文件原图，可双指缩放查看细节。' : '原图加载失败。'}</span>
-          {source && <button type="button" className="epm-secondary-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={Boolean(downloadLoading)}>
-            {downloadLoading === artifact.artifact_id ? <LoaderCircle size={14} className="epm-spin" /> : <Download size={14} />}下载原图
-          </button>}
+          <span>{source ? `已加载原图 · ${Math.round(zoom * 100)}% · 双指缩放，单指拖动，双击放大/还原。` : '原图加载失败。'}</span>
+          {source && <div className="epm-library-viewer-footer-actions">
+            {zoom > 1.05 && <button type="button" className="epm-quiet-button epm-inline-button" onClick={() => updateTransform(1, { x: 0, y: 0 })}>还原</button>}
+            <button type="button" className="epm-secondary-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={Boolean(downloadLoading)}>
+              {downloadLoading === artifact.artifact_id ? <LoaderCircle size={14} className="epm-spin" /> : <Download size={14} />}下载原图
+            </button>
+          </div>}
         </footer>
       </section>
     </div>

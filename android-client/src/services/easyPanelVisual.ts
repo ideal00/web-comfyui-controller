@@ -247,9 +247,9 @@ export async function waitForVisualJob(
   return job
 }
 
-export async function downloadVisualImage(config: EasyPanelVisualConfig, image: VisualImageRef): Promise<Blob> {
+export async function downloadVisualImage(config: EasyPanelVisualConfig, image: VisualImageRef, signal?: AbortSignal): Promise<Blob> {
   const baseUrl = normalizeEasyPanelBaseUrl(config.baseUrl)
-  const response = await fetchWithTimeout(baseUrl + image.url, { headers: requestHeaders(config.token) }, config.requestTimeoutMs ?? 30000)
+  const response = await fetchWithTimeout(baseUrl + image.url, { headers: requestHeaders(config.token), signal }, config.requestTimeoutMs ?? 30000)
   if (!response.ok) throw new EasyPanelHttpError(response.status, `下载剧情 CG 失败 (${response.status})`, null)
   return response.blob()
 }

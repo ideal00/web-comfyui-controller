@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import ipaddress
+import io
 import mimetypes
 import os
 import random
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from functools import lru_cache
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -3900,6 +3902,28 @@ def resolve_rpg_output_image(name: str, subfolder: str = "") -> Path:
     return candidate
 
 
+@lru_cache(maxsize=256)
+def build_rpg_thumbnail(path: str, modified_ns: int, file_size: int) -> tuple[bytes, str]:
+    """Build and cache a small library preview without changing the source file."""
+
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as source:
+        transpose = getattr(ImageOps, "exif_transpose", None)
+        image = transpose(source) if callable(transpose) else source.copy()
+        resampling = getattr(Image, "Resampling", Image)
+        image.thumbnail((360, 360), resampling.LANCZOS)
+        has_alpha = "A" in image.getbands() or "transparency" in image.info
+        output = io.BytesIO()
+        if has_alpha:
+            image.convert("RGBA").save(output, format="PNG", optimize=True)
+            content_type = "image/png"
+        else:
+            image.convert("RGB").save(output, format="JPEG", quality=82, optimize=True, progressive=True)
+            content_type = "image/jpeg"
+    return output.getvalue(), content_type
+
+
 def comfy_websocket_url() -> str:
     comfy_address = urllib.parse.urlparse(COMFY)
     websocket_scheme = "wss" if comfy_address.scheme == "https" else "ws"
@@ -4255,14 +4279,25 @@ class Handler(BaseHTTPRequestHandler):
                 query = urllib.parse.parse_qs(parsed.query)
                 name = query.get("name", [""])[0]
                 subfolder = query.get("subfolder", [""])[0]
+                preview = query.get("preview", [""])[0].strip().casefold() in {"1", "true", "yes", "thumbnail"}
                 try:
                     file = resolve_rpg_output_image(name, subfolder)
                 except FileNotFoundError:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
-                content = file.read_bytes()
+                content_type = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+                if preview:
+                    try:
+                        stat = file.stat()
+                        content, content_type = build_rpg_thumbnail(str(file), stat.st_mtime_ns, stat.st_size)
+                    except Exception:
+                        # A malformed/unsupported image should not break the
+                        # library; fall back to the original authenticated file.
+                        content = file.read_bytes()
+                else:
+                    content = file.read_bytes()
                 self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Cache-Control", "private, max-age=86400")
                 self.add_rpg_cors_headers()
                 self.add_rpg_session_header()

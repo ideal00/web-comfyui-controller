@@ -6268,12 +6268,13 @@ textarea:focus-visible {
 .epm-library-viewer-header > div { min-width: 0; display: grid; gap: 3px; }
 .epm-library-viewer-header strong { font-size: 15px; }
 .epm-library-viewer-header small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--epm-muted); font-size: 10px; }
-.epm-library-viewer-viewport { min-height: 0; overflow: auto; padding: 12px; background: radial-gradient(circle at center, rgba(41, 78, 71, .18), transparent 62%), #050a0a; display: flex; align-items: center; justify-content: center; overscroll-behavior: contain; touch-action: pinch-zoom; }
-.epm-library-viewer-viewport img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 7px; box-shadow: 0 8px 30px rgba(0, 0, 0, .42); user-select: none; touch-action: pinch-zoom; }
+.epm-library-viewer-viewport { min-height: 0; overflow: hidden; padding: 12px; background: radial-gradient(circle at center, rgba(41, 78, 71, .18), transparent 62%), #050a0a; display: flex; align-items: center; justify-content: center; overscroll-behavior: contain; touch-action: none; user-select: none; }
+.epm-library-viewer-viewport img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; border-radius: 7px; box-shadow: 0 8px 30px rgba(0, 0, 0, .42); user-select: none; touch-action: none; will-change: transform; }
 .epm-library-viewer-state { min-height: 140px; padding: 24px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 9px; color: var(--epm-muted); font-size: 11px; text-align: center; }
 .epm-library-viewer-state svg { color: var(--epm-accent); }
 .epm-library-viewer-footer { min-width: 0; padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); border-top: 1px solid var(--epm-line); display: flex; align-items: center; justify-content: space-between; gap: 9px; color: var(--epm-muted); font-size: 10px; line-height: 1.4; }
 .epm-library-viewer-footer > span { min-width: 0; overflow-wrap: anywhere; }
+.epm-library-viewer-footer-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
 
 @media (prefers-reduced-motion: reduce) {
   .epm-spin,
