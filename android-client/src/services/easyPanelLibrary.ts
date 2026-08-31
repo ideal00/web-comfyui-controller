@@ -1,0 +1,185 @@
+import { jsonRequest, type EasyPanelVisualConfig } from './easyPanelVisual'
+import type { EasyPanelSnapshotRecord } from './easyPanelSnapshots'
+
+export type EasyPanelLibraryOperation =
+  | 'txt2img'
+  | 'seed_variant'
+  | 'img2img'
+  | 'inpaint'
+  | 'face_fix'
+  | 'hand_fix'
+  | 'upscale'
+  | 'outfit_change'
+  | 'scene_change'
+  | 'style_change'
+  | 'unknown'
+
+export type EasyPanelLibraryStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled' | 'unknown'
+
+export interface EasyPanelGenerationSummary {
+  generation_id: string
+  snapshot_id?: string | null
+  prompt_id?: string | null
+  request_id?: string | null
+  operation: EasyPanelLibraryOperation
+  status: EasyPanelLibraryStatus
+  created_at: number
+  updated_at: number
+  schema_version: number
+  panel_version?: string
+  workflow_version?: string
+  inference_version?: string
+  model: string
+  seed?: string | number | null
+  width?: number | null
+  height?: number | null
+  quality?: string
+  lora_count: number
+  artifact_count: number
+  parent_count: number
+  child_count: number
+  thumbnail_url?: string | null
+}
+
+export interface EasyPanelGenerationArtifact {
+  artifact_id: string
+  generation_id: string
+  filename: string
+  subfolder: string
+  type: string
+  kind: string
+  exists?: boolean | null
+  metadata: Record<string, unknown>
+  url?: string | null
+  created_at: number
+}
+
+export interface EasyPanelGenerationLora {
+  position: number
+  name: string
+  weight?: string | number | null
+  trigger: string
+  role: string
+  source: string
+  metadata: Record<string, unknown>
+}
+
+export interface EasyPanelReplayPreview {
+  can_submit: false
+  action: 'restore_to_form'
+  payload: Record<string, unknown>
+  operation: EasyPanelLibraryOperation
+  seed?: string | number | null
+  note: string
+}
+
+export interface EasyPanelGenerationDetail extends EasyPanelGenerationSummary {
+  input: Record<string, unknown>
+  compiled: Record<string, unknown>
+  inference: Record<string, unknown>
+  workflow: Record<string, unknown>
+  snapshot: EasyPanelSnapshotRecord | Record<string, unknown>
+  error: Record<string, unknown>
+  loras: EasyPanelGenerationLora[]
+  artifacts: EasyPanelGenerationArtifact[]
+  replay: EasyPanelReplayPreview
+  variation: EasyPanelReplayPreview
+}
+
+export interface EasyPanelLibraryListResponse {
+  api_version: number
+  index_schema_version: number
+  schema_version: number
+  items: EasyPanelGenerationSummary[]
+  total: number
+  limit: number
+  offset: number
+  has_more: boolean
+}
+
+export interface EasyPanelLibraryDetailResponse {
+  api_version: number
+  index_schema_version: number
+  generation: EasyPanelGenerationDetail
+}
+
+export interface EasyPanelLibraryLineageNode extends EasyPanelGenerationSummary {
+  depth: number
+}
+
+export interface EasyPanelLibraryLineageEdge {
+  derivation_id: string
+  parent_generation_id?: string | null
+  child_generation_id?: string | null
+  parent_artifact_id?: string | null
+  child_artifact_id?: string | null
+  operation: EasyPanelLibraryOperation
+  created_at: number
+  metadata: Record<string, unknown>
+}
+
+export interface EasyPanelLibraryLineage {
+  generation_id: string
+  ancestors: EasyPanelLibraryLineageNode[]
+  descendants: EasyPanelLibraryLineageNode[]
+  edges: EasyPanelLibraryLineageEdge[]
+  schema_version: number
+}
+
+export interface EasyPanelLibraryLineageResponse {
+  api_version: number
+  index_schema_version: number
+  lineage: EasyPanelLibraryLineage
+}
+
+export interface EasyPanelLibraryQuery {
+  limit?: number
+  offset?: number
+  operation?: EasyPanelLibraryOperation | ''
+  status?: EasyPanelLibraryStatus | ''
+  model?: string
+  sort?: 'created_at' | 'updated_at' | 'status' | 'operation' | 'model'
+  order?: 'asc' | 'desc'
+}
+
+export async function getEasyPanelLibrary(
+  config: EasyPanelVisualConfig,
+  query: EasyPanelLibraryQuery = {},
+): Promise<EasyPanelLibraryListResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(clampInteger(query.limit, 20, 1, 100)))
+  params.set('offset', String(clampInteger(query.offset, 0, 0, 1_000_000)))
+  if (query.operation) params.set('operation', query.operation)
+  if (query.status) params.set('status', query.status)
+  if (query.model?.trim()) params.set('model', query.model.trim().slice(0, 200))
+  if (query.sort) params.set('sort', query.sort)
+  if (query.order) params.set('order', query.order)
+  return jsonRequest<EasyPanelLibraryListResponse>(config, `/api/rpg/library/generations?${params.toString()}`)
+}
+
+export async function getEasyPanelGeneration(
+  config: EasyPanelVisualConfig,
+  generationId: string,
+): Promise<EasyPanelLibraryDetailResponse> {
+  const id = safeGenerationId(generationId)
+  return jsonRequest<EasyPanelLibraryDetailResponse>(config, `/api/rpg/library/generations/${id}`)
+}
+
+export async function getEasyPanelLineage(
+  config: EasyPanelVisualConfig,
+  generationId: string,
+): Promise<EasyPanelLibraryLineageResponse> {
+  const id = safeGenerationId(generationId)
+  return jsonRequest<EasyPanelLibraryLineageResponse>(config, `/api/rpg/library/generations/${id}/lineage`)
+}
+
+export function safeGenerationId(value: string): string {
+  const id = value.trim().toLowerCase()
+  if (!/^[0-9a-f]{32}$/u.test(id)) throw new Error('作品编号无效。')
+  return id
+}
+
+function clampInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(maximum, Math.max(minimum, Math.round(value as number)))
+}

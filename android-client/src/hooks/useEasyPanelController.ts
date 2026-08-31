@@ -33,6 +33,17 @@ import {
   type VisualJobStatus,
 } from '../services/easyPanelVisual'
 import {
+  getEasyPanelGeneration,
+  getEasyPanelLineage,
+  getEasyPanelLibrary,
+} from '../services/easyPanelLibrary'
+import type {
+  EasyPanelGenerationArtifact,
+  EasyPanelGenerationDetail,
+  EasyPanelGenerationSummary,
+  EasyPanelLibraryLineage,
+} from '../services/easyPanelLibrary'
+import {
   getEasyPanelSnapshot,
   getEasyPanelSnapshots,
   type EasyPanelSnapshotRecord,
@@ -42,6 +53,10 @@ import {
   restoreSnapshotToSettings,
   type EasyPanelSnapshotRestoreMode,
 } from '../lib/easyPanelSnapshot'
+import {
+  restoreLibraryGenerationToSettings,
+  type EasyPanelLibraryRestoreMode,
+} from '../lib/easyPanelLibrary'
 
 export type EasyPanelControllerStatus =
   | 'idle'
@@ -77,6 +92,15 @@ export interface EasyPanelController {
   snapshotsMessage: string
   snapshotsError: string
   restoredSnapshot?: EasyPanelSnapshotRecord
+  library: EasyPanelGenerationSummary[]
+  libraryLoading: boolean
+  libraryMessage: string
+  libraryError: string
+  libraryDetail?: EasyPanelGenerationDetail
+  libraryLineage?: EasyPanelLibraryLineage
+  libraryThumbnailSources: Record<string, string>
+  libraryDownloadLoading: string
+  libraryDownloadMessage: string
   setSettings: (settings: EasyPanelControllerSettings) => void
   testConnection: () => Promise<void>
   refreshModels: () => Promise<void>
@@ -88,6 +112,11 @@ export interface EasyPanelController {
   refreshSnapshots: () => Promise<void>
   restoreSnapshot: (id: string, mode?: EasyPanelSnapshotRestoreMode) => Promise<boolean>
   clearSnapshotAdvancedConfig: () => void
+  refreshLibrary: () => Promise<void>
+  openLibraryGeneration: (id: string) => Promise<boolean>
+  clearLibraryDetail: () => void
+  restoreLibraryGeneration: (mode?: EasyPanelLibraryRestoreMode) => Promise<boolean>
+  downloadLibraryArtifact: (artifact: EasyPanelGenerationArtifact) => Promise<void>
 }
 
 const CONTROLLER_GAME_ID = 'easy-panel-mobile'
@@ -111,11 +140,22 @@ export function useEasyPanelController(): EasyPanelController {
   const [snapshotsMessage, setSnapshotsMessage] = useState('连接后刷新电脑端历史快照')
   const [snapshotsError, setSnapshotsError] = useState('')
   const [restoredSnapshot, setRestoredSnapshot] = useState<EasyPanelSnapshotRecord>()
+  const [library, setLibrary] = useState<EasyPanelGenerationSummary[]>([])
+  const [libraryLoading, setLibraryLoading] = useState(false)
+  const [libraryMessage, setLibraryMessage] = useState('连接后读取作品库')
+  const [libraryError, setLibraryError] = useState('')
+  const [libraryDetail, setLibraryDetail] = useState<EasyPanelGenerationDetail>()
+  const [libraryLineage, setLibraryLineage] = useState<EasyPanelLibraryLineage>()
+  const [libraryThumbnailSources, setLibraryThumbnailSources] = useState<Record<string, string>>({})
+  const [libraryDownloadLoading, setLibraryDownloadLoading] = useState('')
+  const [libraryDownloadMessage, setLibraryDownloadMessage] = useState('')
   const stateRef = useRef(state)
   const activeRef = useRef(false)
   const hydratedRecoveryRef = useRef(false)
   const recoveryRef = useRef<(() => Promise<void>) | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const libraryRequestRef = useRef(0)
+  const libraryThumbnailUrlsRef = useRef<Record<string, string>>({})
 
   const settings = state.settings
   const config = useMemo<EasyPanelVisualConfig>(() => ({
@@ -129,6 +169,12 @@ export function useEasyPanelController(): EasyPanelController {
     stateRef.current = next
     setState(next)
     void writeStoredState(EASY_PANEL_CONTROLLER_STATE_KEY, JSON.stringify(next)).catch(() => undefined)
+  }, [])
+
+  const clearLibraryThumbnailSources = useCallback(() => {
+    for (const source of Object.values(libraryThumbnailUrlsRef.current)) URL.revokeObjectURL(source)
+    libraryThumbnailUrlsRef.current = {}
+    setLibraryThumbnailSources({})
   }, [])
 
   useEffect(() => {
@@ -165,10 +211,17 @@ export function useEasyPanelController(): EasyPanelController {
       setSnapshotsMessage('地址或 Token 已改变，请重新读取历史快照')
       setSnapshotsError('')
       setRestoredSnapshot(undefined)
+      setLibrary([])
+      setLibraryMessage('地址或 Token 已改变，请重新读取作品库')
+      setLibraryError('')
+      setLibraryDetail(undefined)
+      setLibraryLineage(undefined)
+      setLibraryDownloadMessage('')
+      clearLibraryThumbnailSources()
     }
     setDownloadMessage('')
     setError('')
-  }, [commitState])
+  }, [clearLibraryThumbnailSources, commitState])
 
   const loadModelCatalog = useCallback(async (nextConfig: EasyPanelVisualConfig): Promise<number | undefined> => {
     setModelsLoading(true)
@@ -283,6 +336,164 @@ export function useEasyPanelController(): EasyPanelController {
       setSnapshotsLoading(false)
     }
   }, [config, settings.baseUrl, settings.token])
+
+  const loadLibraryThumbnails = useCallback(async (
+    items: EasyPanelGenerationSummary[],
+    nextConfig: EasyPanelVisualConfig,
+    requestNumber: number,
+  ) => {
+    if (typeof URL.createObjectURL !== 'function') return
+    const loaded = await Promise.all(items.map(async (item) => {
+      if (!item.thumbnail_url) return undefined
+      try {
+        const blob = await downloadVisualImage(nextConfig, {
+          filename: `${item.generation_id}.png`,
+          type: 'output',
+          url: item.thumbnail_url,
+        })
+        return { id: item.generation_id, source: URL.createObjectURL(blob) }
+      } catch {
+        return undefined
+      }
+    }))
+    if (libraryRequestRef.current !== requestNumber) {
+      for (const item of loaded) if (item) URL.revokeObjectURL(item.source)
+      return
+    }
+    const nextSources: Record<string, string> = {}
+    for (const item of loaded) if (item) nextSources[item.id] = item.source
+    for (const source of Object.values(libraryThumbnailUrlsRef.current)) {
+      if (!Object.values(nextSources).includes(source)) URL.revokeObjectURL(source)
+    }
+    libraryThumbnailUrlsRef.current = nextSources
+    setLibraryThumbnailSources(nextSources)
+  }, [])
+
+  const refreshLibrary = useCallback(async () => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '读取作品库'))
+      return
+    }
+    if (!settings.token.trim()) {
+      setLibraryError('请先填写 RPG Token，再读取电脑端作品库。')
+      return
+    }
+    const requestNumber = libraryRequestRef.current + 1
+    libraryRequestRef.current = requestNumber
+    clearLibraryThumbnailSources()
+    setLibraryDetail(undefined)
+    setLibraryLineage(undefined)
+    setLibraryLoading(true)
+    setLibraryError('')
+    setLibraryMessage('正在读取电脑端作品库…')
+    try {
+      const response = await getEasyPanelLibrary(config, { limit: 30, offset: 0, sort: 'created_at', order: 'desc' })
+      if (libraryRequestRef.current !== requestNumber) return
+      setLibrary(response.items)
+      setLibraryMessage(response.items.length ? `已读取 ${response.items.length} 条作品${response.has_more ? '，下拉刷新可继续查看最新页' : ''}` : '电脑端暂无可用作品')
+      void loadLibraryThumbnails(response.items, config, requestNumber)
+    } catch (caught) {
+      setLibraryMessage('作品库读取失败')
+      setLibraryError(errorMessage(caught, settings.token, '读取作品库'))
+    } finally {
+      if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
+    }
+  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, settings.baseUrl, settings.token])
+
+  const openLibraryGeneration = useCallback(async (id: string) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '读取作品详情'))
+      return false
+    }
+    if (!settings.token.trim()) {
+      setLibraryError('请先填写 RPG Token，再查看作品详情。')
+      return false
+    }
+    setLibraryLoading(true)
+    setLibraryError('')
+    setLibraryMessage('正在读取作品详情…')
+    try {
+      const response = await getEasyPanelGeneration(config, id)
+      setLibraryDetail(response.generation)
+      let lineageAvailable = false
+      try {
+        const lineage = await getEasyPanelLineage(config, id)
+        setLibraryLineage(lineage.lineage)
+        lineageAvailable = true
+      } catch {
+        setLibraryLineage(undefined)
+        setLibraryMessage('详情已加载；当前电脑端未提供谱系信息。')
+      }
+      if (lineageAvailable) setLibraryMessage('详情已加载；可恢复到当前表单后再显式点击生成。')
+      return true
+    } catch (caught) {
+      setLibraryDetail(undefined)
+      setLibraryLineage(undefined)
+      setLibraryMessage('作品详情读取失败')
+      setLibraryError(errorMessage(caught, settings.token, '读取作品详情'))
+      return false
+    } finally {
+      setLibraryLoading(false)
+    }
+  }, [config, settings.baseUrl, settings.token])
+
+  const restoreLibraryGeneration = useCallback(async (
+    mode: EasyPanelLibraryRestoreMode = 'reproduce',
+  ) => {
+    const generation = libraryDetail
+    if (!generation) {
+      setLibraryError('请先打开一条作品详情。')
+      return false
+    }
+    try {
+      const restored = restoreLibraryGenerationToSettings(settings, generation, mode)
+      setRestoredSnapshot(restored.snapshot)
+      commitState({ ...stateRef.current, settings: restored.settings })
+      setLibraryMessage(mode === 'seed-variant'
+        ? '已载入作品并更换 Seed；请回到当前表单，确认后点击“生成图片”。'
+        : '已载入作品参数；请回到当前表单，确认后点击“生成图片”。')
+      setLibraryError('')
+      setError('')
+      return true
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '恢复作品'))
+      return false
+    }
+  }, [commitState, libraryDetail, settings])
+
+  const clearLibraryDetail = useCallback(() => {
+    setLibraryDetail(undefined)
+    setLibraryLineage(undefined)
+    setLibraryError('')
+    setLibraryDownloadMessage('')
+  }, [])
+
+  const downloadLibraryArtifact = useCallback(async (artifact: EasyPanelGenerationArtifact) => {
+    if (!artifact.url || artifact.exists === false || libraryDownloadLoading) return
+    setLibraryDownloadLoading(artifact.artifact_id)
+    setLibraryDownloadMessage('正在下载作品…')
+    try {
+      const blob = await downloadVisualImage(config, {
+        filename: artifact.filename,
+        subfolder: artifact.subfolder,
+        type: artifact.type,
+        url: artifact.url,
+      })
+      const filename = (artifact.filename || 'easy-panel-library.png').replace(/[\\/:*?"<>|]/gu, '_')
+      const result = await downloadBlob(blob, filename || 'easy-panel-library.png')
+      setLibraryDownloadMessage(result.location ? `已保存：${result.location}` : '已交给浏览器下载，请检查下载通知。')
+      setError('')
+    } catch (caught) {
+      setLibraryDownloadMessage('作品下载失败')
+      setLibraryError(errorMessage(caught, settings.token, '下载作品'))
+    } finally {
+      setLibraryDownloadLoading('')
+    }
+  }, [config, libraryDownloadLoading, settings.token])
 
   const restoreSnapshot = useCallback(async (
     snapshotId: string,
@@ -506,6 +717,10 @@ export function useEasyPanelController(): EasyPanelController {
 
   useEffect(() => () => abortRef.current?.abort(), [])
 
+  useEffect(() => () => {
+    for (const source of Object.values(libraryThumbnailUrlsRef.current)) URL.revokeObjectURL(source)
+  }, [])
+
   return {
     hydrated,
     settings,
@@ -529,6 +744,15 @@ export function useEasyPanelController(): EasyPanelController {
     snapshotsMessage,
     snapshotsError,
     restoredSnapshot,
+    library,
+    libraryLoading,
+    libraryMessage,
+    libraryError,
+    libraryDetail,
+    libraryLineage,
+    libraryThumbnailSources,
+    libraryDownloadLoading,
+    libraryDownloadMessage,
     setSettings,
     testConnection,
     refreshModels,
@@ -540,6 +764,11 @@ export function useEasyPanelController(): EasyPanelController {
     refreshSnapshots,
     restoreSnapshot,
     clearSnapshotAdvancedConfig,
+    refreshLibrary,
+    openLibraryGeneration,
+    clearLibraryDetail,
+    restoreLibraryGeneration,
+    downloadLibraryArtifact,
   }
 }
 

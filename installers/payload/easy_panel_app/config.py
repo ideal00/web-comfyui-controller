@@ -41,6 +41,7 @@ class Settings:
     tag_data_dir: Path
     anima_tag_file: Path
     lora_notes_file: Path
+    creative_index_file: Path
 
     @property
     def comfy_root(self) -> Path:
@@ -67,6 +68,7 @@ def load_settings() -> Settings:
     comfy_input = _path_env("EASY_PANEL_COMFY_INPUT", comfy_root / "input")
     output = _path_env("EASY_PANEL_OUTPUT", comfy_root / "output")
     lora_dir = _path_env("EASY_PANEL_LORA_DIR", comfy_root / "models" / "loras")
+    creative_index_file = _path_env("EASY_PANEL_CREATIVE_INDEX", project_root / "creative_index.sqlite3")
     return Settings(
         host=os.environ.get("EASY_PANEL_HOST", "127.0.0.1").strip() or "127.0.0.1",
         port=_port_env("EASY_PANEL_PORT", 8190),
@@ -78,6 +80,7 @@ def load_settings() -> Settings:
         tag_data_dir=project_root / "vendor" / "tagcomplete-data",
         anima_tag_file=project_root / "vendor" / "anima-tags" / "anima-1.0.csv",
         lora_notes_file=project_root / "lora_notes.json",
+        creative_index_file=creative_index_file,
     )
 
 
@@ -94,5 +97,6 @@ LORA_DIR = SETTINGS.lora_dir
 TAG_DATA = SETTINGS.tag_data_dir
 ANIMA_TAG_DATA = SETTINGS.anima_tag_file
 LORA_NOTES = SETTINGS.lora_notes_file
+CREATIVE_INDEX_FILE = SETTINGS.creative_index_file
 COMFY_MODELS = SETTINGS.comfy_models_dir
 CHECKPOINT_DIR = SETTINGS.checkpoint_dir

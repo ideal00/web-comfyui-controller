@@ -38,5 +38,8 @@ rpg_mobile_token.txt
 rpg_jobs.json
 rpg_jobs.json.tmp
 
+# ===== SQLite creative-state read index (rebuildable from the JSON source) =====
+creative_index.sqlite3*
+
 # ===== 跨设备浏览器共享状态（含用户自定义提示词和收藏）=====
 easy_panel_shared_state.json*

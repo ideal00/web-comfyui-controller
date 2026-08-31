@@ -1604,6 +1604,8 @@ vendor\anima-tags\
 
 Android 客户端源码、可复现构建、权限说明、下载位置、安全边界和已知限制见 [android-client/README.md](android-client/README.md)。不要把 `8190` 或 `8188` 直接暴露到公网。
 
+Easy Panel 3.x Phase 1 的只读作品库、SQLite 旁路索引、重建命令和 Phase 2 边界见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
+
 ### 跨设备预设与角色收藏
 
 Easy Panel 网页原有的 `easyPanelPromptPresetsV1`（提示词预设）和 `easyPanelLoraFavoritesV1`（界面内 LoRA 收藏，其中包括角色 LoRA）会通过 `/api/shared-state` 合并到 Easy Panel 项目目录下的 `easy_panel_shared_state.json`。首次打开新版页面会自动尝试迁移本机数据；Android 高级面板使用同一个 `8190` 地址即可读取，页面内也可以点击“立即同步”。

@@ -1,15 +1,17 @@
-import { AlertTriangle, ArrowUpRight, CheckCircle2, Download, Image as ImageIcon, LayoutDashboard, LoaderCircle, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
 import { useEasyPanelController } from '../hooks/useEasyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
+import type { EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
 
 export default function EasyPanelMobileApp() {
   const controller = useEasyPanelController()
   const [advancedOpen, setAdvancedOpen] = useState(true)
   const [advancedOpening, setAdvancedOpening] = useState(false)
   const [advancedError, setAdvancedError] = useState('')
+  const [libraryOpen, setLibraryOpen] = useState(false)
   const promptEditorRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -67,6 +69,11 @@ export default function EasyPanelMobileApp() {
     }
   }
 
+  function openLibrary() {
+    setLibraryOpen(true)
+    void controller.refreshLibrary()
+  }
+
   return (
     <div className="easy-panel-mobile-shell">
       <header className="epm-topbar">
@@ -109,6 +116,16 @@ export default function EasyPanelMobileApp() {
             <span className="epm-mode-kicker">模式 B</span>
             <strong><LayoutDashboard size={16} />高级面板</strong>
             <small>打开电脑端完整 Easy Panel <ArrowUpRight size={13} /></small>
+          </button>
+          <button
+            type="button"
+            className="epm-mode-option epm-mode-action"
+            onClick={openLibrary}
+            disabled={!controller.hydrated || !controller.settings.baseUrl.trim() || controller.libraryLoading}
+          >
+            <span className="epm-mode-kicker">作品管理</span>
+            <strong><BookOpen size={16} />作品库</strong>
+            <small>浏览历史、谱系与恢复参数</small>
           </button>
         </section>
         {advancedError && <div className="epm-advanced-error" role="alert"><XCircle size={15} /><span>{advancedError}</span></div>}
@@ -416,6 +433,149 @@ export default function EasyPanelMobileApp() {
           {working ? controller.statusLabel : '生成图片'}
         </button>
       </footer>
+      {libraryOpen && <EasyPanelLibraryDialog controller={controller} onClose={() => setLibraryOpen(false)} />}
+    </div>
+  )
+}
+
+function EasyPanelLibraryDialog({ controller, onClose }: {
+  controller: ReturnType<typeof useEasyPanelController>
+  onClose: () => void
+}) {
+  const detail = controller.libraryDetail
+
+  async function restore(mode: 'reproduce' | 'seed-variant') {
+    const restored = await controller.restoreLibraryGeneration(mode)
+    if (restored) onClose()
+  }
+
+  return (
+    <div className="epm-library-layer" role="dialog" aria-modal="true" aria-label="作品库">
+      <button type="button" className="epm-library-backdrop" onClick={onClose} aria-label="关闭作品库" />
+      <section className="epm-library-dialog">
+        <header className="epm-library-header">
+          <div>
+            <span className="epm-section-kicker">CREATIVE LIBRARY</span>
+            <h2>作品库</h2>
+            <p>{detail ? '只读查看作品参数、输出和谱系' : '历史生成记录与可恢复参数'}</p>
+          </div>
+          <button type="button" className="epm-library-close" onClick={onClose} title="关闭"><X size={20} /></button>
+        </header>
+        {detail ? <LibraryDetail
+          detail={detail}
+          lineage={controller.libraryLineage}
+          thumbnailSource={controller.libraryThumbnailSources[detail.generation_id]}
+          downloadLoading={controller.libraryDownloadLoading}
+          onBack={controller.clearLibraryDetail}
+          onRestore={restore}
+          onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
+        /> : <LibraryList
+          items={controller.library}
+          thumbnailSources={controller.libraryThumbnailSources}
+          loading={controller.libraryLoading}
+          error={controller.libraryError}
+          message={controller.libraryMessage}
+          onRefresh={() => void controller.refreshLibrary()}
+          onOpen={(id) => void controller.openLibraryGeneration(id)}
+        />}
+        {controller.libraryDownloadMessage && <p className={`epm-library-message ${controller.libraryDownloadMessage.includes('失败') ? 'failure' : 'success'}`} role="status">{controller.libraryDownloadMessage}</p>}
+      </section>
+    </div>
+  )
+}
+
+function LibraryList({ items, thumbnailSources, loading, error, message, onRefresh, onOpen }: {
+  items: EasyPanelGenerationSummary[]
+  thumbnailSources: Record<string, string>
+  loading: boolean
+  error: string
+  message: string
+  onRefresh: () => void
+  onOpen: (id: string) => void
+}) {
+  return (
+    <div className="epm-library-content">
+      <div className="epm-library-toolbar">
+        <span>{message}</span>
+        <button type="button" className="epm-quiet-button epm-inline-button" onClick={onRefresh} disabled={loading}>
+          {loading ? <LoaderCircle size={15} className="epm-spin" /> : <RefreshCw size={15} />}刷新
+        </button>
+      </div>
+      {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
+      {items.length ? <div className="epm-library-list">
+        {items.map((item) => <button type="button" className="epm-library-item" key={item.generation_id} onClick={() => onOpen(item.generation_id)}>
+          <div className="epm-library-thumb">
+            {thumbnailSources[item.generation_id]
+              ? <img src={thumbnailSources[item.generation_id]} alt="" />
+              : <ImageIcon size={24} />}
+          </div>
+          <div className="epm-library-item-copy">
+            <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
+            <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
+            <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
+          </div>
+        </button>)}
+      </div> : <div className="epm-library-empty"><BookOpen size={28} /><strong>暂无作品记录</strong><span>新任务完成后会进入作品库；也可在电脑端执行重建索引。</span></div>}
+    </div>
+  )
+}
+
+function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBack, onRestore, onDownload }: {
+  detail: EasyPanelGenerationDetail
+  lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
+  thumbnailSource?: string
+  downloadLoading: string
+  onBack: () => void
+  onRestore: (mode: 'reproduce' | 'seed-variant') => void
+  onDownload: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
+}) {
+  return (
+    <div className="epm-library-content">
+      <div className="epm-library-detail-toolbar">
+        <button type="button" className="epm-quiet-button epm-inline-button" onClick={onBack}><ArrowLeft size={15} />返回列表</button>
+        <span>{libraryOperationLabel(detail.operation)} · {libraryStatusLabel(detail.status)}</span>
+      </div>
+      <div className="epm-library-detail-grid">
+        <div className="epm-library-detail-preview">
+          {thumbnailSource ? <img src={thumbnailSource} alt="作品缩略图" /> : <ImageIcon size={34} />}
+        </div>
+        <div className="epm-library-detail-copy">
+          <h3>{detail.model || '自动模型'}</h3>
+          <p>{formatLibraryTime(detail.created_at)} · seed {detail.seed == null ? '?' : String(detail.seed)}</p>
+          <p>{detail.width || '?'}×{detail.height || '?'} · {detail.quality || '自定义'} · {detail.lora_count} 个 LoRA</p>
+          <p className="epm-library-id">作品 ID：{detail.generation_id}</p>
+        </div>
+      </div>
+      <div className="epm-library-actions">
+        <button type="button" className="epm-secondary-button" onClick={() => onRestore('reproduce')}>复现到当前表单</button>
+        <button type="button" className="epm-quiet-button" onClick={() => onRestore('seed-variant')}>换 Seed 到当前表单</button>
+      </div>
+      <p className="epm-library-note">恢复只会填入当前表单，不会自动生成；请确认参数后点击页面底部“生成图片”。</p>
+      <section className="epm-library-detail-section">
+        <h3><GitBranch size={16} />谱系</h3>
+        <p>父作品 {detail.parent_count} · 子作品 {detail.child_count}</p>
+        {lineage && (lineage.ancestors.length > 0 || lineage.descendants.length > 0) && <div className="epm-library-lineage-list">
+          {lineage.ancestors.map((item) => <span key={`parent-${item.generation_id}`}>父 · {item.generation_id.slice(0, 10)}… · {libraryOperationLabel(item.operation)}</span>)}
+          {lineage.descendants.map((item) => <span key={`child-${item.generation_id}`}>子 · {item.generation_id.slice(0, 10)}… · {libraryOperationLabel(item.operation)}</span>)}
+        </div>}
+        {lineage && lineage.ancestors.length === 0 && lineage.descendants.length === 0 && <span className="epm-library-muted">暂无父子记录</span>}
+      </section>
+      <section className="epm-library-detail-section">
+        <h3><ImageIcon size={16} />输出文件</h3>
+        {detail.artifacts.length ? <div className="epm-library-artifact-list">
+          {detail.artifacts.map((artifact) => <div className="epm-library-artifact" key={artifact.artifact_id}>
+            <span>{artifact.filename}{artifact.exists === false ? '（文件缺失）' : ''}</span>
+            <button type="button" className="epm-quiet-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={artifact.exists === false || !artifact.url || Boolean(downloadLoading)}>
+              {downloadLoading === artifact.artifact_id ? <LoaderCircle size={14} className="epm-spin" /> : <Download size={14} />}下载
+            </button>
+          </div>)}
+        </div> : <span className="epm-library-muted">暂无可用输出；索引只跳过缺失文件，不会改写源记录。</span>}
+      </section>
+      <section className="epm-library-detail-section">
+        <h3>提示词预览</h3>
+        <pre className="epm-library-prompt">{promptPreview(detail.replay?.payload)}</pre>
+        <span className="epm-library-muted">{detail.replay?.note || '只读预览'}</span>
+      </section>
     </div>
   )
 }
@@ -432,6 +592,53 @@ function formatSnapshotTime(value: number): string {
   } catch {
     return '未知时间'
   }
+}
+
+function formatLibraryTime(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '未知时间'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return '未知时间'
+  }
+}
+
+function libraryOperationLabel(value: string): string {
+  const labels: Record<string, string> = {
+    txt2img: '文生图',
+    seed_variant: '换 Seed',
+    img2img: '图生图',
+    inpaint: '局部重绘',
+    face_fix: '修脸',
+    hand_fix: '修手',
+    upscale: '放大',
+    outfit_change: '换服装',
+    scene_change: '换场景',
+    style_change: '换风格',
+  }
+  return labels[value] || '未知操作'
+}
+
+function libraryStatusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    queued: '排队中',
+    running: '生成中',
+    completed: '已完成',
+    error: '失败',
+    cancelled: '已取消',
+  }
+  return labels[value] || '状态未知'
+}
+
+function promptPreview(payload: Record<string, unknown> | undefined): string {
+  if (!payload) return '（没有记录提示词）'
+  const prompt = typeof payload.prompt === 'string' ? payload.prompt.trim() : ''
+  if (prompt) return prompt
+  const sections = payload.promptSections
+  if (!sections || typeof sections !== 'object' || Array.isArray(sections)) return '（没有记录提示词）'
+  return Object.values(sections as Record<string, unknown>)
+    .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    .join(', ') || '（没有记录提示词）'
 }
 
 function displayExplanationValue(value: unknown): string {

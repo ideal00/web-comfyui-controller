@@ -96,6 +96,8 @@ export interface VisualJobStatus {
   api_version: number
   job_id: string
   prompt_id?: string
+  generation_id?: string
+  snapshot_id?: string
   status: 'queued' | 'running' | 'completed' | 'error'
   images: VisualImageRef[]
   error?: unknown

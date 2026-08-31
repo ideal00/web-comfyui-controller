@@ -15,6 +15,7 @@ import random
 import re
 import secrets
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -38,6 +39,7 @@ from easy_panel_app.config import (
     COMFY,
     COMFY_INPUT,
     COMFY_MODELS,
+    CREATIVE_INDEX_FILE,
     HOST,
     LORA_DIR,
     LORA_NOTES,
@@ -86,6 +88,13 @@ from easy_panel_app.prompt_utils import (
     unique_prompt_terms,
 )
 from easy_panel_app.validation import checkpoint_issue
+from easy_panel_app.creative_index import (
+    CreativeIndex,
+    KNOWN_STATUSES as CREATIVE_INDEX_STATUSES,
+    SCHEMA_VERSION as CREATIVE_INDEX_SCHEMA_VERSION,
+    SUPPORTED_OPERATIONS as CREATIVE_INDEX_OPERATIONS,
+    normalize_operation as normalize_creative_operation,
+)
 from easy_panel_app.queueing import (
     MAX_BATCH_IMAGES,
     MAX_BATCH_TASKS,
@@ -93,6 +102,7 @@ from easy_panel_app.queueing import (
 )
 from easy_panel_app.rpg_api import (
     RPG_API_VERSION,
+    RPG_JOB_FILE,
     build_rpg_payload,
     check_rpg_token,
     find_rpg_job_by_request_id,
@@ -492,6 +502,139 @@ SNAPSHOT_SECRET_KEY_MARKERS = (
 RPG_SESSION_COOKIE = "easy_panel_rpg_session"
 RPG_SESSION_MAX_AGE = 12 * 60 * 60
 _FILE_SIGNATURE_CACHE: dict[tuple[str, int, int], dict] = {}
+_CREATIVE_INDEX_SOURCE_SIGNATURE: tuple | None = None
+_CREATIVE_INDEX_IMPORT_LOCK = threading.Lock()
+
+
+def get_creative_index() -> CreativeIndex:
+    """Return a lazy SQLite index handle without touching legacy JSON files."""
+
+    return CreativeIndex(CREATIVE_INDEX_FILE)
+
+
+def ensure_creative_index_from_legacy_best_effort(index: CreativeIndex | None = None) -> dict:
+    """Import legacy JSON once per source-file revision before Library reads."""
+
+    global _CREATIVE_INDEX_SOURCE_SIGNATURE
+    target = index or get_creative_index()
+    snapshot_source = SNAPSHOT_FILE if SNAPSHOT_FILE.is_file() else None
+    jobs_source = RPG_JOB_FILE if RPG_JOB_FILE.is_file() else None
+
+    def signature(path: Path | None) -> tuple:
+        if path is None:
+            return ("", 0, 0)
+        try:
+            stat = path.stat()
+            return (str(path.resolve()), int(stat.st_size), int(stat.st_mtime_ns))
+        except OSError:
+            return (str(path), 0, 0)
+
+    source_signature = (
+        str(target.path.resolve()),
+        signature(snapshot_source),
+        signature(jobs_source),
+        str(OUTPUT.resolve()),
+    )
+    with _CREATIVE_INDEX_IMPORT_LOCK:
+        if _CREATIVE_INDEX_SOURCE_SIGNATURE == source_signature:
+            return {}
+        report = target.import_legacy_files(snapshot_source, jobs_source, output_root=OUTPUT)
+        if not report.get("errors"):
+            _CREATIVE_INDEX_SOURCE_SIGNATURE = source_signature
+        return report
+
+
+def infer_creative_operation(data: dict | None) -> str:
+    """Map existing request flags to the Library operation vocabulary."""
+
+    payload = data if isinstance(data, dict) else {}
+    generation_payload = payload.get("generation") if isinstance(payload.get("generation"), dict) else {}
+    visual_payload = payload.get("visual") if isinstance(payload.get("visual"), dict) else {}
+    explicit = str(
+        payload.get("operation")
+        or generation_payload.get("operation")
+        or visual_payload.get("operation")
+        or ""
+    ).strip()
+    normalized = normalize_creative_operation(explicit)
+    if normalized != "unknown":
+        return normalized
+    if explicit.casefold() in {"panel.generate", "rpg.generate"}:
+        return "txt2img"
+    if explicit:
+        return "unknown"
+    generation = payload.get("generation") if isinstance(payload.get("generation"), dict) else payload
+    output_enhancement = generation.get("outputEnhancement") if isinstance(generation.get("outputEnhancement"), dict) else {}
+    if output_enhancement.get("mode") not in (None, "", "off"):
+        return "upscale"
+    repair = generation.get("repair") if isinstance(generation.get("repair"), dict) else {}
+    if repair.get("enabled"):
+        mode = str(repair.get("mode", "") or "").casefold()
+        if "hand" in mode:
+            return "hand_fix"
+        if "face" in mode:
+            return "face_fix"
+        return "inpaint"
+    img2img = generation.get("img2img") if isinstance(generation.get("img2img"), dict) else {}
+    if img2img.get("enabled"):
+        return "img2img"
+    return "txt2img"
+
+
+def creative_request_id(data: dict | None) -> str:
+    payload = data if isinstance(data, dict) else {}
+    client = payload.get("client") if isinstance(payload.get("client"), dict) else {}
+    return str(client.get("requestId") or payload.get("requestId") or "").strip()
+
+
+def index_snapshot_best_effort(snapshot: dict, source_request: dict | None = None,
+                               *, operation: str = "", status: str = "queued",
+                               prompt_id: str = "", request_id: str = "") -> dict:
+    """Index a snapshot without making SQLite availability part of generation success."""
+
+    try:
+        return get_creative_index().upsert_snapshot(
+            snapshot,
+            operation=operation or infer_creative_operation(source_request or snapshot.get("payload")),
+            status=status,
+            prompt_id=prompt_id or str(snapshot.get("promptId") or ""),
+            request_id=request_id or creative_request_id(source_request),
+            output_root=OUTPUT,
+            parent_generation_id=(source_request or {}).get("parentGenerationId", "")
+            if isinstance(source_request, dict) else "",
+            parent_artifact_id=(source_request or {}).get("parentArtifactId", "")
+            if isinstance(source_request, dict) else "",
+        )
+    except Exception:
+        # The native JSON snapshot is deliberately authoritative.  An index
+        # problem must never turn a submitted ComfyUI job into a false failure.
+        return {}
+
+
+def update_creative_index_status_best_effort(snapshot_id: str, status: dict) -> dict:
+    """Reflect RPG job progress in SQLite while keeping the existing status API."""
+
+    try:
+        return get_creative_index().update_snapshot_status(
+            snapshot_id,
+            status=status.get("status", "unknown"),
+            images=status.get("images") if isinstance(status.get("images"), list) else (),
+            output_root=OUTPUT,
+        ) or {}
+    except Exception:
+        return {}
+
+
+def sync_rpg_status_to_creative_index(status: dict) -> dict:
+    """Mirror an existing RPG status response into the read-only index."""
+
+    if not isinstance(status, dict):
+        return status
+    metadata = status.get("meta") if isinstance(status.get("meta"), dict) else {}
+    snapshot_id = str(metadata.get("snapshot_id") or metadata.get("snapshotId") or "").strip()
+    if snapshot_id:
+        update_creative_index_status_best_effort(snapshot_id, status)
+    return status
 
 
 def _rpg_expected_token() -> str:
@@ -3583,6 +3726,10 @@ def attach_snapshot_outputs(snapshot_id: str, outputs) -> dict:
         raise ValueError("找不到生成快照。")
     target["outputs"] = list(dict.fromkeys(names))[:16]
     write_snapshots(items)
+    update_creative_index_status_best_effort(snapshot_id, {
+        "status": "completed",
+        "images": outputs if isinstance(outputs, list) else [],
+    })
     return normalize_generation_snapshot(target)
 
 
@@ -3852,6 +3999,70 @@ class Handler(BaseHTTPRequestHandler):
                     "service": "ComfyUI Easy Panel RPG Bridge",
                     "token_required": token_required(),
                 })
+            elif parsed.path == "/api/rpg/library/generations":
+                if not self.require_rpg_auth():
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                operation = query.get("operation", [""])[0].strip().casefold()
+                if operation and operation not in CREATIVE_INDEX_OPERATIONS and operation != "unknown":
+                    self.send_json({
+                        "error": "不支持的作品库操作类型。",
+                        "allowed_operations": sorted((*CREATIVE_INDEX_OPERATIONS, "unknown")),
+                    }, HTTPStatus.BAD_REQUEST)
+                    return
+                status = query.get("status", [""])[0].strip().casefold()
+                if status and status not in CREATIVE_INDEX_STATUSES:
+                    self.send_json({
+                        "error": "不支持的作品库任务状态。",
+                        "allowed_statuses": sorted(CREATIVE_INDEX_STATUSES),
+                    }, HTTPStatus.BAD_REQUEST)
+                    return
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                result = creative_index.list_generations(
+                    limit=query.get("limit", [20])[0],
+                    offset=query.get("offset", [0])[0],
+                    operation=operation,
+                    status=status,
+                    model=query.get("model", [""])[0],
+                    sort=query.get("sort", ["created_at"])[0],
+                    order=query.get("order", ["desc"])[0],
+                )
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    **result,
+                })
+            elif re.fullmatch(r"/api/rpg/library/generations/[0-9a-fA-F]{32}/lineage", parsed.path):
+                if not self.require_rpg_auth():
+                    return
+                generation_id = parsed.path.split("/")[-2].lower()
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                lineage = creative_index.get_lineage(generation_id)
+                if lineage is None:
+                    self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "lineage": lineage,
+                })
+            elif re.fullmatch(r"/api/rpg/library/generations/[0-9a-fA-F]{32}", parsed.path):
+                if not self.require_rpg_auth():
+                    return
+                generation_id = parsed.path.rsplit("/", 1)[-1].lower()
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                generation = creative_index.get_generation(generation_id)
+                if generation is None:
+                    self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "generation": generation,
+                })
             elif parsed.path == "/api/rpg/capabilities":
                 if not self.require_rpg_auth():
                     return
@@ -3901,7 +4112,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "没有找到该 requestId 对应的任务。"}, HTTPStatus.NOT_FOUND)
                     return
                 history = comfy_json("/history/" + prompt_id)
-                self.send_json(history_to_rpg_status(prompt_id, history))
+                self.send_json(sync_rpg_status_to_creative_index(
+                    history_to_rpg_status(prompt_id, history)
+                ))
             elif parsed.path == "/api/rpg/profiles":
                 if not self.require_rpg_auth():
                     return
@@ -3916,7 +4129,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 prompt_id = parsed.path.rsplit("/", 1)[-1].lower()
                 history = comfy_json("/history/" + prompt_id)
-                self.send_json(history_to_rpg_status(prompt_id, history))
+                self.send_json(sync_rpg_status_to_creative_index(
+                    history_to_rpg_status(prompt_id, history)
+                ))
             elif parsed.path == "/api/rpg/image":
                 if not self.require_rpg_auth():
                     return
@@ -4150,7 +4365,9 @@ class Handler(BaseHTTPRequestHandler):
                     existing_prompt_id = str(existing.get("prompt_id") or "")
                     if existing_prompt_id:
                         history = comfy_json("/history/" + existing_prompt_id)
-                        status = history_to_rpg_status(existing_prompt_id, history)
+                        status = sync_rpg_status_to_creative_index(
+                            history_to_rpg_status(existing_prompt_id, history)
+                        )
                         status["deduplicated"] = True
                         status["status_url"] = "/api/rpg/jobs/" + existing_prompt_id
                         self.send_json(status, HTTPStatus.OK)
@@ -4162,14 +4379,24 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("ComfyUI 没有返回有效的任务编号。")
                 snapshot = create_generation_snapshot(payload, prompt_id, source_request=data)
                 record_rpg_job(prompt_id, data, payload, snapshot["id"])
-                self.send_json({
+                indexed = index_snapshot_best_effort(
+                    snapshot,
+                    source_request=data,
+                    operation=infer_creative_operation(data),
+                    status="queued",
+                    request_id=request_id,
+                )
+                response = {
                     "api_version": RPG_API_VERSION,
                     "job_id": prompt_id,
                     "prompt_id": prompt_id,
                     "status": "queued",
                     "snapshot_id": snapshot["id"],
                     "status_url": "/api/rpg/jobs/" + prompt_id,
-                }, HTTPStatus.ACCEPTED)
+                }
+                if indexed.get("generation_id"):
+                    response["generation_id"] = indexed["generation_id"]
+                self.send_json(response, HTTPStatus.ACCEPTED)
                 return
             if self.path == "/api/read-output":
                 name = str(data.get("name", "") or "").strip()
@@ -4237,17 +4464,34 @@ class Handler(BaseHTTPRequestHandler):
                     result = comfy_json("/prompt", "POST", item["workflow"])
                     prompt_id = result.get("prompt_id")
                     snapshot = create_generation_snapshot(item["payload"], str(prompt_id or ""))
+                    indexed = index_snapshot_best_effort(
+                        snapshot,
+                        source_request=item.get("payload") if isinstance(item.get("payload"), dict) else {},
+                        status="queued",
+                    )
                     submitted.append({"index": index, "task_index": item["task_index"],
                                       "image_index": item["image_index"],
                                       "image_count": item["image_count"],
                                       "prompt_id": prompt_id, "snapshot_id": snapshot["id"],
-                                      "label": snapshot["label"]})
+                                      "label": snapshot["label"],
+                                      **({"generation_id": indexed["generation_id"]}
+                                         if indexed.get("generation_id") else {})})
                 self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
                                 "total_images": len(submitted)})
             else:
                 result = comfy_json("/prompt", "POST", build_workflow(data))
                 snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""))
-                self.send_json({**result, "snapshot_id": snapshot["id"]})
+                indexed = index_snapshot_best_effort(
+                    snapshot,
+                    source_request=data,
+                    status="queued",
+                )
+                self.send_json({
+                    **result,
+                    "snapshot_id": snapshot["id"],
+                    **({"generation_id": indexed["generation_id"]}
+                       if indexed.get("generation_id") else {}),
+                })
         except CLIENT_DISCONNECT_ERRORS:
             return
         except urllib.error.HTTPError as exc:
