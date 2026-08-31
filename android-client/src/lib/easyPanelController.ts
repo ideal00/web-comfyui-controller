@@ -32,6 +32,12 @@ export interface PendingEasyPanelJob {
   request: VisualGenerateRequest
 }
 
+export interface EasyPanelPendingDerivationContext {
+  parentGenerationId: string
+  parentArtifactId?: string
+  operation: string
+}
+
 export interface EasyPanelControllerState {
   settings: EasyPanelControllerSettings
   image?: EasyPanelControllerImage
@@ -148,6 +154,23 @@ export function buildEasyPanelControllerRequest(
     },
   }
   return request
+}
+
+/** Attach only a validated, one-shot Library lineage relation to a request. */
+export function attachEasyPanelPendingDerivation(
+  request: VisualGenerateRequest,
+  context: EasyPanelPendingDerivationContext | undefined,
+): VisualGenerateRequest {
+  if (!context || !/^[0-9a-f]{32}$/u.test(context.parentGenerationId)) return { ...request }
+  if (!context.operation.trim()) return { ...request }
+  return {
+    ...request,
+    operation: context.operation.trim(),
+    parentGenerationId: context.parentGenerationId,
+    ...(context.parentArtifactId && /^[0-9a-f]{32}$/u.test(context.parentArtifactId)
+      ? { parentArtifactId: context.parentArtifactId }
+      : {}),
+  }
 }
 
 export function createEasyPanelControllerRequestId(): string {

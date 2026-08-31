@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildEasyPanelControllerRequest,
+  attachEasyPanelPendingDerivation,
   controllerStatusLabel,
   createEasyPanelControllerRequestId,
   defaultEasyPanelControllerState,
@@ -13,6 +14,7 @@ import {
   type EasyPanelControllerImage,
   type EasyPanelControllerSettings,
   type EasyPanelControllerState,
+  type EasyPanelPendingDerivationContext,
   type PendingEasyPanelJob,
 } from '../lib/easyPanelController'
 import { downloadBlob } from '../platform/browserDownload'
@@ -101,6 +103,7 @@ export interface EasyPanelController {
   libraryThumbnailSources: Record<string, string>
   libraryDownloadLoading: string
   libraryDownloadMessage: string
+  pendingDerivation?: EasyPanelPendingDerivationContext
   setSettings: (settings: EasyPanelControllerSettings) => void
   testConnection: () => Promise<void>
   refreshModels: () => Promise<void>
@@ -116,6 +119,7 @@ export interface EasyPanelController {
   openLibraryGeneration: (id: string) => Promise<boolean>
   clearLibraryDetail: () => void
   restoreLibraryGeneration: (mode?: EasyPanelLibraryRestoreMode) => Promise<boolean>
+  clearPendingDerivation: () => void
   downloadLibraryArtifact: (artifact: EasyPanelGenerationArtifact) => Promise<void>
 }
 
@@ -149,6 +153,7 @@ export function useEasyPanelController(): EasyPanelController {
   const [libraryThumbnailSources, setLibraryThumbnailSources] = useState<Record<string, string>>({})
   const [libraryDownloadLoading, setLibraryDownloadLoading] = useState('')
   const [libraryDownloadMessage, setLibraryDownloadMessage] = useState('')
+  const [pendingDerivation, setPendingDerivation] = useState<EasyPanelPendingDerivationContext>()
   const stateRef = useRef(state)
   const activeRef = useRef(false)
   const hydratedRecoveryRef = useRef(false)
@@ -217,6 +222,7 @@ export function useEasyPanelController(): EasyPanelController {
       setLibraryDetail(undefined)
       setLibraryLineage(undefined)
       setLibraryDownloadMessage('')
+      setPendingDerivation(undefined)
       clearLibraryThumbnailSources()
     }
     setDownloadMessage('')
@@ -452,10 +458,10 @@ export function useEasyPanelController(): EasyPanelController {
     try {
       const restored = restoreLibraryGenerationToSettings(settings, generation, mode)
       setRestoredSnapshot(restored.snapshot)
+      setPendingDerivation(restored.derivation)
       commitState({ ...stateRef.current, settings: restored.settings })
-      setLibraryMessage(mode === 'seed-variant'
-        ? '已载入作品并更换 Seed；请回到当前表单，确认后点击“生成图片”。'
-        : '已载入作品参数；请回到当前表单，确认后点击“生成图片”。')
+      const modeLabel = mode === 'seed-variant' ? '已载入作品并更换 Seed' : mode === 'continue-edit' ? '已载入作品，可继续编辑' : '已载入作品参数'
+      setLibraryMessage(`${modeLabel}；将从该作品派生，可取消关联；请回到当前表单，确认后点击“生成图片”。`)
       setLibraryError('')
       setError('')
       return true
@@ -464,6 +470,12 @@ export function useEasyPanelController(): EasyPanelController {
       return false
     }
   }, [commitState, libraryDetail, settings])
+
+  const clearPendingDerivation = useCallback(() => {
+    setPendingDerivation(undefined)
+    setLibraryMessage('已取消派生关联；后续按当前表单的普通生图参数提交。')
+    setError('')
+  }, [])
 
   const clearLibraryDetail = useCallback(() => {
     setLibraryDetail(undefined)
@@ -634,7 +646,10 @@ export function useEasyPanelController(): EasyPanelController {
       commitState({ ...stateRef.current, settings: nextSettings })
     }
     const requestId = createEasyPanelControllerRequestId()
-    const request = buildEasyPanelControllerRequest(settings, requestId, restoredSnapshot)
+    const request = attachEasyPanelPendingDerivation(
+      buildEasyPanelControllerRequest(settings, requestId, restoredSnapshot),
+      pendingDerivation,
+    )
     const pending: PendingEasyPanelJob = {
       requestId,
       jobId: '',
@@ -650,6 +665,10 @@ export function useEasyPanelController(): EasyPanelController {
     setError('')
     try {
       const initial = await submitVisualJob({ ...config, baseUrl: normalizedUrl }, request)
+      // The server has accepted this explicit submission.  Keep the relation
+      // on the persisted pending request, but do not reuse it for a later
+      // ordinary Generate action.
+      setPendingDerivation(undefined)
       const nextPending = { ...pending, jobId: initial.job_id || '' }
       commitState({ ...stateRef.current, pendingJob: nextPending })
       await followJob(initial, nextPending)
@@ -659,7 +678,7 @@ export function useEasyPanelController(): EasyPanelController {
     } finally {
       activeRef.current = false
     }
-  }, [commitState, config, followJob, restoredSnapshot, settings, status])
+  }, [commitState, config, followJob, pendingDerivation, restoredSnapshot, settings, status])
 
   const clearPending = useCallback(async () => {
     abortRef.current?.abort()
@@ -753,6 +772,7 @@ export function useEasyPanelController(): EasyPanelController {
     libraryThumbnailSources,
     libraryDownloadLoading,
     libraryDownloadMessage,
+    pendingDerivation,
     setSettings,
     testConnection,
     refreshModels,
@@ -768,6 +788,7 @@ export function useEasyPanelController(): EasyPanelController {
     openLibraryGeneration,
     clearLibraryDetail,
     restoreLibraryGeneration,
+    clearPendingDerivation,
     downloadLibraryArtifact,
   }
 }

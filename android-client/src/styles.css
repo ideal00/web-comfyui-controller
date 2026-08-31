@@ -6100,6 +6100,28 @@ textarea:focus-visible {
   gap: 12px;
 }
 
+.epm-pending-derivation {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(240, 185, 105, 0.42);
+  background: rgba(48, 35, 19, 0.94);
+  color: var(--epm-warning);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.epm-pending-derivation .epm-quiet-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 10px;
+}
+
 .epm-submit-hint {
   min-width: 0;
   flex: 1 1 auto;

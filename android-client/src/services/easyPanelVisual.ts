@@ -83,6 +83,10 @@ export interface VisualGenerateRequest {
   }
   visual: VisualScene
   generation?: VisualGenerationSettings
+  /** Optional one-shot Creative Library lineage context. */
+  operation?: string
+  parentGenerationId?: string
+  parentArtifactId?: string
 }
 
 export interface VisualImageRef {

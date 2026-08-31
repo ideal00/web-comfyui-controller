@@ -273,12 +273,13 @@ function Install-CoreModule {
     foreach ($required in "easy_panel.py", "index.html", "embedding_notes.json", "pose_editor_workflow.json", "README.md", "LORA_MEMO_RULES.md", "lora_rename_aliases.json",
                            "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
                            "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
-                           "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
+                           "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd",
+                           "tools\rebuild_creative_index.py", "tools\migrate_creative_index_ids.py") {
         if (-not (Test-Path -LiteralPath (Join-Path $payload $required) -PathType Leaf)) {
             throw "核心安装包不完整，缺少 payload\$required。"
         }
     }
-    foreach ($requiredDirectory in "easy_panel_app", "web", "launchers") {
+    foreach ($requiredDirectory in "easy_panel_app", "web", "launchers", "tools") {
         if (-not (Test-Path -LiteralPath (Join-Path $payload $requiredDirectory) -PathType Container)) {
             throw "核心安装包不完整，缺少 payload\$requiredDirectory。"
         }
@@ -290,7 +291,7 @@ function Install-CoreModule {
         "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
         "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
         "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd",
-        "easy_panel_app", "web"
+        "easy_panel_app", "web", "tools"
     )
     $existingCore = @($coreItems | Where-Object { Test-Path -LiteralPath (Join-Path $target $_) })
     if ($existingCore.Count) {
@@ -346,7 +347,9 @@ function Install-CoreModule {
         (Join-Path $target "lora_txt_generator.py"),
         (Join-Path $target "lora_txt_to_json.py"),
         (Join-Path $target "classify_tags.py"),
-        (Join-Path $target "import_all_sidecars.py")
+        (Join-Path $target "import_all_sidecars.py"),
+        (Join-Path $target "tools\rebuild_creative_index.py"),
+        (Join-Path $target "tools\migrate_creative_index_ids.py")
     ) + @(Get-ChildItem -LiteralPath (Join-Path $target "easy_panel_app") -Filter "*.py" -File -Recurse |
         ForEach-Object { $_.FullName })
     & $script:ComfyPython -m py_compile @pythonFiles

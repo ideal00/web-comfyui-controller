@@ -9,12 +9,12 @@
 ## 两种模式
 
 - **快速生图**：手机编辑正向提示词、负向提示词、Checkpoint、质量档位、宽高和轮询间隔；只有点击“生成图片”才提交任务。模型列表来自 Easy Panel 的 `/api/rpg/models`，任务通过 API v2 异步执行。
-- **作品库**：读取 Easy Panel 3.x 的历史作品、缩略图、Seed、操作和父子谱系；详情里的“复现 / 换 Seed”只回填当前表单，必须再次点击“生成图片”，不会自动提交。
+- **作品库**：读取 Easy Panel 2.2.x Creative Library Foundation 的历史作品、缩略图、Seed、操作和父子谱系；详情里的“复现 / 换 Seed / 继续编辑”只回填当前表单，必须再次点击“生成图片”，不会自动提交。
 - **高级面板**：打开电脑端正在运行的完整 Easy Panel 页面，继续使用角色、LoRA、ControlNet、OpenPose、多人区域、修复、透明背景、调色、历史和快照等原有功能。客户端没有复制这些工作流逻辑；同一地址下的提示词预设和角色/LoRA 收藏会由网页自动读取共享状态。
 
 Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、刷新、加载/错误提示、系统文件选择器和页面下载。手机快速页的图片保存到系统 `Downloads`。
 
-作品库需要电脑端 Easy Panel 3.x 的 `/api/rpg/library/*` 接口；连接到旧版服务端时会显示兼容回退，不会因打开作品库而提交生成。索引由电脑端从 `generation_snapshots.json` / `rpg_jobs.json` 旁路建立，源 JSON 仍保留。
+作品库需要电脑端 Easy Panel 2.2.x 的 `/api/rpg/library/*` 接口；连接到旧版服务端时会显示兼容回退，不会因打开作品库而提交生成。恢复后会显示一次性派生提示，可取消关联；用户明确点击生成后才提交父作品关系。索引由电脑端从 `generation_snapshots.json` / `rpg_jobs.json` 旁路建立，源 JSON 仍保留。
 
 ## 连接电脑
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { restoreLibraryGenerationToSettings } from './easyPanelLibrary'
+import { pendingDerivationContextForLibraryGeneration, restoreLibraryGenerationToSettings } from './easyPanelLibrary'
 import type { EasyPanelControllerSettings } from './easyPanelController'
 import type { EasyPanelGenerationDetail } from '../services/easyPanelLibrary'
 
@@ -93,5 +93,46 @@ describe('creative Library restore', () => {
     expect(result.snapshot?.id).toBe(snapshot.id)
     expect(result.settings.prompt).toBe('snapshot prompt')
     expect(result.settings.seed).toBe('77')
+  })
+
+  it('creates a safe one-shot lineage context and fixes operation semantics', () => {
+    const result = pendingDerivationContextForLibraryGeneration(detail({
+      operation: 'txt2img',
+      artifacts: [{
+        artifact_id: 'c'.repeat(32),
+        generation_id: 'a'.repeat(32),
+        filename: 'output.png',
+        subfolder: '2026/08',
+        type: 'output',
+        kind: 'output',
+        exists: true,
+        metadata: {},
+        created_at: 1,
+      }],
+    }), 'continue-edit')
+    expect(result).toEqual({
+      parentGenerationId: 'a'.repeat(32),
+      parentArtifactId: 'c'.repeat(32),
+      operation: 'img2img',
+    })
+    expect(pendingDerivationContextForLibraryGeneration(detail({ operation: 'txt2img' }), 'seed-variant').operation)
+      .toBe('seed_variant')
+  })
+
+  it('does not attach a missing or unsafe artifact to the lineage context', () => {
+    const result = pendingDerivationContextForLibraryGeneration(detail({
+      artifacts: [{
+        artifact_id: 'd'.repeat(32),
+        generation_id: 'a'.repeat(32),
+        filename: 'missing.png',
+        subfolder: '',
+        type: 'output',
+        kind: 'output',
+        exists: false,
+        metadata: {},
+        created_at: 1,
+      }],
+    }))
+    expect(result).toEqual({ parentGenerationId: 'a'.repeat(32), operation: 'txt2img' })
   })
 })

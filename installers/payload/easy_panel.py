@@ -3781,7 +3781,11 @@ def resolve_rpg_output_image(name: str, subfolder: str = "") -> Path:
     normalized_subfolder = str(subfolder or "").replace("\\", "/").strip("/")
     root = OUTPUT.resolve()
     candidate = (root / Path(normalized_subfolder) / safe_name).resolve()
-    if not candidate.is_relative_to(root) or not candidate.is_file():
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise FileNotFoundError("image not found") from None
+    if not candidate.is_file():
         raise FileNotFoundError("image not found")
     return candidate
 

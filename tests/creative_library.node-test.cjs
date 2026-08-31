@@ -10,6 +10,7 @@ const source = fs.readFileSync(
   'utf8',
 )
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')
+const panelSource = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'panel.js'), 'utf8')
 
 function response(body, status = 200) {
   return {
@@ -174,8 +175,17 @@ test('desktop HTML contains the isolated Library entry, dialog, and script after
   assert.match(html, /id="creativeLibraryDialog"/)
   assert.match(html, /id="creativeLibraryFilters"/)
   assert.match(html, /id="creativeLibraryDetail"/)
-  assert.match(html, /snapshot-flow\.js\?v=1[\s\S]*creative-library\.js\?v=1/)
-  assert.match(html, /panel\.css\?v=38/)
+  assert.match(html, /snapshot-flow\.js\?v=1[\s\S]*creative-library\.js\?v=2/)
+  assert.match(html, /panel\.css\?v=39/)
+  assert.match(html, /id="pendingDerivation"/)
+})
+
+test('desktop generation routes consume and clear one-shot lineage context', () => {
+  assert.match(panelSource, /function applyPendingDerivation\(/)
+  assert.match(panelSource, /body:JSON\.stringify\(batchPayload\(body,index\)\)/)
+  assert.match(panelSource, /const body=applyPendingDerivation\(payload\(\),pendingDerivationContext\)/)
+  assert.match(panelSource, /function markPendingGenerationAccepted\(/)
+  assert.match(panelSource, /clearPendingDerivationContext\(true\)/)
 })
 
 test('restore and seed variant clone form payloads without mutating the source', () => {
@@ -196,6 +206,44 @@ test('restore and seed variant clone form payloads without mutating the source',
   assert.equal(JSON.stringify(detail), original)
   restored.nested.keep = false
   assert.equal(detail.snapshot.payload.nested.keep, true)
+})
+
+test('library restore creates a safe one-shot lineage context with fixed operations', () => {
+  const detail = {
+    generation_id: 'a'.repeat(32),
+    operation: 'txt2img',
+    artifacts: [{
+      artifact_id: 'b'.repeat(32),
+      filename: 'output.png',
+      subfolder: '2026/08',
+      exists: true,
+    }],
+  }
+  assert.deepEqual(library.pendingDerivationContextForDetail(detail, 'continue-edit'), {
+    parentGenerationId: 'a'.repeat(32),
+    parentArtifactId: 'b'.repeat(32),
+    operation: 'img2img',
+  })
+  assert.equal(library.pendingDerivationContextForDetail(detail, 'seed-variant').operation, 'seed_variant')
+  assert.deepEqual(library.attachPendingDerivationToPayload({ prompt: 'same' }, {
+    parentGenerationId: 'a'.repeat(32),
+    parentArtifactId: 'b'.repeat(32),
+    operation: 'seed_variant',
+  }), {
+    prompt: 'same',
+    parentGenerationId: 'a'.repeat(32),
+    parentArtifactId: 'b'.repeat(32),
+    operation: 'seed_variant',
+  })
+})
+
+test('missing artifacts never become a concrete parent output', () => {
+  const context = library.pendingDerivationContextForDetail({
+    generation_id: 'c'.repeat(32),
+    operation: 'txt2img',
+    artifacts: [{ artifact_id: 'd'.repeat(32), filename: 'missing.png', exists: false }],
+  }, 'continue-edit')
+  assert.deepEqual(context, { parentGenerationId: 'c'.repeat(32), operation: 'txt2img' })
 })
 
 test('safe paths reject traversal, external origins, and HTML-shaped ids', () => {
@@ -234,6 +282,7 @@ test('filter and restore clicks stay read-only and only restore to the existing 
   const id = 'b'.repeat(32)
   const calls = []
   let restored
+  let pending
   const page = createPage(async (url, options) => {
     calls.push([url, options])
     if (url.startsWith('/api/rpg/library/generations?')) {
@@ -251,6 +300,7 @@ test('filter and restore clicks stay read-only and only restore to the existing 
     throw new Error(`unexpected URL ${url}`)
   })
   page.root.restorePayloadToPanel = (payload) => { restored = payload }
+  page.root.setPendingDerivationContext = (context) => { pending = context }
   page.elements.creativeLibraryOpen.click()
   await flush()
   page.elements.creativeLibraryList.children[0].click()
@@ -260,6 +310,7 @@ test('filter and restore clicks stay read-only and only restore to the existing 
   assert.ok(actions)
   actions.children[0].click()
   assert.deepEqual(restored, { model: 'model.safetensors', quality: 'fast', prompt: 'safe prompt', seed: '7' })
+  assert.equal(JSON.stringify(pending), JSON.stringify({ parentGenerationId: id, operation: 'txt2img' }))
   assert.match(page.elements.status.textContent, /手动点击“生成图片”/)
   assert.ok(calls.every(([, options]) => options.method === 'GET'))
   assert.equal(calls.some(([, options]) => options.method !== 'GET'), false)

@@ -54,6 +54,22 @@ function Sync-CorePayload {
     Copy-CleanDirectory (Join-Path $repositoryRoot "easy_panel_app") (Join-Path $payloadRoot "easy_panel_app")
     Copy-CleanDirectory (Join-Path $repositoryRoot "web") (Join-Path $payloadRoot "web")
     Copy-CleanDirectory (Join-Path $repositoryRoot "launchers") (Join-Path $payloadRoot "launchers")
+    $toolSources = @(
+        "tools\rebuild_creative_index.py",
+        "tools\migrate_creative_index_ids.py"
+    )
+    $toolsPayload = Join-Path $payloadRoot "tools"
+    if (Test-Path -LiteralPath $toolsPayload) {
+        Remove-Item -LiteralPath (Assert-ChildPath $toolsPayload $installerRoot) -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $toolsPayload -Force | Out-Null
+    foreach ($tool in $toolSources) {
+        $source = Join-Path $repositoryRoot $tool
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "核心工具不存在：$source"
+        }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $toolsPayload (Split-Path -Leaf $tool)) -Force
+    }
     $mergedAliases = [ordered]@{}
     foreach ($aliasFile in Get-ChildItem -LiteralPath (Join-Path $repositoryRoot "lora_imports") -Filter "*_illustrious_chinese_filenames.json" | Sort-Object Name) {
         $entries = Get-Content -LiteralPath $aliasFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable

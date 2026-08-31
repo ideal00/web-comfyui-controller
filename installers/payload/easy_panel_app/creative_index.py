@@ -265,6 +265,63 @@ def _new_id() -> str:
     return secrets.token_hex(16)
 
 
+_STABLE_ID_NAMESPACE = "easy-panel:creative-index:stable-id:v1"
+
+
+def _stable_id(namespace: str, value: Any) -> str:
+    """Return a rebuildable, namespaced 128-bit hexadecimal identifier."""
+
+    canonical = json.dumps(
+        sanitize_json_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    material = f"{_STABLE_ID_NAMESPACE}:{namespace}:{canonical}".encode("utf-8")
+    return hashlib.sha256(material).hexdigest()[:32]
+
+
+def _stable_generation_id(
+    snapshot: Mapping[str, Any],
+    *,
+    snapshot_id: str | None = None,
+    prompt_id: str = "",
+    request_id: str = "",
+) -> str:
+    """Derive a stable generation ID without using secrets or timestamps.
+
+    Source identifiers are intentionally ordered from the strongest native
+    identity to a sanitized complete-record fingerprint.  The explicit kind
+    in the digest input prevents the same text used by two source systems from
+    collapsing into one namespace.
+    """
+
+    for kind, value in (
+        ("snapshot_id", snapshot_id),
+        ("prompt_id", prompt_id),
+        ("request_id", request_id),
+    ):
+        clean = _safe_text(value, 4096)
+        if clean:
+            return _stable_id("generation", {"kind": kind, "value": clean})
+    return _stable_id("generation", {"kind": "record", "value": sanitize_json_value(snapshot)})
+
+
+def _stable_artifact_id(generation_id: str, artifact: Mapping[str, Any]) -> str:
+    """Derive an artifact ID from its owning generation and safe reference."""
+
+    return _stable_id(
+        "artifact",
+        {
+            "generation_id": generation_id,
+            "filename": _safe_text(artifact.get("filename"), 512),
+            "subfolder": _safe_text(artifact.get("subfolder"), 512),
+            "type": _safe_text(artifact.get("image_type"), 32),
+            "kind": _safe_text(artifact.get("artifact_kind"), 32),
+        },
+    )
+
+
 def _stable_key(prefix: str, value: Any) -> str:
     canonical = json.dumps(sanitize_json_value(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return f"{prefix}-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:32]}"
@@ -321,7 +378,13 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
             return None, "图片路径超出输出目录，已跳过。"
         exists = candidate.is_file()
         if not exists:
-            return None, f"图片不存在，已跳过：{filename}"
+            return {
+                "filename": filename,
+                "subfolder": subfolder,
+                "image_type": image_type,
+                "artifact_kind": kind,
+                "metadata": {**safe_metadata, "exists": False},
+            }, f"图片不存在，已保留记录：{filename}"
     safe_metadata["exists"] = exists
     return {
         "filename": filename,
@@ -780,7 +843,19 @@ class CreativeIndex:
                     (metadata_json, artifact_id),
                 )
             else:
-                artifact_id = _new_id()
+                artifact_id = _stable_artifact_id(generation_id, ref)
+                collision = connection.execute(
+                    """SELECT generation_id, filename, subfolder, image_type, artifact_kind
+                       FROM artifacts WHERE artifact_id = ?""",
+                    (artifact_id,),
+                ).fetchone()
+                if collision:
+                    identity = (generation_id, ref["filename"], ref["subfolder"], ref["image_type"], ref["artifact_kind"])
+                    existing_identity = tuple(collision[column] for column in (
+                        "generation_id", "filename", "subfolder", "image_type", "artifact_kind",
+                    ))
+                    if existing_identity != identity:
+                        raise CreativeIndexError("artifact_id 稳定哈希冲突，已拒绝写入。")
                 connection.execute(
                     """INSERT INTO artifacts(
                            artifact_id, generation_id, filename, subfolder, image_type,
@@ -922,7 +997,12 @@ class CreativeIndex:
                 values["request_id"],
             )
             created = existing is None
-            generation_id = str(existing["generation_id"]) if existing else _new_id()
+            generation_id = str(existing["generation_id"]) if existing else _stable_generation_id(
+                snapshot,
+                snapshot_id=values["snapshot_id"],
+                prompt_id=values["prompt_id"],
+                request_id=values["request_id"],
+            )
             merged_status = _merged_status(existing["status"], values["status"]) if existing else values["status"]
             created_at = int(existing["created_at"]) if existing else values["created_at"]
             row_values = {**values, "status": merged_status, "created_at": created_at, "updated_at": now_ms()}

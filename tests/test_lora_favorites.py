@@ -12,7 +12,7 @@ class LoraFavoritesTests(unittest.TestCase):
             'id="loraFavoritesQuick"',
             'id="loraFavoriteCount"',
             'onclick="showFavoriteLoras()"',
-            'src="/assets/js/panel.js?v=55"',
+            'src="/assets/js/panel.js?v=56"',
             'id="loraSearch"',
             'onclick="clearLoraSearch()"',
         ):

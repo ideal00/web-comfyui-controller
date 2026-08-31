@@ -1,5 +1,6 @@
 import {
   normalizeEasyPanelControllerSettings,
+  type EasyPanelPendingDerivationContext,
   type EasyPanelControllerSettings,
 } from './easyPanelController'
 import {
@@ -8,14 +9,20 @@ import {
 import type { EasyPanelSnapshotRecord } from '../services/easyPanelSnapshots'
 import type { EasyPanelGenerationDetail } from '../services/easyPanelLibrary'
 
-export type EasyPanelLibraryRestoreMode = 'reproduce' | 'seed-variant'
+export type EasyPanelLibraryRestoreMode = 'reproduce' | 'seed-variant' | 'continue-edit'
 
 export interface EasyPanelLibraryRestoreResult {
   settings: EasyPanelControllerSettings
   snapshot?: EasyPanelSnapshotRecord
   operation: string
   advancedFieldCount: number
+  derivation: EasyPanelPendingDerivationContext
 }
+
+const LIBRARY_OPERATIONS = new Set([
+  'txt2img', 'seed_variant', 'img2img', 'inpaint', 'face_fix', 'hand_fix', 'upscale',
+  'outfit_change', 'scene_change', 'style_change', 'unknown',
+])
 
 /**
  * Turn a read-only Library detail into the existing form state.  This helper
@@ -27,6 +34,7 @@ export function restoreLibraryGenerationToSettings(
   generation: EasyPanelGenerationDetail,
   mode: EasyPanelLibraryRestoreMode = 'reproduce',
 ): EasyPanelLibraryRestoreResult {
+  const derivation = pendingDerivationContextForLibraryGeneration(generation, mode)
   const snapshot = asSnapshotRecord(generation.snapshot)
   if (snapshot) {
     const restored = restoreSnapshotToSettings(
@@ -39,6 +47,7 @@ export function restoreLibraryGenerationToSettings(
       snapshot,
       operation: generation.operation,
       advancedFieldCount: restored.advancedFieldCount,
+      derivation,
     }
   }
 
@@ -66,6 +75,33 @@ export function restoreLibraryGenerationToSettings(
     settings,
     operation: generation.operation,
     advancedFieldCount: 0,
+    derivation,
+  }
+}
+
+/** Build the short-lived relation used by the next explicit Generate action. */
+export function pendingDerivationContextForLibraryGeneration(
+  generation: EasyPanelGenerationDetail,
+  mode: EasyPanelLibraryRestoreMode = 'reproduce',
+): EasyPanelPendingDerivationContext {
+  const parentGenerationId = safeId(generation.generation_id)
+  const artifact = generation.artifacts.find((candidate) => (
+    candidate.exists !== false
+    && safeIdOrEmpty(candidate.artifact_id)
+    && safeFilename(candidate.filename)
+    && safeSubfolder(candidate.subfolder)
+  ))
+  const parentArtifactId = artifact ? safeId(artifact.artifact_id) : undefined
+  const source = text(generation.operation).toLowerCase()
+  const operation = mode === 'seed-variant'
+    ? 'seed_variant'
+    : mode === 'continue-edit' && parentArtifactId
+      ? 'img2img'
+      : source && source !== 'unknown' && LIBRARY_OPERATIONS.has(source) ? source : 'txt2img'
+  return {
+    parentGenerationId,
+    ...(parentArtifactId ? { parentArtifactId } : {}),
+    operation,
   }
 }
 
@@ -111,4 +147,25 @@ function createVariationSeed(previous: string): string {
   const parsed = Number(previous)
   if (Number.isSafeInteger(parsed) && parsed >= 0) return String((parsed + 1) % 9007199254740991)
   return String(Math.floor(Math.random() * 900000000000000000) + 1)
+}
+
+function safeId(value: unknown): string {
+  const id = text(value).toLowerCase()
+  if (!/^[0-9a-f]{32}$/u.test(id)) throw new Error('作品编号无效，无法建立派生关联。')
+  return id
+}
+
+function safeIdOrEmpty(value: unknown): string {
+  try { return safeId(value) } catch { return '' }
+}
+
+function safeFilename(value: unknown): boolean {
+  const name = text(value).replace(/\\/gu, '/')
+  return Boolean(name && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('..') && !name.includes('\u0000'))
+}
+
+function safeSubfolder(value: unknown): boolean {
+  const folder = text(value).replace(/\\/gu, '/').replace(/^\/+|\/+$/gu, '')
+  if (!folder) return true
+  return folder.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..' && !part.includes('\u0000'))
 }

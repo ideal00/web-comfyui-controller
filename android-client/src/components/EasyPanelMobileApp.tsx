@@ -423,6 +423,10 @@ export default function EasyPanelMobileApp() {
         </section>
       </main>
 
+      {controller.pendingDerivation && <div className="epm-pending-derivation" role="status" aria-live="polite">
+        <span>将从作品 {controller.pendingDerivation.parentGenerationId.slice(0, 10)}… 派生（{controller.pendingDerivation.operation}）；下一次生成会记录父子谱系。</span>
+        <button type="button" className="epm-quiet-button" onClick={controller.clearPendingDerivation}>取消派生关联</button>
+      </div>}
       <footer className="epm-submit-bar">
         <div className="epm-submit-hint">
           <span className="epm-submit-dot" />
@@ -444,7 +448,7 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
 }) {
   const detail = controller.libraryDetail
 
-  async function restore(mode: 'reproduce' | 'seed-variant') {
+  async function restore(mode: 'reproduce' | 'seed-variant' | 'continue-edit') {
     const restored = await controller.restoreLibraryGeneration(mode)
     if (restored) onClose()
   }
@@ -526,7 +530,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBa
   thumbnailSource?: string
   downloadLoading: string
   onBack: () => void
-  onRestore: (mode: 'reproduce' | 'seed-variant') => void
+  onRestore: (mode: 'reproduce' | 'seed-variant' | 'continue-edit') => void
   onDownload: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
 }) {
   return (
@@ -549,8 +553,9 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, onBa
       <div className="epm-library-actions">
         <button type="button" className="epm-secondary-button" onClick={() => onRestore('reproduce')}>复现到当前表单</button>
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('seed-variant')}>换 Seed 到当前表单</button>
+        <button type="button" className="epm-quiet-button" onClick={() => onRestore('continue-edit')}>继续编辑</button>
       </div>
-      <p className="epm-library-note">恢复只会填入当前表单，不会自动生成；请确认参数后点击页面底部“生成图片”。</p>
+      <p className="epm-library-note">恢复只会填入当前表单，不会自动生成；下一次生成会记录派生关系，也可在表单中取消关联。</p>
       <section className="epm-library-detail-section">
         <h3><GitBranch size={16} />谱系</h3>
         <p>父作品 {detail.parent_count} · 子作品 {detail.child_count}</p>

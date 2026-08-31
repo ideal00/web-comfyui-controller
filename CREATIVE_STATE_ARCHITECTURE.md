@@ -1,6 +1,6 @@
-# Easy Panel 3.x 创作状态（Phase 1）
+# Easy Panel 2.2.x · Creative Library Foundation
 
-本阶段在现有 Easy Panel 2.x JSON 快照 / RPG job 记录旁边增加一个可重建、只读查询优先的 SQLite 索引，并在 Android 快速页面和桌面 Web 面板提供最小作品库。JSON 仍是复现的唯一事实来源；SQLite 只做旁路索引，不会改写、删除或替代 `generation_snapshots.json`、`rpg_jobs.json`。
+Easy Panel 2.2.x 在现有 JSON 快照 / RPG job 记录旁边提供一个可重建、只读查询优先的 SQLite 作品库索引，并在 Android 快速页面和桌面 Web 面板提供基础作品库。JSON 仍是复现的唯一事实来源；SQLite 只做旁路索引，不会改写、删除或替代 `generation_snapshots.json`、`rpg_jobs.json`。
 
 ## 数据边界
 
@@ -8,12 +8,12 @@
 - 可通过 `EASY_PANEL_CREATIVE_INDEX` 指定路径。
 - 新提交的 `/api/rpg/generate`、`/api/generate` 和 `/api/generate-batch` 在已有 JSON 快照写入后 best-effort 建索引；索引失败不会让原有生图请求失败。
 - RPG job 查询和 `/api/snapshot-outputs` 完成回写时同步状态 / 输出引用。状态同步同样 best-effort。
-- 输出文件只接受安全的 ComfyUI `{filename, subfolder, type}` 引用；指定 `output_root` 时，缺失文件、路径穿越和越出输出目录的引用会跳过并进入 warnings。
+- 输出文件只接受安全的 ComfyUI `{filename, subfolder, type}` 引用；缺失但路径安全的文件会保留为 `metadata.exists=false` 并进入 warnings，路径穿越、越出输出目录或空引用才会跳过。
 - 索引 JSON 字段经过限制和 credential-shaped key 清理；Token、Authorization、Cookie、密码、API key 等不会进入新索引。
 
 ## SQLite v1
 
-`CreativeIndex` 在每个写操作中使用事务、`PRAGMA foreign_keys=ON` 和 busy timeout。生成 ID 是首次入索引时产生的 32 位十六进制随机值，之后通过 `snapshot_id` / `prompt_id` / `request_id` 幂等定位，不使用可预测的时间戳 ID。
+`CreativeIndex` 在每个写操作中使用事务、`PRAGMA foreign_keys=ON` 和 busy timeout。新建作品使用带命名空间的确定性 32 位小写十六进制 ID，优先依据 `snapshot_id`、`prompt_id`、`request_id`，没有这些字段时依据安全规范化记录指纹；artifact ID 依据所属 generation 和安全文件引用确定。相同 JSON 删除数据库后重建仍得到相同 ID；同库 upsert 仍保留已有行及其关联。
 
 | 表 | 作用 |
 | --- | --- |
@@ -29,13 +29,35 @@
 
 首次打开空库或 v0 库会在事务中创建 v1 表；已存在的部分 v0 表只执行可回滚的加法列迁移。版本高于当前代码时拒绝写入，避免误降级。迁移失败不会修改源 JSON。
 
-已有数据可显式重建：
+已有 JSON 数据可显式重建：
 
 ```powershell
 python tools/rebuild_creative_index.py
 ```
 
 也可为测试 / 复制数据指定 `--db`、`--snapshots`、`--jobs` 和 `--output-root`。命令只读两个 JSON，输出 inserted / updated / skipped / warnings / errors 报告；坏行不会中断其他行。
+
+### 历史随机 ID 的一次性迁移
+
+正式库目前仍可能包含旧版本生成的随机 ID。迁移工具默认只读，不会改写数据库：
+
+```powershell
+python tools/migrate_creative_index_ids.py --db .\creative_index.sqlite3
+```
+
+报告包含每条 generation / artifact 的 `old` → `new` 映射，并检查 SQLite integrity、外键、非法 artifact 引用、稳定 ID 冲突、derivation 引用和 LoRA 引用。只有确认报告 `safe_to_apply: true` 后，停止 Easy Panel 进程并显式执行：
+
+```powershell
+python tools/migrate_creative_index_ids.py --db .\creative_index.sqlite3 --apply --backup-dir .\creative-index-backups
+```
+
+`--apply` 先写入独立备份，再构建临时数据库、验证外键，最后用同目录原子替换；失败会保留原文件不动。保留命令输出的备份路径，必要时停止 Easy Panel 后执行：
+
+```powershell
+python tools/migrate_creative_index_ids.py --db .\creative_index.sqlite3 --rollback .\creative-index-backups\<backup>.sqlite3
+```
+
+不要在正式服务运行时执行迁移；先备份 `generation_snapshots.json`、`rpg_jobs.json` 和整个运行目录。工具不会自动对正式库运行。
 
 ## 只读 Library API
 
@@ -55,7 +77,7 @@ artifact URL 仍指向已有的 `/api/rpg/image`，客户端下载时带 Token�
 
 - 列表显示缩略图（通过带 Token 的现有图片下载链路）、模型、Seed、时间、操作、输出数和父 / 子计数。
 - 详情显示只读参数、输出、父子谱系和提示词预览。
-- “复现到当前表单”和“换 Seed 到当前表单”只更新当前编辑状态，用户仍需显式点击底部“生成图片”。
+- “复现到当前表单”“换 Seed 到当前表单”和“继续编辑”只更新当前编辑状态；下一次用户显式点击底部“生成图片”时才附加一次父作品关系，服务端接受后清除，失败保留供重试，也可在表单中取消关联。
 - 下载复用现有 `downloadBlob` / Android `Downloads` 原生实现。
 - 旧服务端、断网、缺 Token、缺失输出或不支持谱系时保留页面并显示可读回退，不自动提交任务。
 
@@ -65,12 +87,16 @@ artifact URL 仍指向已有的 `/api/rpg/image`，客户端下载时带 Token�
 
 - 作品库请求始终使用 GET，并复用当前 RPG Token / HttpOnly 会话；页面中临时填写的 Token 只保存在内存，不写入 URL 或 localStorage。
 - 输出沿用服务端生成的 `/api/rpg/image` 安全引用。桌面端带鉴权请求图片 Blob，随后复用现有图片查看器和浏览器下载机制；缺失输出只显示元数据，不修改索引。
-- “复现到当前表单”“换 Seed 到当前表单”“继续编辑”只调用已有表单恢复能力，不调用 `/api/generate`、`/api/generate-batch` 或 `/api/rpg/generate`。页面会明确提示用户确认后手动点击“生成图片”。
+- “复现到当前表单”“换 Seed 到当前表单”“继续编辑”只调用已有表单恢复能力，不调用 `/api/generate`、`/api/generate-batch` 或 `/api/rpg/generate`；页面会明确提示用户确认后手动点击“生成图片”。继续编辑在存在安全具体输出时使用 `img2img` 语义，否则保留已记录的 operation；换 Seed 固定使用 `seed_variant`。
 - 旧电脑端返回 404、索引为空、断网、鉴权失败、服务未配置 Token、详情不存在或谱系接口缺失时，作品库显示可读提示并保留普通生成面板；不会因为作品库不可用阻断现有面板。
 
-## Phase 2 明确延期
+## Roadmap（规划，不代表已实现）
 
-本阶段不实现 Character-first 数据模型、角色 / 关系工作室、设备配对、通知、自动检测、完整队列重排和作品库写入编辑器。也不改变现有 JSON 源文件格式、已有生图工作流或 Token 位置。
+- Easy Panel 2.3.x：Character Studio（规划）。
+- Easy Panel 2.4.x：Mobile Editing（规划）。
+- Easy Panel 3.0：正式角色创建工作台（规划）。
+
+当前基础版本不实现 Character-first 数据模型、角色 / 关系工作室、设备配对、通知、自动检测、完整队列重排或作品库写入编辑器，也不改变现有 JSON 源文件格式、已有生图工作流或 Token 位置。
 
 ## 验证边界
 

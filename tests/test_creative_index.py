@@ -100,6 +100,38 @@ class CreativeIndexTests(unittest.TestCase):
             self.assertFalse(detail["variation"]["can_submit"])
             self.assertEqual("/api/rpg/image?name=good.png&type=output", detail["artifacts"][0]["url"])
 
+    def test_generation_and_artifact_ids_rebuild_identically_from_same_json(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            record = snapshot(
+                "a" * 32,
+                prompt_id="prompt-stable",
+                request_id="request-stable",
+                outputs=["missing.png"],
+            )
+            first_path = root / "first.sqlite3"
+            first = CreativeIndex(first_path).upsert_snapshot(record, output_root=root)
+            first_detail = CreativeIndex(first_path).get_generation(first["generation_id"])
+            first_artifact = first_detail["artifacts"][0]
+
+            second_path = root / "second.sqlite3"
+            second = CreativeIndex(second_path).upsert_snapshot(record, output_root=root)
+            second_detail = CreativeIndex(second_path).get_generation(second["generation_id"])
+            second_artifact = second_detail["artifacts"][0]
+
+            self.assertEqual(first["generation_id"], second["generation_id"])
+            self.assertEqual(first_artifact["artifact_id"], second_artifact["artifact_id"])
+            self.assertRegex(first["generation_id"], r"^[0-9a-f]{32}$")
+            self.assertRegex(first_artifact["artifact_id"], r"^[0-9a-f]{32}$")
+            self.assertFalse(first_artifact["exists"])
+            self.assertIsNone(first_artifact["url"])
+
+            first_path.unlink()
+            rebuilt = CreativeIndex(first_path).upsert_snapshot(record, output_root=root)
+            rebuilt_detail = CreativeIndex(first_path).get_generation(rebuilt["generation_id"])
+            self.assertEqual(first["generation_id"], rebuilt["generation_id"])
+            self.assertEqual(first_artifact["artifact_id"], rebuilt_detail["artifacts"][0]["artifact_id"])
+
     def test_missing_and_unsafe_artifacts_are_reported_and_skipped(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -109,9 +141,14 @@ class CreativeIndexTests(unittest.TestCase):
                 snapshot("b" * 32, outputs=["good.png", "missing.png", "../escape.png", {"filename": "sub/also-bad.png"}]),
                 output_root=root,
             )
-            self.assertEqual(1, result["generation"]["artifact_count"])
+            self.assertEqual(2, result["generation"]["artifact_count"])
             self.assertGreaterEqual(len(result["warnings"]), 3)
-            self.assertEqual(["good.png"], [item["filename"] for item in index.get_generation(result["generation_id"])["artifacts"]])
+            artifacts = index.get_generation(result["generation_id"])["artifacts"]
+            self.assertEqual(["good.png", "missing.png"], [item["filename"] for item in artifacts])
+            missing = next(item for item in artifacts if item["filename"] == "missing.png")
+            self.assertFalse(missing["exists"])
+            self.assertIsNone(missing["url"])
+            self.assertTrue(any("已保留记录：missing.png" in warning for warning in result["warnings"]))
 
     def test_transaction_rolls_back_a_failed_row(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  attachEasyPanelPendingDerivation,
   buildEasyPanelControllerRequest,
   createEasyPanelControllerRequestId,
   extractEasyPanelModels,
@@ -76,6 +77,26 @@ describe('standalone Easy Panel controller', () => {
       krea2_models: ['krea2.gguf'],
       qualityProfiles: { fast: { steps: 8 } },
     })).toEqual(['a.safetensors', 'shared.safetensors', 'anima.gguf', 'krea2.gguf'])
+  })
+
+  it('attaches only a validated one-shot lineage relation to explicit requests', () => {
+    const request = buildEasyPanelControllerRequest(
+      normalizeEasyPanelControllerSettings({ prompt: 'a quiet room' }),
+      'request-lineage',
+    )
+    const linked = attachEasyPanelPendingDerivation(request, {
+      parentGenerationId: 'a'.repeat(32),
+      parentArtifactId: 'b'.repeat(32),
+      operation: 'seed_variant',
+    })
+    expect(linked).toMatchObject({
+      parentGenerationId: 'a'.repeat(32),
+      parentArtifactId: 'b'.repeat(32),
+      operation: 'seed_variant',
+    })
+    expect(attachEasyPanelPendingDerivation(request, {
+      parentGenerationId: 'unsafe', operation: 'txt2img',
+    })).toEqual(request)
   })
 
   it('keeps model/quality/size/prompt edits away from the mocked generate API', () => {

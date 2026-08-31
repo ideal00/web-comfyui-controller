@@ -1604,7 +1604,7 @@ vendor\anima-tags\
 
 Android 客户端源码、可复现构建、权限说明、下载位置、安全边界和已知限制见 [android-client/README.md](android-client/README.md)。不要把 `8190` 或 `8188` 直接暴露到公网。
 
-Easy Panel 3.x Phase 1 的桌面 Web / Android 只读作品库、SQLite 旁路索引、重建命令和 Phase 2 边界见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
+Easy Panel 2.2.x Creative Library Foundation 的桌面 Web / Android 只读作品库、SQLite 旁路索引、重建与一次性 ID 迁移命令，以及后续 2.3.x / 2.4.x / 3.0 规划见 [CREATIVE_STATE_ARCHITECTURE.md](CREATIVE_STATE_ARCHITECTURE.md)。
 
 ### 跨设备预设与角色收藏
 

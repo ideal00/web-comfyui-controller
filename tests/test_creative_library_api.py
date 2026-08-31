@@ -96,7 +96,7 @@ class CreativeLibraryApiTests(unittest.TestCase):
                 "source": {"checkpoint": "library.safetensors"},
                 "compiled": {"positive": "private prompt"},
                 "workflow": {"operation": "panel.generate"},
-                "outputs": ["library.png"],
+                "outputs": ["library.png", "missing.png"],
             }, status="completed", output_root=output)
             generation_id = result["generation_id"]
 
@@ -136,6 +136,11 @@ class CreativeLibraryApiTests(unittest.TestCase):
                     self.assertEqual("private prompt", detail["snapshot"]["payload"]["prompt"])
                     self.assertFalse(detail["replay"]["can_submit"])
                     self.assertEqual("/api/rpg/image?name=library.png&type=output", detail["artifacts"][0]["url"])
+                    missing = next(item for item in detail["artifacts"] if item["filename"] == "missing.png")
+                    self.assertFalse(missing["exists"])
+                    self.assertIsNone(missing["url"])
+                    status, _body = request("GET", "/api/rpg/image?name=missing.png&type=output", auth)
+                    self.assertEqual(404, status)
 
                     status, body = request("GET", f"/api/rpg/library/generations/{generation_id}/lineage", auth)
                     self.assertEqual(200, status)
