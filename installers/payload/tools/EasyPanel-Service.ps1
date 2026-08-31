@@ -403,7 +403,7 @@ function Stop-VerifiedEndpoint([pscustomobject]$Config, [int]$Port, [ValidateSet
     foreach ($processId in @($state.Pids)) {
         $snapshot = Get-ProcessSnapshot ([int]$processId)
         if (-not (Test-ExpectedProcess $snapshot $Config $Role)) {
-            Write-Error ("{0} {1}: skipped unrelated or unverifiable PID {2}." -f $Role, $Port, $processId)
+            Write-Warning ("{0} {1}: skipped unrelated or unverifiable PID {2}." -f $Role, $Port, $processId)
             $hadError = $true
             continue
         }
