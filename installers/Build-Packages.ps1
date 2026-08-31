@@ -27,6 +27,7 @@ function Copy-CleanDirectory([string]$Source, [string]$Destination) {
         $relative = [System.IO.Path]::GetRelativePath($Source, $item.FullName)
         if ($relative -split '[\\/]' -contains "__pycache__") { continue }
         if ($item.Extension -eq ".pyc") { continue }
+        if ($item.Extension -eq ".lnk") { continue }
         $target = Join-Path $destinationPath $relative
         if ($item.PSIsContainer) {
             New-Item -ItemType Directory -Path $target -Force | Out-Null
