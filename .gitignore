@@ -43,3 +43,6 @@ creative_index.sqlite3*
 
 # ===== 跨设备浏览器共享状态（含用户自定义提示词和收藏）=====
 easy_panel_shared_state.json*
+
+# ===== 本地发布构建产物（APK / 校验文件，上传 GitHub Release 后不入库）=====
+release-artifacts/

@@ -36,7 +36,11 @@ Android 高级面板通过原生 WebView 承载电脑页面，支持返回键、
 
 ## 安装与下载
 
-当前为本地验收构建 `mobile-v1.4.5`，尚未发布 GitHub Release。它是 Debug / 测试签名 APK，不是 Google Play 发布签名；可直接安装 `app-debug.apk`，或使用 `adb install -r` 覆盖安装旧测试版。
+当前版本 `mobile-v1.4.5` 已发布到 GitHub Release：
+
+https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.5
+
+在 Release 页面下载 `app-debug.apk`（附 `app-debug.apk.sha256` 校验文件）即可安装。它是 Debug / 测试签名 APK，不是 Google Play 发布签名；可直接安装，或使用 `adb install -r` 覆盖安装旧测试版。
 
 安装后验收：
 
