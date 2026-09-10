@@ -35,16 +35,21 @@ import {
   type VisualJobStatus,
 } from '../services/easyPanelVisual'
 import {
+  createEasyPanelFavoriteGroup,
+  deleteEasyPanelFavoriteGroup,
   deleteEasyPanelGeneration,
+  getEasyPanelFavoriteGroups,
   getEasyPanelGeneration,
   getEasyPanelLineage,
   getEasyPanelLibrary,
+  renameEasyPanelFavoriteGroup,
   setEasyPanelGenerationFlags,
 } from '../services/easyPanelLibrary'
 import type {
   EasyPanelGenerationArtifact,
   EasyPanelGenerationDetail,
   EasyPanelGenerationSummary,
+  EasyPanelFavoriteGroup,
   EasyPanelLibraryLineage,
 } from '../services/easyPanelLibrary'
 import {
@@ -120,13 +125,23 @@ export interface EasyPanelController {
   refreshSnapshots: () => Promise<void>
   restoreSnapshot: (id: string, mode?: EasyPanelSnapshotRestoreMode) => Promise<boolean>
   clearSnapshotAdvancedConfig: () => void
-  refreshLibrary: () => Promise<void>
+  refreshLibrary: (options?: boolean | { favoriteOnly?: boolean; group?: string }) => Promise<void>
   openLibraryGeneration: (id: string) => Promise<boolean>
   clearLibraryDetail: () => void
   deleteLibraryGeneration: (id: string) => Promise<boolean>
-  saveLibraryFlags: (id: string, patch: { favorite?: boolean; rating?: number; note?: string }) => Promise<boolean>
+  saveLibraryFlags: (
+    id: string,
+    patch: { favorite?: boolean; rating?: number; note?: string; groups?: string[] },
+  ) => Promise<boolean>
   libraryFavoriteOnly: boolean
   toggleLibraryFavoriteFilter: () => void
+  libraryGroups: EasyPanelFavoriteGroup[]
+  libraryGroupFilter: string
+  setLibraryGroupFilter: (groupId: string) => void
+  refreshLibraryGroups: () => Promise<boolean>
+  createLibraryGroup: (name: string, generationId?: string) => Promise<boolean>
+  renameLibraryGroup: (groupId: string, name: string) => Promise<boolean>
+  deleteLibraryGroup: (groupId: string) => Promise<boolean>
   restoreLibraryGeneration: (mode?: EasyPanelLibraryRestoreMode) => Promise<boolean>
   clearPendingDerivation: () => void
   downloadLibraryArtifact: (artifact: EasyPanelGenerationArtifact) => Promise<void>
@@ -173,6 +188,9 @@ export function useEasyPanelController(): EasyPanelController {
   const [libraryError, setLibraryError] = useState('')
   // 只看入选作品是纯本地筛选条件，与电脑端请求同时生效。
   const [libraryFavoriteOnly, setLibraryFavoriteOnly] = useState(false)
+  // 收藏组：用户自己的分类，与生成参数无关；一张图可属于多个组。
+  const [libraryGroups, setLibraryGroups] = useState<EasyPanelFavoriteGroup[]>([])
+  const [libraryGroupFilter, setLibraryGroupFilterState] = useState('')
   const [libraryDetail, setLibraryDetail] = useState<EasyPanelGenerationDetail>()
   const [libraryLineage, setLibraryLineage] = useState<EasyPanelLibraryLineage>()
   const [libraryThumbnailSources, setLibraryThumbnailSources] = useState<Record<string, string>>({})
@@ -195,6 +213,11 @@ export function useEasyPanelController(): EasyPanelController {
   const libraryThumbnailFailedRef = useRef(new Set<string>())
   const libraryThumbnailActiveRef = useRef(0)
   const libraryThumbnailAbortRef = useRef(new Map<string, AbortController>())
+  // createLibraryGroup 需要调用后定义的 saveLibraryFlags（避免循环依赖），用 ref 转发。
+  const saveLibraryFlagsRef = useRef<(
+    id: string,
+    patch: { favorite?: boolean; rating?: number; note?: string; groups?: string[] },
+  ) => Promise<boolean>>(async () => false)
 
   const settings = state.settings
   const config = useMemo<EasyPanelVisualConfig>(() => ({
@@ -484,8 +507,15 @@ export function useEasyPanelController(): EasyPanelController {
     }
   }, [enqueueLibraryThumbnail])
 
-  const refreshLibrary = useCallback(async (favoriteOnlyOverride?: boolean) => {
-    const favoriteOnly = typeof favoriteOnlyOverride === 'boolean' ? favoriteOnlyOverride : libraryFavoriteOnly
+  const refreshLibrary = useCallback(async (options?: boolean | { favoriteOnly?: boolean; group?: string }) => {
+    const favoriteOnly = typeof options === 'boolean'
+      ? options
+      : options && typeof options === 'object' && typeof options.favoriteOnly === 'boolean'
+        ? options.favoriteOnly
+        : libraryFavoriteOnly
+    const groupFilter = options && typeof options === 'object' && typeof options.group === 'string'
+      ? options.group
+      : libraryGroupFilter
     try {
       normalizeEasyPanelBaseUrl(settings.baseUrl)
     } catch (caught) {
@@ -508,12 +538,15 @@ export function useEasyPanelController(): EasyPanelController {
     setLibraryLineage(undefined)
     setLibraryLoading(true)
     setLibraryError('')
-    setLibraryMessage(favoriteOnly ? '正在读取入选作品…' : '正在读取电脑端作品库…')
+    setLibraryMessage(favoriteOnly
+      ? '正在读取入选作品…'
+      : groupFilter ? '正在读取该收藏组…' : '正在读取电脑端作品库…')
     try {
       const response = await getEasyPanelLibrary(config, {
         limit: LIBRARY_PAGE_SIZE,
         offset: 0,
         favorite: favoriteOnly ? 'favorite' : '',
+        group: groupFilter,
         sort: 'created_at',
         order: 'desc',
       })
@@ -521,6 +554,7 @@ export function useEasyPanelController(): EasyPanelController {
       setLibrary(response.items)
       setLibraryTotal(response.total)
       setLibraryHasMore(response.has_more)
+      if (Array.isArray(response.groups)) setLibraryGroups(response.groups)
       libraryOffsetRef.current = response.offset + response.items.length
       setLibraryMessage(response.items.length
         ? `已读取 ${response.items.length} / ${response.total} 条作品${response.has_more ? '，可继续加载更早作品' : ''}`
@@ -532,13 +566,117 @@ export function useEasyPanelController(): EasyPanelController {
     } finally {
       if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
     }
-  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, resetLibraryThumbnailQueue, settings.baseUrl, settings.token, libraryFavoriteOnly])
+  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, resetLibraryThumbnailQueue, settings.baseUrl, settings.token, libraryFavoriteOnly, libraryGroupFilter])
 
   const toggleLibraryFavoriteFilter = useCallback(() => {
     const next = !libraryFavoriteOnly
     setLibraryFavoriteOnly(next)
     void refreshLibrary(next)
   }, [libraryFavoriteOnly, refreshLibrary])
+
+  const setLibraryGroupFilter = useCallback((groupId: string) => {
+    const next = String(groupId ?? '').trim().toLowerCase()
+    setLibraryGroupFilterState(next)
+    void refreshLibrary({ favoriteOnly: libraryFavoriteOnly, group: next })
+  }, [libraryFavoriteOnly, refreshLibrary])
+
+  const refreshLibraryGroups = useCallback(async () => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '读取收藏组'))
+      return false
+    }
+    if (!settings.token.trim()) {
+      setLibraryError('请先填写 RPG Token，再读取收藏组。')
+      return false
+    }
+    try {
+      const response = await getEasyPanelFavoriteGroups(config)
+      setLibraryGroups(response.groups)
+      return true
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '读取收藏组'))
+      return false
+    }
+  }, [config, settings.baseUrl, settings.token])
+
+  // 新建收藏组；带 generationId 时顺带把当前作品加进去（详情页“新建并加入”）。
+  const createLibraryGroup = useCallback(async (name: string, generationId?: string) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '新建收藏组'))
+      return false
+    }
+    if (!settings.token.trim()) {
+      setLibraryError('请先填写 RPG Token，再新建收藏组。')
+      return false
+    }
+    try {
+      const response = await createEasyPanelFavoriteGroup(config, name)
+      setLibraryGroups(response.groups)
+      setLibraryMessage(response.result && response.result.created === false
+        ? `收藏组「${String(response.result.group?.name ?? name)}」已存在，已直接使用。`
+        : `收藏组「${String(response.result?.group?.name ?? name)}」已创建。`)
+      setLibraryError('')
+      const createdId = String(response.result?.group?.group_id ?? '')
+      if (generationId && createdId) {
+        const current = libraryDetail && libraryDetail.generation_id === generationId
+          ? (libraryDetail.groups ?? []).map((group) => group.group_id)
+          : []
+        const next = Array.from(new Set([...current, createdId]))
+        await saveLibraryFlagsRef.current(generationId, { groups: next })
+      }
+      return true
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '新建收藏组'))
+      return false
+    }
+  }, [config, libraryDetail, settings.baseUrl, settings.token])
+
+  const renameLibraryGroup = useCallback(async (groupId: string, name: string) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '重命名收藏组'))
+      return false
+    }
+    try {
+      const response = await renameEasyPanelFavoriteGroup(config, groupId, name)
+      setLibraryGroups(response.groups)
+      setLibraryMessage('收藏组已重命名。')
+      setLibraryError('')
+      return true
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '重命名收藏组'))
+      return false
+    }
+  }, [config, settings.baseUrl, settings.token])
+
+  const deleteLibraryGroup = useCallback(async (groupId: string) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '删除收藏组'))
+      return false
+    }
+    try {
+      const response = await deleteEasyPanelFavoriteGroup(config, groupId)
+      setLibraryGroups(response.groups)
+      const removed = Number(response.result?.removed_links ?? 0)
+      setLibraryMessage(`收藏组已删除${removed ? `，${removed} 张作品已移出该组` : ''}；作品本身不会被删除。`)
+      setLibraryError('')
+      if (libraryGroupFilter === groupId.trim().toLowerCase()) {
+        setLibraryGroupFilterState('')
+        void refreshLibrary({ favoriteOnly: libraryFavoriteOnly, group: '' })
+      }
+      return true
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '删除收藏组'))
+      return false
+    }
+  }, [config, libraryFavoriteOnly, libraryGroupFilter, refreshLibrary, settings.baseUrl, settings.token])
 
   const loadMoreLibrary = useCallback(async () => {
     if (libraryLoading || !libraryHasMore) return
@@ -562,6 +700,7 @@ export function useEasyPanelController(): EasyPanelController {
         limit: LIBRARY_PAGE_SIZE,
         offset,
         favorite: libraryFavoriteOnly ? 'favorite' : '',
+        group: libraryGroupFilter,
         sort: 'created_at',
         order: 'desc',
       })
@@ -581,7 +720,7 @@ export function useEasyPanelController(): EasyPanelController {
     } finally {
       if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
     }
-  }, [config, library, libraryHasMore, libraryLoading, loadLibraryThumbnails, settings.baseUrl, settings.token, libraryFavoriteOnly])
+  }, [config, library, libraryHasMore, libraryLoading, loadLibraryThumbnails, settings.baseUrl, settings.token, libraryFavoriteOnly, libraryGroupFilter])
 
   const openLibraryGeneration = useCallback(async (id: string) => {
     try {
@@ -712,7 +851,7 @@ export function useEasyPanelController(): EasyPanelController {
   // 收藏 / 评分 / 备注：只标记“这是当前最佳版本”，不会改变任何生成参数。
   const saveLibraryFlags = useCallback(async (
     id: string,
-    patch: { favorite?: boolean; rating?: number; note?: string },
+    patch: { favorite?: boolean; rating?: number; note?: string; groups?: string[] },
   ) => {
     try {
       normalizeEasyPanelBaseUrl(settings.baseUrl)
@@ -728,21 +867,30 @@ export function useEasyPanelController(): EasyPanelController {
     try {
       const response = await setEasyPanelGenerationFlags(config, id, patch)
       const updated = response.generation
+      const groups = Array.isArray(updated.groups) ? updated.groups : undefined
       setLibrary((previous) => previous.map((item) => (item.generation_id === id
-        ? { ...item, favorite: updated.favorite, rating: updated.rating, note: updated.note }
+        ? { ...item, favorite: updated.favorite, rating: updated.rating, note: updated.note, groups: groups ?? item.groups }
         : item)))
       setLibraryDetail((previous) => (previous && previous.generation_id === id
-        ? { ...previous, favorite: updated.favorite, rating: updated.rating, note: updated.note }
+        ? { ...previous, favorite: updated.favorite, rating: updated.rating, note: updated.note, groups: groups ?? previous.groups }
         : previous))
-      setLibraryMessage(patch.favorite === undefined
-        ? '作品标记已保存。'
-        : patch.favorite ? '已标记为入选（最佳版本）。' : '已取消入选标记。')
+      const responseGroups = (response as { groups?: EasyPanelFavoriteGroup[] }).groups
+      if (Array.isArray(responseGroups)) setLibraryGroups(responseGroups)
+      setLibraryMessage(patch.groups !== undefined
+        ? (patch.groups.length ? `已保存该作品的收藏组（${patch.groups.length} 个）。` : '已移出全部收藏组。')
+        : patch.favorite === undefined
+          ? '作品标记已保存。'
+          : patch.favorite ? '已标记为入选（最佳版本）。' : '已取消入选标记。')
       return true
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '保存收藏标记'))
       return false
     }
   }, [config, settings.baseUrl, settings.token])
+
+  useEffect(() => {
+    saveLibraryFlagsRef.current = saveLibraryFlags
+  }, [saveLibraryFlags])
 
   const downloadLibraryArtifact = useCallback(async (artifact: EasyPanelGenerationArtifact) => {
     if (!artifact.url || artifact.exists === false || libraryDownloadLoading) return
@@ -1045,6 +1193,13 @@ export function useEasyPanelController(): EasyPanelController {
     libraryError,
     libraryFavoriteOnly,
     toggleLibraryFavoriteFilter,
+    libraryGroups,
+    libraryGroupFilter,
+    setLibraryGroupFilter,
+    refreshLibraryGroups,
+    createLibraryGroup,
+    renameLibraryGroup,
+    deleteLibraryGroup,
     saveLibraryFlags,
     libraryDetail,
     libraryLineage,

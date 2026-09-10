@@ -24,6 +24,10 @@ from urllib.parse import urlencode
 
 SCHEMA_VERSION = 1
 MAX_PAGE_SIZE = 100
+# 收藏组：名称长度、总数量与单个作品可加入的组数上限（防误操作导致的失控元数据）。
+GROUP_NAME_LIMIT = 60
+MAX_FAVORITE_GROUPS = 200
+MAX_GROUPS_PER_GENERATION = 24
 MAX_OFFSET = 1_000_000
 MAX_LINEAGE_NODES = 100
 MAX_SNAPSHOT_TEXT = 2_000_000
@@ -280,6 +284,43 @@ def _flag_value(value: Any) -> bool:
 
 def _note_text(value: Any, limit: int = 2000) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _normalized_group_name(value: Any) -> str:
+    """Collapse whitespace so "  参考 图 " and "参考 图" are the same group."""
+
+    name = " ".join(str(value or "").split())
+    if not name:
+        raise CreativeIndexError("收藏组名称不能为空。")
+    return name[:GROUP_NAME_LIMIT]
+
+
+def _safe_group_id(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    if not re.fullmatch(r"[0-9a-f]{32}", text):
+        raise CreativeIndexError("收藏组编号无效。")
+    return text
+
+
+def _groups_for_generation(connection: sqlite3.Connection, generation_id: str) -> list[dict[str, Any]]:
+    """Return the 收藏组 of one work, newest name order first."""
+
+    rows = connection.execute(
+        "SELECT g.group_id, g.name FROM generation_favorite_groups l "
+        "JOIN favorite_groups g ON g.group_id = l.group_id "
+        "WHERE l.generation_id = ? ORDER BY g.name COLLATE NOCASE ASC",
+        (generation_id,),
+    ).fetchall()
+    return [{"group_id": str(row["group_id"]), "name": str(row["name"])} for row in rows]
+
+
+def _group_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "group_id": str(row["group_id"]),
+        "name": str(row["name"]),
+        "created_at": int(row["created_at"]),
+        "updated_at": int(row["updated_at"]),
+    }
 
 
 def _row_flag(row: sqlite3.Row, name: str) -> bool:
@@ -659,6 +700,28 @@ class CreativeIndex:
             )
             """
         )
+        # 用户自命名的收藏组：与 generations 多对多，删除作品/删除组都会自动清理关联，
+        # 且不存储任何生成参数，因此不会影响复现与谱系。
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS favorite_groups (
+                group_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS generation_favorite_groups (
+                generation_id TEXT NOT NULL REFERENCES generations(generation_id) ON DELETE CASCADE,
+                group_id TEXT NOT NULL REFERENCES favorite_groups(group_id) ON DELETE CASCADE,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY(generation_id, group_id)
+            )
+            """
+        )
 
     @staticmethod
     def _create_schema_v1_indexes(connection: sqlite3.Connection) -> None:
@@ -669,6 +732,11 @@ class CreativeIndex:
         connection.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_generation ON artifacts(generation_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_derivations_parent ON derivations(parent_generation_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_derivations_child ON derivations(child_generation_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_generation_favorite_groups_group ON generation_favorite_groups(group_id)")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_favorite_groups_name "
+            "ON favorite_groups(name COLLATE NOCASE)"
+        )
 
     @contextlib.contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -1302,6 +1370,7 @@ class CreativeIndex:
             "favorite": _row_flag(row, "favorite"),
             "rating": _row_int(row, "rating"),
             "note": _row_text(row, "note"),
+            "groups": _groups_for_generation(connection, generation_id),
             "lora_count": int(lora_count),
             "artifact_count": int(artifact_count),
             "parent_count": int(parent_count),
@@ -1577,6 +1646,146 @@ class CreativeIndex:
             ).fetchone()
             return self._summary_from_row(connection, updated) if updated else None
 
+    def list_favorite_groups(self) -> dict[str, Any]:
+        """Return every user-defined 收藏组 with its work count."""
+
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT g.group_id, g.name, g.created_at, g.updated_at, "
+                "(SELECT COUNT(*) FROM generation_favorite_groups l WHERE l.group_id = g.group_id) "
+                "AS item_count FROM favorite_groups g ORDER BY g.name COLLATE NOCASE ASC"
+            ).fetchall()
+        items = [{**_group_from_row(row), "item_count": int(row["item_count"] or 0)} for row in rows]
+        return {"items": items, "total": len(items)}
+
+    def create_favorite_group(self, name: Any) -> dict[str, Any]:
+        """Create a named 收藏组; a case-insensitive duplicate returns the existing one."""
+
+        clean = _normalized_group_name(name)
+        with self._write_transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM favorite_groups WHERE name = ? COLLATE NOCASE", (clean,)
+            ).fetchone()
+            if existing is not None:
+                return {"created": False, "group": _group_from_row(existing),
+                        "message": "已存在同名收藏组，直接使用该组。"}
+            total = connection.execute("SELECT COUNT(*) FROM favorite_groups").fetchone()[0]
+            if int(total or 0) >= MAX_FAVORITE_GROUPS:
+                raise CreativeIndexError(f"收藏组数量已达上限（{MAX_FAVORITE_GROUPS}）。")
+            stamp = now_ms()
+            group_id = _new_id()
+            connection.execute(
+                "INSERT INTO favorite_groups(group_id, name, created_at, updated_at) VALUES(?,?,?,?)",
+                (group_id, clean, stamp, stamp),
+            )
+            row = connection.execute(
+                "SELECT * FROM favorite_groups WHERE group_id = ?", (group_id,)
+            ).fetchone()
+            return {"created": True, "group": _group_from_row(row), "message": "收藏组已创建。"}
+
+    def rename_favorite_group(self, group_id: Any, name: Any) -> dict[str, Any] | None:
+        wanted = _safe_group_id(group_id)
+        clean = _normalized_group_name(name)
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM favorite_groups WHERE group_id = ?", (wanted,)
+            ).fetchone()
+            if row is None:
+                return None
+            clash = connection.execute(
+                "SELECT group_id FROM favorite_groups WHERE name = ? COLLATE NOCASE AND group_id <> ?",
+                (clean, wanted),
+            ).fetchone()
+            if clash is not None:
+                raise CreativeIndexError("已存在同名收藏组，请换一个名称。")
+            connection.execute(
+                "UPDATE favorite_groups SET name = ?, updated_at = ? WHERE group_id = ?",
+                (clean, now_ms(), wanted),
+            )
+            updated = connection.execute(
+                "SELECT * FROM favorite_groups WHERE group_id = ?", (wanted,)
+            ).fetchone()
+            return _group_from_row(updated)
+
+    def delete_favorite_group(self, group_id: Any) -> dict[str, Any] | None:
+        """Delete one 收藏组. The works themselves are never touched."""
+
+        wanted = _safe_group_id(group_id)
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT name FROM favorite_groups WHERE group_id = ?", (wanted,)
+            ).fetchone()
+            if row is None:
+                return None
+            links = connection.execute(
+                "SELECT COUNT(*) FROM generation_favorite_groups WHERE group_id = ?", (wanted,)
+            ).fetchone()[0]
+            cursor = connection.execute(
+                "DELETE FROM favorite_groups WHERE group_id = ?", (wanted,)
+            )
+            return {"deleted": max(0, cursor.rowcount) > 0,
+                    "group_id": wanted, "name": str(row["name"]),
+                    "removed_links": int(links or 0)}
+
+    def set_generation_groups(self, generation_id: Any, group_ids: Any, *,
+                              mode: str = "replace") -> dict[str, Any] | None:
+        """Add / remove / replace the 收藏组 membership of one work.
+
+        Membership is pure metadata: no generation parameter is written, so a
+        work can sit in several groups without creating a new version.
+        """
+
+        wanted = _safe_generation_id(generation_id)
+        candidates: list[str] = []
+        for raw in (group_ids if isinstance(group_ids, (list, tuple, set)) else [group_ids]):
+            try:
+                candidate = _safe_group_id(raw)
+            except CreativeIndexError:
+                continue
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        if len(candidates) > MAX_GROUPS_PER_GENERATION:
+            raise CreativeIndexError(f"单个作品最多加入 {MAX_GROUPS_PER_GENERATION} 个收藏组。")
+        action = str(mode or "replace").strip().casefold()
+        if action not in {"replace", "add", "remove"}:
+            raise CreativeIndexError("未知的收藏组操作。")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM generations WHERE generation_id = ?", (wanted,)
+            ).fetchone()
+            if row is None:
+                return None
+            known = {
+                str(item["group_id"])
+                for item in connection.execute("SELECT group_id FROM favorite_groups").fetchall()
+            }
+            if action != "remove":
+                missing = [item for item in candidates if item not in known]
+                if missing:
+                    raise CreativeIndexError("收藏组不存在，请刷新后重试。")
+            if action == "replace":
+                connection.execute(
+                    "DELETE FROM generation_favorite_groups WHERE generation_id = ?", (wanted,)
+                )
+            if action in {"replace", "add"}:
+                stamp = now_ms()
+                for group_id in candidates:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO generation_favorite_groups"
+                        "(generation_id, group_id, created_at) VALUES(?,?,?)",
+                        (wanted, group_id, stamp),
+                    )
+            else:
+                for group_id in candidates:
+                    connection.execute(
+                        "DELETE FROM generation_favorite_groups WHERE generation_id = ? AND group_id = ?",
+                        (wanted, group_id),
+                    )
+            updated = connection.execute(
+                "SELECT * FROM generations WHERE generation_id = ?", (wanted,)
+            ).fetchone()
+            return self._summary_from_row(connection, updated) if updated else None
+
     def list_generations(
         self,
         *,
@@ -1586,6 +1795,7 @@ class CreativeIndex:
         status: Any = "",
         model: Any = "",
         favorite: Any = None,
+        group: Any = "",
         sort: Any = "created_at",
         order: Any = "desc",
     ) -> dict[str, Any]:
@@ -1611,6 +1821,23 @@ class CreativeIndex:
             where.append("g.favorite = 1")
         elif favorite_filter in {"0", "false", "no", "unfavorite", "unfavourite", "未入选"}:
             where.append("g.favorite = 0")
+        group_filter = str(group or "").strip().casefold()
+        if group_filter == "ungrouped":
+            where.append("NOT EXISTS (SELECT 1 FROM generation_favorite_groups l WHERE l.generation_id = g.generation_id)")
+        elif group_filter:
+            try:
+                wanted_group = _safe_group_id(group_filter)
+            except CreativeIndexError:
+                wanted_group = ""
+            if wanted_group:
+                where.append(
+                    "EXISTS (SELECT 1 FROM generation_favorite_groups l "
+                    "WHERE l.generation_id = g.generation_id AND l.group_id = ?)"
+                )
+                params.append(wanted_group)
+            else:
+                # 未知的组编号不应把它当成“全部作品”静默返回。
+                where.append("1 = 0")
         if model_filter:
             where.append("LOWER(g.model) LIKE LOWER(?)")
             params.append(f"%{model_filter}%")

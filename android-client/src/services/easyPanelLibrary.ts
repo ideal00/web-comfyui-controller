@@ -45,6 +45,19 @@ export interface EasyPanelGenerationSummary {
   rating?: number
   /** 人工备注，最多 2000 字。 */
   note?: string
+  /** 该作品所属的自定义收藏组（可多个）。 */
+  groups?: EasyPanelFavoriteGroupRef[]
+}
+
+export interface EasyPanelFavoriteGroupRef {
+  group_id: string
+  name: string
+}
+
+export interface EasyPanelFavoriteGroup extends EasyPanelFavoriteGroupRef {
+  item_count: number
+  created_at: number
+  updated_at: number
 }
 
 export interface EasyPanelGenerationArtifact {
@@ -101,6 +114,30 @@ export interface EasyPanelLibraryListResponse {
   limit: number
   offset: number
   has_more: boolean
+  groups?: EasyPanelFavoriteGroup[]
+  group_total?: number
+}
+
+export interface EasyPanelFavoriteGroupListResponse {
+  api_version: number
+  index_schema_version: number
+  groups: EasyPanelFavoriteGroup[]
+  total: number
+}
+
+export interface EasyPanelFavoriteGroupMutationResponse {
+  api_version: number
+  index_schema_version: number
+  result: {
+    created?: boolean
+    message?: string
+    group?: EasyPanelFavoriteGroupRef
+    deleted?: boolean
+    name?: string
+    removed_links?: number
+  }
+  groups: EasyPanelFavoriteGroup[]
+  total: number
 }
 
 export interface EasyPanelLibraryDetailResponse {
@@ -145,6 +182,8 @@ export interface EasyPanelLibraryQuery {
   status?: EasyPanelLibraryStatus | ''
   model?: string
   favorite?: 'favorite' | 'unfavorite' | ''
+  /** 收藏组编号，或 'ungrouped' 只看未加入收藏组的作品。 */
+  group?: string
   sort?: 'created_at' | 'updated_at' | 'status' | 'operation' | 'model'
   order?: 'asc' | 'desc'
 }
@@ -160,6 +199,9 @@ export async function getEasyPanelLibrary(
   if (query.status) params.set('status', query.status)
   if (query.model?.trim()) params.set('model', query.model.trim().slice(0, 200))
   if (query.favorite === 'favorite' || query.favorite === 'unfavorite') params.set('favorite', query.favorite)
+  const group = String(query.group ?? '').trim().toLowerCase()
+  if (group === 'ungrouped') params.set('group', 'ungrouped')
+  else if (/^[0-9a-f]{32}$/u.test(group)) params.set('group', group)
   if (query.sort) params.set('sort', query.sort)
   if (query.order) params.set('order', query.order)
   return jsonRequest<EasyPanelLibraryListResponse>(config, `/api/rpg/library/generations?${params.toString()}`)
@@ -214,6 +256,9 @@ export function libraryFlagsPayload(patch: {
   favorite?: boolean
   rating?: number
   note?: string
+  groups?: string[]
+  groupAdd?: string[]
+  groupRemove?: string[]
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {}
   if (Object.prototype.hasOwnProperty.call(patch, 'favorite')) body.favorite = Boolean(patch.favorite)
@@ -221,14 +266,42 @@ export function libraryFlagsPayload(patch: {
     body.rating = Math.min(5, Math.max(0, Math.round(patch.rating as number)))
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'note')) body.note = String(patch.note ?? '').slice(0, 2000)
+  if (Object.prototype.hasOwnProperty.call(patch, 'groups')) body.groups = safeGroupIds(patch.groups)
+  if (Object.prototype.hasOwnProperty.call(patch, 'groupAdd')) body.group_add = safeGroupIds(patch.groupAdd)
+  if (Object.prototype.hasOwnProperty.call(patch, 'groupRemove')) body.group_remove = safeGroupIds(patch.groupRemove)
   return body
+}
+
+/** 收藏组名称只用于分类展示，与生成参数无关。 */
+export function normalizeGroupName(value: string): string {
+  const name = String(value ?? '').split(/\s+/u).filter(Boolean).join(' ')
+  if (!name) throw new Error('收藏组名称不能为空。')
+  return name.slice(0, 60)
+}
+
+function safeGroupIds(values: unknown): string[] {
+  const list = Array.isArray(values) ? values : [values]
+  const result: string[] = []
+  for (const value of list) {
+    const id = String(value ?? '').trim().toLowerCase()
+    if (!/^[0-9a-f]{32}$/u.test(id) || result.includes(id)) continue
+    result.push(id)
+  }
+  return result.slice(0, 24)
 }
 
 /** Mark a generation as 入选 / 评分 / 备注 without touching the recipe. */
 export async function setEasyPanelGenerationFlags(
   config: EasyPanelVisualConfig,
   generationId: string,
-  patch: { favorite?: boolean; rating?: number; note?: string },
+  patch: {
+    favorite?: boolean
+    rating?: number
+    note?: string
+    groups?: string[]
+    groupAdd?: string[]
+    groupRemove?: string[]
+  },
 ): Promise<EasyPanelLibraryDetailResponse> {
   const id = safeGenerationId(generationId)
   const body = libraryFlagsPayload(patch)
@@ -237,6 +310,53 @@ export async function setEasyPanelGenerationFlags(
     method: 'POST',
     body: JSON.stringify({ generation_id: id, ...body }),
   })
+}
+
+/** 列出所有自命名收藏组（含组内作品数）。 */
+export async function getEasyPanelFavoriteGroups(
+  config: EasyPanelVisualConfig,
+): Promise<EasyPanelFavoriteGroupListResponse> {
+  return jsonRequest<EasyPanelFavoriteGroupListResponse>(config, '/api/rpg/library/groups')
+}
+
+/** 新建收藏组；同名时电脑端直接返回已有组。 */
+export async function createEasyPanelFavoriteGroup(
+  config: EasyPanelVisualConfig,
+  name: string,
+): Promise<EasyPanelFavoriteGroupMutationResponse> {
+  return jsonRequest<EasyPanelFavoriteGroupMutationResponse>(config, '/api/rpg/library/groups', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'create', name: normalizeGroupName(name) }),
+  })
+}
+
+/** 重命名收藏组。 */
+export async function renameEasyPanelFavoriteGroup(
+  config: EasyPanelVisualConfig,
+  groupId: string,
+  name: string,
+): Promise<EasyPanelFavoriteGroupMutationResponse> {
+  return jsonRequest<EasyPanelFavoriteGroupMutationResponse>(config, '/api/rpg/library/groups', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'rename', group_id: safeGroupId(groupId), name: normalizeGroupName(name) }),
+  })
+}
+
+/** 删除收藏组；作品本身不会被删除，只会移出这个组。 */
+export async function deleteEasyPanelFavoriteGroup(
+  config: EasyPanelVisualConfig,
+  groupId: string,
+): Promise<EasyPanelFavoriteGroupMutationResponse> {
+  return jsonRequest<EasyPanelFavoriteGroupMutationResponse>(config, '/api/rpg/library/groups', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'delete', group_id: safeGroupId(groupId) }),
+  })
+}
+
+export function safeGroupId(value: string): string {
+  const id = String(value ?? '').trim().toLowerCase()
+  if (!/^[0-9a-f]{32}$/u.test(id)) throw new Error('收藏组编号无效。')
+  return id
 }
 
 function clampInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {

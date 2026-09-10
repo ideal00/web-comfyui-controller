@@ -7,6 +7,8 @@
   ]);
   const STATUSES = Object.freeze(['queued', 'running', 'completed', 'error', 'cancelled', 'unknown']);
   const FAVORITES = Object.freeze(['favorite', 'unfavorite']);
+  const MAX_GROUPS = 24;
+  const GROUP_NAME_LIMIT = 60;
   const PAGE_SIZE = 24;
   const MAX_PAGE_SIZE = 100;
   const MAX_OFFSET = 1000000;
@@ -40,6 +42,9 @@
     if (model) params.set('model', model);
     const favorite = oneOf(input.favorite, FAVORITES);
     if (favorite) params.set('favorite', favorite);
+    const group = asText(input.group);
+    if (group === 'ungrouped') params.set('group', 'ungrouped');
+    else if (/^[0-9a-f]{32}$/u.test(group.toLowerCase())) params.set('group', group.toLowerCase());
     const sort = oneOf(input.sort, ['created_at', 'updated_at', 'status', 'operation', 'model']);
     const order = oneOf(input.order, ['asc', 'desc']);
     if (sort) params.set('sort', sort);
@@ -268,6 +273,8 @@
     safeLibraryImagePath,
     safeOutputFilename,
     safeOutputSubfolder,
+    groupLabel,
+    groupsOf,
   };
 
   global.EasyPanelCreativeLibrary = testApi;
@@ -287,8 +294,9 @@
     requestNumber: 0,
     imageUrls: new Map(),
     lastFocus: null,
+    groups: [],
     filters: {
-      operation: '', status: '', model: '', sort: 'created_at', order: 'desc',
+      operation: '', status: '', favorite: '', group: '', model: '', sort: 'created_at', order: 'desc',
     },
   };
 
@@ -431,6 +439,15 @@
       const details = createElement('span', 'creative-library-item-details', `seed ${item.seed == null ? '?' : item.seed} · ${item.width || '?'}×${item.height || '?'}`);
       const markers = createElement('span', 'creative-library-item-markers');
       appendLineageMarker(markers, item);
+      const itemGroups = groupsOf(item);
+      if (itemGroups.length) {
+        const chips = createElement('span', 'creative-library-group-chips');
+        itemGroups.slice(0, 4).forEach((group) => {
+          chips.append(createElement('span', 'creative-library-group-chip', groupLabel(group) || '未命名组'));
+        });
+        if (itemGroups.length > 4) chips.append(createElement('small', '', `+${itemGroups.length - 4}`));
+        markers.append(chips);
+      }
       copy.append(heading, operation, details, markers);
       button.append(thumb, copy);
       wrap.append(button);
@@ -476,10 +493,157 @@
       operation: byId('creativeLibraryOperation')?.value || '',
       status: byId('creativeLibraryStatus')?.value || '',
       favorite: byId('creativeLibraryFavorite')?.value || '',
+      group: byId('creativeLibraryGroup')?.value || '',
       model: byId('creativeLibraryModel')?.value || '',
       sort: byId('creativeLibrarySort')?.value || 'created_at',
       order: byId('creativeLibraryOrder')?.value || 'desc',
     };
+  }
+
+  // 收藏组：只是用户自己的分类，不改动任何生成参数。
+  function groupLabel(group) {
+    return asText(group && group.name).slice(0, GROUP_NAME_LIMIT);
+  }
+
+  function groupsOf(item) {
+    const list = item && Array.isArray(item.groups) ? item.groups : [];
+    return list.filter((group) => group && /^[0-9a-f]{32}$/u.test(asText(group.group_id).toLowerCase()));
+  }
+
+  function renderGroupOptions(keepValue) {
+    const select = byId('creativeLibraryGroup');
+    if (!select) return;
+    const wanted = keepValue !== undefined ? keepValue : select.value;
+    select.replaceChildren();
+    const all = createElement('option', '', '全部收藏组');
+    all.value = '';
+    select.append(all);
+    const ungrouped = createElement('option', '', '未加入收藏组');
+    ungrouped.value = 'ungrouped';
+    select.append(ungrouped);
+    state.groups.forEach((group) => {
+      const option = createElement('option', '', `${groupLabel(group)}（${Number(group.item_count) || 0}）`);
+      option.value = asText(group.group_id).toLowerCase();
+      select.append(option);
+    });
+    select.value = [...select.options].some((option) => option.value === wanted) ? wanted : '';
+  }
+
+  function adoptGroups(data) {
+    if (data && Array.isArray(data.groups)) {
+      state.groups = data.groups
+        .filter((group) => group && /^[0-9a-f]{32}$/u.test(asText(group.group_id).toLowerCase()))
+        .slice(0, 200);
+      renderGroupOptions();
+    }
+  }
+
+  async function loadGroups() {
+    try {
+      const data = await requestJson('/api/rpg/library/groups', state.token);
+      adoptGroups(data);
+    } catch (_) {
+      // 组列表读不到不影响作品库主体（筛选框保留“全部/未加入”两项）。
+    }
+  }
+
+  function applyGroupsLocally(generationId, groups) {
+    const merge = (item) => (item && item.generation_id === generationId ? { ...item, groups } : item);
+    state.items = state.items.map(merge);
+    if (state.detail && state.detail.generation_id === generationId) {
+      state.detail = { ...state.detail, groups };
+    }
+  }
+
+  function saveGroups(generationId, groupIds, options) {
+    let id;
+    try { id = safeGenerationId(generationId); } catch (error) { showNotice(error.message, 'error'); return; }
+    const wanted = [...new Set((groupIds || []).map((value) => asText(value).toLowerCase())
+      .filter((value) => /^[0-9a-f]{32}$/u.test(value)))].slice(0, MAX_GROUPS);
+    const byId_ = new Map(state.groups.map((group) => [asText(group.group_id).toLowerCase(), group]));
+    const optimistic = wanted.map((groupId) => ({ group_id: groupId, name: groupLabel(byId_.get(groupId)) }));
+    applyGroupsLocally(id, optimistic);
+    renderList();
+    if (!options || options.rerender !== false) {
+      if (state.detail) renderDetail();
+    }
+    (async () => {
+      try {
+        const data = await postJson('/api/rpg/library/favorite', state.token, { generation_id: id, groups: wanted });
+        const updated = data && data.generation;
+        if (updated && updated.generation_id) applyGroupsLocally(id, groupsOf(updated));
+        adoptGroups(data);
+        renderList();
+        if (state.detail) renderDetail();
+        showNotice(wanted.length ? `已保存该作品的收藏组（${wanted.length} 个）。` : '已移出全部收藏组。', 'success');
+      } catch (error) {
+        showNotice(libraryErrorMessage(error, '保存收藏组'), errorStatus(error) === 404 ? 'warning' : 'error');
+        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
+      }
+    })();
+  }
+
+  function manageGroup(action, payload, message) {
+    (async () => {
+      try {
+        const data = await postJson('/api/rpg/library/groups', state.token, { action, ...payload });
+        adoptGroups(data);
+        if (message) showNotice(message, 'success');
+        await loadList();
+      } catch (error) {
+        showNotice(libraryErrorMessage(error, '收藏组操作'), errorStatus(error) === 404 ? 'warning' : 'error');
+        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
+      }
+    })();
+  }
+
+  function createGroup(name, generationId) {
+    const clean = asText(name).slice(0, GROUP_NAME_LIMIT);
+    if (!clean) {
+      showNotice('请先输入收藏组名称。', 'warning');
+      return;
+    }
+    (async () => {
+      try {
+        const data = await postJson('/api/rpg/library/groups', state.token, { action: 'create', name: clean });
+        adoptGroups(data);
+        const created = data && data.result && data.result.group;
+        const createdId = created ? asText(created.group_id).toLowerCase() : '';
+        const duplicate = Boolean(data && data.result && data.result.created === false);
+        showNotice(duplicate ? `收藏组「${clean}」已存在，已直接使用。` : `收藏组「${clean}」已创建。`, 'success');
+        if (generationId && createdId && state.detail) {
+          saveGroups(generationId, [...groupsOf(state.detail).map((item) => item.group_id), createdId]);
+        } else {
+          await loadList();
+        }
+      } catch (error) {
+        showNotice(libraryErrorMessage(error, '新建收藏组'), errorStatus(error) === 404 ? 'warning' : 'error');
+        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
+      }
+    })();
+  }
+
+  function renameGroup(group, currentName) {
+    const next = global.prompt('重命名收藏组', currentName || '');
+    if (next === null) return;
+    const clean = asText(next).slice(0, GROUP_NAME_LIMIT);
+    if (!clean || clean === currentName) return;
+    manageGroup('rename', { group_id: group, name: clean }, `收藏组已重命名为「${clean}」。`);
+  }
+
+  function deleteGroup(group, name) {
+    if (!global.confirm(`确定删除收藏组「${name || ''}」吗？作品本身不会被删除，只会移出这个组。`)) return;
+    if (currentGroupFilter() === asText(group).toLowerCase()) {
+      const select = byId('creativeLibraryGroup');
+      if (select) select.value = '';
+      state.filters = { ...state.filters, group: '' };
+      state.offset = 0;
+    }
+    manageGroup('delete', { group_id: group }, `收藏组「${name || ''}」已删除。`);
+  }
+
+  function currentGroupFilter() {
+    return asText((state.filters && state.filters.group) || '').toLowerCase();
   }
 
   function favoriteFlags(item) {
@@ -523,6 +687,7 @@
       try {
         const data = await postJson('/api/rpg/library/favorite', state.token, { generation_id: id, ...body });
         const updated = data && data.generation;
+        adoptGroups(data);
         if (updated && updated.generation_id) applyFlagsLocally(id, favoriteFlags(updated));
         renderList();
         if (state.detail) renderDetail();
@@ -594,6 +759,7 @@
       const query = buildListQuery({ ...state.filters, limit: PAGE_SIZE, offset: state.offset });
       const data = await requestJson(`/api/rpg/library/generations?${query}`, state.token);
       if (requestNumber !== state.requestNumber) return;
+      adoptGroups(data);
       state.items = responseItems(data);
       state.total = clampInteger(data && data.total, state.items.length, 0, MAX_OFFSET);
       state.hasMore = Boolean(data && data.has_more);
@@ -721,6 +887,77 @@
     parent.append(section);
   }
 
+  function appendGroupSection(parent, detail) {
+    const section = createElement('section', 'creative-library-detail-section creative-library-group-section');
+    section.append(createElement('h3', '', '收藏组'));
+    section.append(createElement('p', 'small creative-library-muted',
+      '用自己命名的收藏组给作品分类（例如「成图候选」「需要修手」「参考姿势」）；一张图可以同时加入多个组，勾选后立即同步到电脑端与手机端，不会改变任何生成参数。'));
+    const assigned = new Set(groupsOf(detail).map((group) => asText(group.group_id).toLowerCase()));
+    const list = createElement('div', 'creative-library-group-list');
+    if (!state.groups.length) {
+      list.append(createElement('p', 'small', '还没有收藏组：在下面输入名称新建第一个。'));
+    }
+    state.groups.forEach((group) => {
+      const groupId = asText(group.group_id).toLowerCase();
+      const row = createElement('label', 'creative-library-group-row');
+      const box = createElement('input');
+      box.type = 'checkbox';
+      box.checked = assigned.has(groupId);
+      box.addEventListener('change', () => {
+        const next = new Set(assigned);
+        if (box.checked) next.add(groupId);
+        else next.delete(groupId);
+        saveGroups(detail.generation_id, [...next]);
+      });
+      const name = createElement('span', '', `${groupLabel(group) || '未命名组'}（${Number(group.item_count) || 0}）`);
+      const rename = createElement('button', 'secondary creative-library-group-action', '✎');
+      rename.type = 'button';
+      rename.title = '重命名这个收藏组';
+      rename.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        renameGroup(groupId, groupLabel(group));
+      });
+      const remove = createElement('button', 'danger creative-library-group-action', '✕');
+      remove.type = 'button';
+      remove.title = '删除这个收藏组（作品本身不会被删除）';
+      remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteGroup(groupId, groupLabel(group));
+      });
+      row.append(box, name, rename, remove);
+      list.append(row);
+    });
+    section.append(list);
+    const creator = createElement('div', 'creative-library-group-create');
+    const input = createElement('input');
+    input.type = 'text';
+    input.maxLength = GROUP_NAME_LIMIT;
+    input.placeholder = '新建收藏组名称，例如 成图候选';
+    const add = createElement('button', 'secondary', '＋ 新建并加入');
+    add.type = 'button';
+    const submit = () => {
+      const name = asText(input.value).slice(0, GROUP_NAME_LIMIT);
+      if (!name) {
+        showNotice('请先输入收藏组名称。', 'warning');
+        return;
+      }
+      input.value = '';
+      createGroup(name, detail.generation_id);
+    };
+    add.addEventListener('click', submit);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submit();
+      }
+    });
+    creator.append(input, add);
+    section.append(creator);
+    parent.append(section);
+  }
+
   function renderDetail() {
     const root = byId('creativeLibraryDetail');
     const detail = state.detail;
@@ -800,6 +1037,7 @@
     actions.append(reproduce, seedVariant, continueEdit, remove);
     root.append(actions);
     root.append(createElement('p', 'creative-library-safe-note', '这些操作只恢复参数，不会自动提交任务；请确认后手动点击“生成图片”。'));
+    appendGroupSection(root, detail);
     appendLineageSection(root, detail, state.lineage);
     appendLoraSection(root, detail);
     appendOutputSection(root, detail);
@@ -964,6 +1202,7 @@
     if (!dialog) return;
     state.lastFocus = global.document.activeElement;
     state.offset = 0;
+    renderGroupOptions();
     state.filters = filterValues();
     showListView();
     if (!dialog.open) {
@@ -971,6 +1210,7 @@
       else dialog.setAttribute('open', '');
     }
     void loadList();
+    void loadGroups();
   }
 
   function submitAuth(event) {

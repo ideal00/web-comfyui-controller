@@ -296,14 +296,16 @@ Easy Panel 同时在服务端定期对账 ComfyUI 历史。即使手机或电脑
 
 Easy Panel 2.2.x 在不改变 JSON 源记录的前提下维护一个可重建的 SQLite 创作索引。Android 快速页面和桌面 Web 面板的“作品库”入口读取以下只读接口：
 
-- `GET /api/rpg/library/generations`：分页列表，支持 `limit`、`offset`、`operation`、`status`、`model`、`favorite`、`sort` 和 `order`；`favorite=favorite` 只返回已入选，`favorite=unfavorite` 只返回未入选；
+- `GET /api/rpg/library/generations`：分页列表，支持 `limit`、`offset`、`operation`、`status`、`model`、`favorite`、`group`、`sort` 和 `order`；`favorite=favorite` 只返回已入选，`favorite=unfavorite` 只返回未入选；`group=<组编号>` 只看该收藏组，`group=ungrouped` 只看未加入任何收藏组的作品（未知组编号返回空列表，不会静默当成全部）；
 - `GET /api/rpg/library/generations/{generation_id}`：作品详情、完整快照、LoRA、输出和结构化 replay / variation 预览；
 - `GET /api/rpg/library/generations/{generation_id}/lineage`：父 / 子作品谱系；
-- `POST /api/rpg/library/favorite`：保存人工标记，body 为 `{ "generation_id": "<32 位十六进制>", "favorite": true, "rating": 0-5, "note": "≤2000 字" }`，三个字段均可选但至少一个；只更新 `favorite` / `rating` / `note`，不修改任何生成参数、不新建版本，返回更新后的 `generation` 摘要。
+- `POST /api/rpg/library/favorite`：保存人工标记，body 为 `{ "generation_id": "<32 位十六进制>", "favorite": true, "rating": 0-5, "note": "≤2000 字", "groups": ["<组编号>"] }`；`favorite`/`rating`/`note`/`groups` 至少给一个；`groups` 为**整体替换**成员关系，也可改用 `group_add` / `group_remove` 只增删；只更新标记，不修改任何生成参数、不新建版本，返回更新后的 `generation` 摘要与最新 `groups`（组列表带 `item_count`）。
+- `GET /api/rpg/library/groups`：列出全部自命名收藏组（`groups[]` 含 `group_id` / `name` / `item_count` / `created_at` / `updated_at`）；作品列表与保存标记的响应也会带同一份 `groups`，手机端无需额外请求。
+- `POST /api/rpg/library/groups`：`{ "action": "create" | "rename" | "delete", "group_id": "<组编号>", "name": "≤60 字" }`；`create` 同名（忽略大小写/多余空格）时直接返回已有组（`result.created=false`），`rename`/`delete` 不存在的组返回 404；删除组只解除关系，**不会删除任何作品**。
 
-### 11.1 收藏 / 入选 / 评分 / 备注
+### 11.1 收藏 / 入选 / 评分 / 备注 / 收藏组
 
-`generations` 表的 `favorite INTEGER NOT NULL DEFAULT 0`、`rating INTEGER NOT NULL DEFAULT 0`、`note TEXT NOT NULL DEFAULT ''` 由 V1 的增量迁移自动补齐（旧库无需重建）。列表与详情响应都会带这三个字段，Android 端 `setEasyPanelGenerationFlags()` / `saveLibraryFlags()` 与桌面端「★ 入选 / 评分 / 备注」写入同一份索引：两屏共用同一状态，重新读取列表即同步。`favorite` 只是人对作品的判断，绝不会影响生成、恢复或派生流程；删除作品时这些标记随记录一并删除。
+`generations` 表的 `favorite INTEGER NOT NULL DEFAULT 0`、`rating INTEGER NOT NULL DEFAULT 0`、`note TEXT NOT NULL DEFAULT ''` 由 V1 的增量迁移自动补齐（旧库无需重建）。收藏组使用 `favorite_groups`（`group_id` / `name`（忽略大小写唯一）/ `created_at` / `updated_at`）与 `generation_favorite_groups`（`generation_id` + `group_id` 多对多，均带 `ON DELETE CASCADE`）两张新表，由同一次 `CREATE TABLE IF NOT EXISTS` 自动建立；作品删除会连带清理关系，组删除则只清理关系。列表与详情响应都会带这些字段，Android 端 `setEasyPanelGenerationFlags()` / `createEasyPanelFavoriteGroup()` / `renameEasyPanelFavoriteGroup()` / `deleteEasyPanelFavoriteGroup()` 与桌面端「★ 入选 / 评分 / 备注 / 收藏组」写入同一份索引：两端共用同一状态，重新读取列表即同步。`favorite` 与收藏组都只是人对作品的判断，绝不会影响生成、恢复或派生流程。
 
 ### 11.2 生成前检查与显存风险（仅桌面 Web）
 

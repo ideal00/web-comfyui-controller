@@ -4536,13 +4536,29 @@ class Handler(BaseHTTPRequestHandler):
                     status=status,
                     model=query.get("model", [""])[0],
                     favorite=query.get("favorite", [""])[0],
+                    group=query.get("group", [""])[0],
                     sort=query.get("sort", ["created_at"])[0],
                     order=query.get("order", ["desc"])[0],
                 )
+                groups = creative_index.list_favorite_groups()
                 self.send_json({
                     "api_version": RPG_API_VERSION,
                     "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "groups": groups["items"],
+                    "group_total": groups["total"],
                     **result,
+                })
+            elif parsed.path == "/api/rpg/library/groups":
+                if not self.require_rpg_auth():
+                    return
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                groups = creative_index.list_favorite_groups()
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "groups": groups["items"],
+                    "total": groups["total"],
                 })
             elif re.fullmatch(r"/api/rpg/library/generations/[0-9a-fA-F]{32}/lineage", parsed.path):
                 if not self.require_rpg_auth():
@@ -4842,7 +4858,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -4905,19 +4921,68 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("作品编号无效。")
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
+                has_flags = any(key in data for key in ("favorite", "rating", "note"))
+                if "groups" in data:
+                    group_mode, group_payload = "replace", data.get("groups")
+                elif "group_add" in data:
+                    group_mode, group_payload = "add", data.get("group_add")
+                elif "group_remove" in data:
+                    group_mode, group_payload = "remove", data.get("group_remove")
+                else:
+                    group_mode, group_payload = "", None
+                if not has_flags and not group_mode:
+                    raise ValueError("没有需要保存的收藏字段。")
                 updated = creative_index.set_generation_flags(
                     generation_id,
                     favorite=data["favorite"] if "favorite" in data else None,
                     rating=data["rating"] if "rating" in data else None,
                     note=data["note"] if "note" in data else None,
-                )
+                ) if has_flags else True
                 if updated is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
                     return
+                if group_mode:
+                    updated = creative_index.set_generation_groups(
+                        generation_id, group_payload, mode=group_mode)
+                    if updated is None:
+                        self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
+                        return
+                groups = creative_index.list_favorite_groups()
                 self.send_json({
                     "api_version": RPG_API_VERSION,
                     "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
                     "generation": updated,
+                    "groups": groups["items"],
+                    "group_total": groups["total"],
+                })
+                return
+            if self.path == "/api/rpg/library/groups":
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                action = str(data.get("action") or "list").strip().casefold()
+                if action == "list":
+                    result = {}
+                elif action == "create":
+                    result = creative_index.create_favorite_group(data.get("name"))
+                elif action == "rename":
+                    result = creative_index.rename_favorite_group(data.get("group_id"), data.get("name"))
+                    if result is None:
+                        self.send_json({"error": "没有找到该收藏组。"}, HTTPStatus.NOT_FOUND)
+                        return
+                elif action == "delete":
+                    result = creative_index.delete_favorite_group(data.get("group_id"))
+                    if result is None:
+                        self.send_json({"error": "没有找到该收藏组。"}, HTTPStatus.NOT_FOUND)
+                        return
+                else:
+                    raise ValueError("不支持的收藏组操作。")
+                groups = creative_index.list_favorite_groups()
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "result": result,
+                    "groups": groups["items"],
+                    "total": groups["total"],
                 })
                 return
             if self.path in {"/api/prompt-instruction", "/api/rpg/prompt-instruction"}:

@@ -282,6 +282,7 @@
         <label>操作<select id="creativeLibraryOperation"><option value="">全部操作</option><option value="txt2img">文生图</option><option value="seed_variant">换 Seed</option><option value="img2img">图生图</option><option value="inpaint">局部重绘</option><option value="face_fix">修脸</option><option value="hand_fix">修手</option><option value="upscale">放大</option><option value="outfit_change">换服装</option><option value="scene_change">换场景</option><option value="style_change">换风格</option><option value="unknown">未知操作</option></select></label>
         <label>状态<select id="creativeLibraryStatus"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">生成中</option><option value="completed">已完成</option><option value="error">失败</option><option value="cancelled">已取消</option><option value="unknown">未知状态</option></select></label>
         <label>收藏<select id="creativeLibraryFavorite"><option value="">全部作品</option><option value="favorite">★ 已入选</option><option value="unfavorite">未入选</option></select></label>
+        <label class="creative-library-group-filter">收藏组<select id="creativeLibraryGroup"><option value="">全部收藏组</option><option value="ungrouped">未加入收藏组</option></select></label>
         <label class="creative-library-model-filter">模型<input id="creativeLibraryModel" type="search" maxlength="200" autocomplete="off" placeholder="按模型名称筛选"></label>
         <label>排序<select id="creativeLibrarySort"><option value="created_at">创建时间</option><option value="updated_at">更新时间</option><option value="status">状态</option><option value="operation">操作</option><option value="model">模型</option></select></label>
         <label>顺序<select id="creativeLibraryOrder"><option value="desc">降序</option><option value="asc">升序</option></select></label>
@@ -354,7 +355,7 @@
 <script src="/assets/js/transparent-background.js?v=1"></script>
 <script src="/assets/js/snapshot-flow.js?v=2"></script>
 <script src="/assets/js/result-workbench.js?v=1"></script>
-<script src="/assets/js/creative-library.js?v=5"></script>
+<script src="/assets/js/creative-library.js?v=6"></script>
 <script src="/assets/js/preflight-check.js?v=1"></script>
 <script src="/assets/js/batch-experiment.js?v=1"></script>
 </body>

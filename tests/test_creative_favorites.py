@@ -123,5 +123,113 @@ class CreativeFavoritesTests(unittest.TestCase):
                 )
 
 
+class FavoriteGroupTests(unittest.TestCase):
+    """自命名收藏组：多对多分类，不改变作品本身。"""
+
+    def setUp(self):
+        self._folder = tempfile.TemporaryDirectory()
+        self.index = CreativeIndex(Path(self._folder.name) / "creative.sqlite3")
+        self.index.upsert_snapshot(snapshot("a" * 32, seed="1"), operation="txt2img", status="completed")
+        self.index.upsert_snapshot(snapshot("b" * 32, seed="2", created_at=2), operation="txt2img", status="completed")
+        items = self.index.list_generations(limit=10)["items"]
+        self.ids = [item["generation_id"] for item in items]
+
+    def tearDown(self):
+        self._folder.cleanup()
+
+    def test_group_crud_is_normalized_and_idempotent(self):
+        created = self.index.create_favorite_group("  成图   候选  ")
+        self.assertTrue(created["created"])
+        self.assertEqual("成图 候选", created["group"]["name"])
+        again = self.index.create_favorite_group("成图 候选")
+        self.assertFalse(again["created"])
+        self.assertEqual(created["group"]["group_id"], again["group"]["group_id"])
+        other = self.index.create_favorite_group("需要修手")
+        with self.assertRaises(ValueError):
+            self.index.create_favorite_group("   ")
+        with self.assertRaises(ValueError):
+            self.index.rename_favorite_group(other["group"]["group_id"], "成图 候选")
+        renamed = self.index.rename_favorite_group(other["group"]["group_id"], "修手")
+        self.assertEqual("修手", renamed["name"])
+        self.assertIsNone(self.index.rename_favorite_group("c" * 32, "无名"))
+        self.assertIsNone(self.index.delete_favorite_group("c" * 32))
+
+    def test_membership_is_many_to_many_and_filterable(self):
+        group_id = self.index.create_favorite_group("参考姿势")["group"]["group_id"]
+        spare_id = self.index.create_favorite_group("最终成图")["group"]["group_id"]
+        summary = self.index.set_generation_groups(self.ids[0], [group_id, spare_id])
+        self.assertEqual(2, len(summary["groups"]))
+        self.assertEqual(1, self.index.list_generations(limit=10, group=group_id)["total"])
+        self.assertEqual(1, self.index.list_generations(limit=10, group=spare_id)["total"])
+        self.assertEqual(1, self.index.list_generations(limit=10, group="ungrouped")["total"])
+        self.assertEqual(0, self.index.list_generations(limit=10, group="c" * 32)["total"])
+        counts = {item["name"]: item["item_count"] for item in self.index.list_favorite_groups()["items"]}
+        self.assertEqual({"参考姿势": 1, "最终成图": 1}, counts)
+
+        detailed = self.index.get_generation(self.ids[0])
+        self.assertEqual(["参考姿势", "最终成图"], [item["name"] for item in detailed["groups"]])
+
+        self.index.set_generation_groups(self.ids[1], [group_id], mode="add")
+        self.assertEqual(2, self.index.list_generations(limit=10, group=group_id)["total"])
+        self.index.set_generation_groups(self.ids[0], [group_id], mode="remove")
+        self.assertEqual(1, self.index.list_generations(limit=10, group=group_id)["total"])
+        replaced = self.index.set_generation_groups(self.ids[0], [group_id])
+        self.assertEqual(["参考姿势"], [item["name"] for item in replaced["groups"]])
+
+        with self.assertRaises(ValueError):
+            self.index.set_generation_groups(self.ids[0], ["c" * 32])
+        self.assertIsNone(self.index.set_generation_groups("c" * 32, [group_id]))
+
+    def test_deleting_a_group_or_a_generation_keeps_records_consistent(self):
+        group_id = self.index.create_favorite_group("待筛选")["group"]["group_id"]
+        self.index.set_generation_groups(self.ids[0], [group_id])
+        removed = self.index.delete_favorite_group(group_id)
+        self.assertTrue(removed["deleted"])
+        self.assertEqual(1, removed["removed_links"])
+        self.assertEqual(0, len(self.index.list_generations(limit=10)["items"][0]["groups"]))
+
+        keep_id = self.index.create_favorite_group("保留")["group"]["group_id"]
+        self.index.set_generation_groups(self.ids[0], [keep_id])
+        self.index.delete_generation(self.ids[0])
+        self.assertEqual(0, self.index.list_favorite_groups()["items"][0]["item_count"])
+
+
+class FavoriteGroupApiTests(unittest.TestCase):
+    def test_desktop_api_and_ui_expose_groups(self):
+        backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+        self.assertIn('\"/api/rpg/library/groups\"', backend)
+        self.assertIn('group=query.get(\"group\", [\"\"])[0]', backend)
+        self.assertIn('\"group_add\"', backend)
+        self.assertIn('\"group_remove\"', backend)
+
+        script = (ROOT / "web/assets/js/creative-library.js").read_text(encoding="utf-8")
+        for marker in ("creativeLibraryGroup", "renderGroupOptions", "saveGroups", "createGroup",
+                       "renameGroup", "deleteGroup", "creative-library-group-chip",
+                       "收藏组", "ungrouped"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, script)
+
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="creativeLibraryGroup"', html)
+        self.assertIn("全部收藏组", html)
+
+    def test_mobile_client_can_manage_groups(self):
+        service = (ROOT / "android-client/src/services/easyPanelLibrary.ts").read_text(encoding="utf-8")
+        for marker in ("EasyPanelFavoriteGroup", "getEasyPanelFavoriteGroups", "createEasyPanelFavoriteGroup",
+                       "renameEasyPanelFavoriteGroup", "deleteEasyPanelFavoriteGroup", "safeGroupId",
+                       "normalizeGroupName", "group', 'ungrouped'", "groupAdd"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, service)
+        hook = (ROOT / "android-client/src/hooks/useEasyPanelController.ts").read_text(encoding="utf-8")
+        for marker in ("libraryGroups", "setLibraryGroupFilter", "createLibraryGroup",
+                       "renameLibraryGroup", "deleteLibraryGroup"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, hook)
+        app = (ROOT / "android-client/src/components/EasyPanelMobileApp.tsx").read_text(encoding="utf-8")
+        for marker in ("全部收藏组", "新建并加入", "epm-library-group-check", "epm-chip"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, app)
+
+
 if __name__ == "__main__":
     unittest.main()

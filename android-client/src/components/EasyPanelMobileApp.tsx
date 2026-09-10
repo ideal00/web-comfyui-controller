@@ -718,6 +718,11 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           onPreview={(artifact) => void openOriginal(artifact)}
           onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
           onToggleFavorite={(id, favorite) => void controller.saveLibraryFlags(id, { favorite })}
+          groups={controller.libraryGroups}
+          onSaveGroups={(id, groups) => void controller.saveLibraryFlags(id, { groups })}
+          onCreateGroup={(name, id) => void controller.createLibraryGroup(name, id)}
+          onRenameGroup={(groupId, name) => void controller.renameLibraryGroup(groupId, name)}
+          onDeleteGroup={(groupId) => void controller.deleteLibraryGroup(groupId)}
           onDelete={(id) => void removeGeneration(id)}
         /> : <LibraryList
           items={controller.library}
@@ -725,6 +730,9 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           total={controller.libraryTotal}
           hasMore={controller.libraryHasMore}
           favoriteOnly={controller.libraryFavoriteOnly}
+          groups={controller.libraryGroups}
+          groupFilter={controller.libraryGroupFilter}
+          onSelectGroup={controller.setLibraryGroupFilter}
           thumbnailLoading={controller.libraryThumbnailLoading}
           loading={controller.libraryLoading}
           error={controller.libraryError}
@@ -754,12 +762,15 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
   )
 }
 
-function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, thumbnailLoading, loading, error, message, savedScrollTop = 0, onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
+function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, groups, groupFilter, onSelectGroup, thumbnailLoading, loading, error, message, savedScrollTop = 0, onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
   total: number
   hasMore: boolean
   favoriteOnly: boolean
+  groups: ReturnType<typeof useEasyPanelController>['libraryGroups']
+  groupFilter: string
+  onSelectGroup: (groupId: string) => void
   thumbnailLoading: Record<string, boolean>
   loading: boolean
   error: string
@@ -842,6 +853,24 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, th
         </div>
       </div>
       {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
+      <div className="epm-library-group-filter">
+        <button
+          type="button"
+          className={groupFilter ? 'epm-chip' : 'epm-chip is-on'}
+          onClick={() => onSelectGroup('')}
+        >全部收藏组</button>
+        <button
+          type="button"
+          className={groupFilter === 'ungrouped' ? 'epm-chip is-on' : 'epm-chip'}
+          onClick={() => onSelectGroup('ungrouped')}
+        >未分组</button>
+        {groups.map((group) => <button
+          type="button"
+          key={group.group_id}
+          className={groupFilter === group.group_id ? 'epm-chip is-on' : 'epm-chip'}
+          onClick={() => onSelectGroup(group.group_id)}
+        >{group.name}（{group.item_count}）</button>)}
+      </div>
       {items.length ? <>
         <div className="epm-library-list">
           {items.map((item) => <div className="epm-library-item-wrap" key={item.generation_id}>
@@ -855,6 +884,10 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, th
                 <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
                 <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
                 <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
+                {Boolean(item.groups?.length) && <div className="epm-library-item-groups">
+                  {(item.groups ?? []).slice(0, 4).map((group) => <span key={group.group_id}>{group.name}</span>)}
+                  {(item.groups ?? []).length > 4 && <span>+{(item.groups ?? []).length - 4}</span>}
+                </div>}
               </div>
             </button>
             <button
@@ -881,7 +914,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, th
   )
 }
 
-function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onToggleFavorite, onDelete }: {
+function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onToggleFavorite, groups, onSaveGroups, onCreateGroup, onRenameGroup, onDeleteGroup, onDelete }: {
   detail: EasyPanelGenerationDetail
   lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
   thumbnailSource?: string
@@ -892,9 +925,24 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
   onPreview: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
   onDownload: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
   onToggleFavorite: (id: string, favorite: boolean) => void
+  groups: ReturnType<typeof useEasyPanelController>['libraryGroups']
+  onSaveGroups: (id: string, groups: string[]) => void
+  onCreateGroup: (name: string, generationId?: string) => void
+  onRenameGroup: (groupId: string, name: string) => void
+  onDeleteGroup: (groupId: string) => void
   onDelete: (id: string) => void
 }) {
   const previewArtifact = detail.artifacts.find((artifact) => artifact.exists !== false && Boolean(artifact.url))
+  const [newGroupName, setNewGroupName] = useState('')
+  const [renaming, setRenaming] = useState<{ groupId: string; value: string } | null>(null)
+  const assigned = new Set((detail.groups ?? []).map((group) => group.group_id))
+  // 收藏组只是用户自己的分类：勾选后立即同步，不涉及任何生成参数。
+  const toggleGroup = (groupId: string, checked: boolean) => {
+    const next = new Set(assigned)
+    if (checked) next.add(groupId)
+    else next.delete(groupId)
+    onSaveGroups(detail.generation_id, Array.from(next))
+  }
 
   return (
     <div className="epm-library-content">
@@ -930,6 +978,72 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
         <button type="button" className="epm-danger-button" onClick={() => onDelete(detail.generation_id)}><Trash2 size={14} />删除此作品</button>
       </div>
       <p className="epm-library-note">恢复只会填入当前表单，不会自动生成，也不会自动选择某个输出作为图生图 / 重绘输入；下一次生成会记录派生关系，也可在表单中取消关联。</p>
+      <section className="epm-library-detail-section">
+        <h3><Star size={16} />收藏组</h3>
+        <p>{groups.length ? '一张图可以同时加入多个组；勾选后立即同步到电脑端。' : '还没有收藏组，在下面新建第一个。'}</p>
+        {groups.length > 0 && <div className="epm-library-group-list">
+          {groups.map((group) => <div className="epm-library-group-row" key={group.group_id}>
+            {renaming && renaming.groupId === group.group_id
+              ? <>
+                <input
+                  className="epm-library-group-input"
+                  value={renaming.value}
+                  maxLength={60}
+                  onChange={(event) => setRenaming({ groupId: group.group_id, value: event.target.value })}
+                />
+                <button
+                  type="button"
+                  className="epm-quiet-button epm-inline-button"
+                  onClick={() => {
+                    const name = renaming.value.trim()
+                    if (name) onRenameGroup(group.group_id, name)
+                    setRenaming(null)
+                  }}
+                >保存</button>
+                <button type="button" className="epm-quiet-button epm-inline-button" onClick={() => setRenaming(null)}>取消</button>
+              </>
+              : <>
+                <label className="epm-library-group-check">
+                  <input
+                    type="checkbox"
+                    checked={assigned.has(group.group_id)}
+                    onChange={(event) => toggleGroup(group.group_id, event.target.checked)}
+                  />
+                  <span>{group.name}（{group.item_count}）</span>
+                </label>
+                <button
+                  type="button"
+                  className="epm-quiet-button epm-inline-button"
+                  onClick={() => setRenaming({ groupId: group.group_id, value: group.name })}
+                >改名</button>
+                <button
+                  type="button"
+                  className="epm-danger-button epm-inline-button"
+                  onClick={() => onDeleteGroup(group.group_id)}
+                >删除组</button>
+              </>}
+          </div>)}
+        </div>}
+        <div className="epm-library-group-create">
+          <input
+            className="epm-library-group-input"
+            value={newGroupName}
+            maxLength={60}
+            placeholder="新建收藏组名称，例如 成图候选"
+            onChange={(event) => setNewGroupName(event.target.value)}
+          />
+          <button
+            type="button"
+            className="epm-quiet-button epm-inline-button"
+            onClick={() => {
+              const name = newGroupName.trim()
+              if (!name) return
+              onCreateGroup(name, detail.generation_id)
+              setNewGroupName('')
+            }}
+          >新建并加入</button>
+        </div>
+      </section>
       <section className="epm-library-detail-section">
         <h3><GitBranch size={16} />谱系</h3>
         <p>父作品 {detail.parent_count} · 子作品 {detail.child_count}</p>
