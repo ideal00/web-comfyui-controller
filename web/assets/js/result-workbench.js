@@ -17,7 +17,19 @@
 
   let lastPayload = null;
   let lastImages = [];
+  let lastBaseImages = [];
   let focusTimer = 0;
+
+  // Easy Panel writes the hi-res first pass as "<prefix>_base_00001_.png".
+  const HIRES_BASE_MARKER = "_base_";
+  const COMPOSITION_TERMS = [
+    "close-up", "close up", "extreme close-up", "medium shot", "full body",
+    "wide shot", "long shot", "portrait", "zoomed in", "headshot",
+    "upper body", "lower body", "cowboy shot", "from above", "from below",
+    "side view", "front view", "back view", "perspective", "panorama",
+  ];
+
+  const isBaseImage = (image) => image && String(image.filename || "").includes(HIRES_BASE_MARKER);
 
   const WORKBENCH_STYLE = `
 .result-workbench{margin-top:8px;border:1px solid var(--line,#3a3a46);border-radius:10px;padding:8px 10px;background:rgba(255,255,255,.02)}
@@ -27,6 +39,15 @@
 .result-workbench .workbench-actions button{padding:4px 9px;font-size:12px;border-radius:8px}
 .result-workbench .workbench-note{margin-top:6px;color:var(--muted,#9a9aa8)}
 .workbench-focus{outline:2px solid #7c8cff;outline-offset:2px;transition:outline-color .25s ease}
+dialog.hires-compare{border:1px solid var(--line,#3a3a46);border-radius:12px;padding:12px;max-width:min(96vw,860px);background:#16161c;color:inherit}
+dialog.hires-compare::backdrop{background:rgba(0,0,0,.55)}
+dialog.hires-compare .hc-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+dialog.hires-compare .hc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+dialog.hires-compare figure{margin:0;display:grid;gap:4px;justify-items:center}
+dialog.hires-compare img{max-width:100%;max-height:46vh;border-radius:8px;border:1px solid var(--line,#3a3a46)}
+dialog.hires-compare .hc-block{margin-top:8px}
+dialog.hires-compare .hc-level{font-weight:600}
+@media (max-width:720px){dialog.hires-compare .hc-grid{grid-template-columns:1fr}}
 `;
 
   function injectStyle() {
@@ -204,6 +225,100 @@
     status("已启用整图重绘并选中本图作为底图；调整重绘幅度后点“生成图片”，即可在不改提示词的前提下重绘这张结果。");
   }
 
+  function compositionOutlook() {
+    const data = lastPayload || {};
+    const denoise = Number(data.hiresDenoise);
+    const mode = text(data.hiresPromptMode, "append");
+    const supplement = String(data.hiresPositive || "").toLowerCase();
+    const hits = COMPOSITION_TERMS.filter((term) => supplement.includes(term));
+    const high = [];
+    const medium = [];
+    if (Number.isFinite(denoise) && denoise > 0.35) high.push(`二采重绘幅度 ${denoise} 超过 0.35`);
+    if (mode === "replace" && supplement.trim()) high.push("二采使用完全独立提示词");
+    if (Number.isFinite(denoise) && denoise > 0.30 && denoise <= 0.35) medium.push(`二采重绘幅度 ${denoise}`);
+    if (hits.length) medium.push(`检测到构图词：${hits.slice(0, 4).join("、")}`);
+    const risk = high.length ? "high" : (medium.length ? "medium" : "low");
+    const keep = risk === "high" ? "低" : (risk === "medium" ? "中" : "高");
+    const reasons = risk === "high" ? high : (risk === "medium" ? medium : []);
+    if (!reasons.length) {
+      reasons.push(`二采重绘幅度 ${Number.isFinite(denoise) ? denoise : "—"}，未检测到构图词`);
+    }
+    return { risk, keep, reason: reasons.join("；") };
+  }
+
+  function hiresPromptDiff() {
+    const data = lastPayload || {};
+    const mode = text(data.hiresPromptMode, "append");
+    const supplement = text(data.hiresPositive, "");
+    const items = supplement ? supplement.split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 24) : [];
+    if (mode === "inherit") return { title: "二采沿用首采提示词（无变化）", items: [] };
+    if (mode === "replace") {
+      return { title: "二采使用完全独立提示词（不继承首采）", items };
+    }
+    return { title: items.length ? `二采在首采基础上追加 ${items.length} 项` : "二采未填写补充词（等同继承）", items };
+  }
+
+  function hiresParameterDiff() {
+    const data = lastPayload || {};
+    const scale = Number(data.hiresScale);
+    const baseWidth = Number(data.width);
+    const baseHeight = Number(data.height);
+    const expected = Number.isFinite(scale) && baseWidth && baseHeight
+      ? `${Math.round(baseWidth * scale / 8) * 8} × ${Math.round(baseHeight * scale / 8) * 8}`
+      : "—";
+    return {
+      size: `${text(data.width, "?")} × ${text(data.height, "?")} → ${expected}`,
+      seed: String(data.seed == null ? "随机" : data.seed),
+      hires: `${text(data.hiresScale, "1.3")}× · denoise ${text(data.hiresDenoise, "0.25")} · ${text(data.hiresSteps, "16")} 步 · CFG ${text(data.hiresCfg, "4")}`,
+    };
+  }
+
+  function ensureCompareDialog() {
+    let dialog = byId("hiresCompareDialog");
+    if (dialog) return dialog;
+    dialog = document.createElement("dialog");
+    dialog.id = "hiresCompareDialog";
+    dialog.className = "hires-compare";
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog || (event.target.closest && event.target.closest("[data-compare-close]"))) dialog.close();
+    });
+    document.body.appendChild(dialog);
+    return dialog;
+  }
+
+  function openCompare() {
+    if (!lastBaseImages.length || !lastImages.length) return;
+    const base = lastBaseImages[0];
+    const final = lastImages[0];
+    const outlook = compositionOutlook();
+    const promptDiff = hiresPromptDiff();
+    const parameters = hiresParameterDiff();
+    const dialog = ensureCompareDialog();
+    dialog.innerHTML = `
+      <div class="hc-head"><b>首采 / 二采对照</b><button class="secondary" type="button" data-compare-close>关闭</button></div>
+      <div class="hc-grid">
+        <figure><figcaption>首采（决定构图）</figcaption>
+          <img alt="首采结果" data-role="base" src="/output?name=${encodeURIComponent(base.filename)}">
+          <span class="small" data-role="baseSize">${esc(parameters.size.split(" → ")[0])}</span>
+          <span class="small">Seed ${esc(parameters.seed)}</span></figure>
+        <figure><figcaption>二采（补细节）</figcaption>
+          <img alt="二采结果" data-role="final" src="/output?name=${encodeURIComponent(final.filename)}">
+          <span class="small" data-role="finalSize">${esc(parameters.size.split(" → ")[1] || "")}</span>
+          <span class="small">Seed ${esc(parameters.seed)}</span></figure>
+      </div>
+      <div class="hc-block"><b>二采参数</b><div class="small">${esc(parameters.hires)} · ${esc(text(lastPayload?.hiresPromptMode, "append") === "inherit" ? "继承首采" : text(lastPayload?.hiresPromptMode, "append") === "append" ? "追加补充" : "完全独立")}${lastPayload?.hiresCompositionLock === true ? " · 优先保持首采构图" : ""}</div></div>
+      <div class="hc-block"><b>提示词变化</b><div class="small">${esc(promptDiff.title)}${promptDiff.items.length ? `<br>${promptDiff.items.map((item) => `+ ${esc(item)}`).join("<br>")}` : ""}</div></div>
+      <div class="hc-block"><b>参数变化</b><div class="small">尺寸 ${esc(parameters.size)}<br>Seed ${esc(parameters.seed)}（两阶段相同）</div></div>
+      <div class="hc-block"><span class="hc-level">构图保持：${esc(outlook.keep)}</span><div class="small">原因：${esc(outlook.reason)}（基于二采参数与补充词的规则判断，不是对两张图做视觉分析）</div></div>`;
+    dialog.querySelectorAll("img").forEach((image) => {
+      image.addEventListener("load", () => {
+        const target = dialog.querySelector(`[data-role="${image.dataset.role}Size"]`);
+        if (target) target.textContent = `实际 ${image.naturalWidth} × ${image.naturalHeight}`;
+      });
+    });
+    dialog.showModal();
+  }
+
   function renderWorkbench() {
     const root = ensureContainer();
     if (!root) return;
@@ -228,6 +343,7 @@
         <button class="secondary" type="button" data-focus="promptAppearance" data-label="外貌 / 表情">表情</button>
         <button class="secondary" type="button" data-workbench="hires">🖼 继续二采</button>
         <button class="secondary" type="button" data-workbench="img2img">♻️ 转整图重绘</button>
+        ${lastBaseImages.length ? '<button class="secondary" type="button" data-workbench="compare">🔍 首采 / 二采对照</button>' : ""}
       </div>
       <div class="small workbench-note">改动只作用于下一次生成：其他参数保持锁定，结果会作为子版本记录在生成快照 / 作品库（可复现、可查看父子谱系）。</div>`;
   }
@@ -250,6 +366,7 @@
       else if (action === "copy") copyParameters();
       else if (action === "hires") continueHires();
       else if (action === "img2img") toImg2img();
+      else if (action === "compare") openCompare();
     });
   }
 
@@ -296,10 +413,17 @@
     const original = window.renderGeneratedImages;
     if (typeof original !== "function" || original.__workbenchWrapped) return;
     const wrapped = function (images) {
-      const output = original.apply(this, arguments);
-      lastImages = Array.isArray(images)
-        ? images.filter((item) => item && item.filename)
-        : [];
+      const all = Array.isArray(images) ? images.filter((item) => item && item.filename) : [];
+      const base = all.filter(isBaseImage);
+      const finals = all.filter((item) => !isBaseImage(item));
+      const visible = finals.length ? finals : all;
+      const args = Array.prototype.slice.call(arguments);
+      args[0] = visible;
+      const output = original.apply(this, args);
+      // The first-stage image is an output the panel owns, not a gallery item:
+      // it only feeds the 首采 / 二采 comparison dialog.
+      lastBaseImages = base;
+      lastImages = visible;
       renderWorkbench();
       return output;
     };

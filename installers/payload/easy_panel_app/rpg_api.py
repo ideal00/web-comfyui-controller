@@ -21,6 +21,9 @@ from easy_panel_app.prompt_utils import unique_prompt_terms
 RPG_API_VERSION = 2
 RPG_PROFILE_FILE = ROOT / "rpg_visual_profiles.json"
 RPG_JOB_FILE = ROOT / "rpg_jobs.json"
+# Easy Panel writes the hi-res first pass as "<prefix>_base_00001_.png" so the
+# desktop panel can pair 首采 / 二采; mobile results list only finished images.
+HIRES_BASE_MARKER = "_base_"
 _RPG_LOCK = threading.RLock()
 
 # One server-owned quality contract for the phase-one client.  The browser
@@ -579,6 +582,7 @@ def history_to_rpg_status(prompt_id: str, history: Mapping[str, Any]) -> Dict[st
         return result
     outputs = job.get("outputs") if isinstance(job.get("outputs"), Mapping) else {}
     images: List[Dict[str, Any]] = []
+    hi_res_base: List[Dict[str, Any]] = []
     for output in outputs.values():
         if not isinstance(output, Mapping):
             continue
@@ -588,12 +592,19 @@ def history_to_rpg_status(prompt_id: str, history: Mapping[str, Any]) -> Dict[st
             name = Path(str(image.get("filename", ""))).name
             if not name:
                 continue
-            images.append({
+            entry = {
                 "filename": name,
                 "subfolder": str(image.get("subfolder", "")),
                 "type": str(image.get("type", "output")),
                 "url": image_url(name, str(image.get("subfolder", "")), str(image.get("type", "output"))),
-            })
+            }
+            # The hi-res first pass is written for the desktop 首采 / 二采
+            # comparison; the mobile result list only shows finished images.
+            if HIRES_BASE_MARKER in name:
+                hi_res_base.append(entry)
+            else:
+                images.append(entry)
+    images = images or hi_res_base
     if images:
         result["status"] = "completed"
         result["images"] = images

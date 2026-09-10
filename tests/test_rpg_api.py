@@ -266,6 +266,35 @@ class RpgApiTests(unittest.TestCase):
             status = rpg_api.history_to_rpg_status(prompt_id, history)
         self.assertIn("subfolder=RPG%2Fchapter1", status["images"][0]["url"])
 
+    def test_history_status_hides_the_hires_first_pass(self):
+        prompt_id = "12345678-1234-1234-1234-123456789abc"
+        history = {
+            prompt_id: {
+                "outputs": {
+                    "7": {"images": [{"filename": "RPGBox_scene_base_00001_.png", "type": "output"}]},
+                    "12": {"images": [{"filename": "RPGBox_scene_00001_.png", "type": "output"}]},
+                },
+                "status": {"status_str": "success"},
+            }
+        }
+        with patch.object(rpg_api, "find_rpg_job", return_value={}):
+            status = rpg_api.history_to_rpg_status(prompt_id, history)
+        self.assertEqual(["RPGBox_scene_00001_.png"],
+                         [image["filename"] for image in status["images"]])
+
+        only_base = {
+            prompt_id: {
+                "outputs": {
+                    "7": {"images": [{"filename": "RPGBox_scene_base_00001_.png", "type": "output"}]},
+                },
+                "status": {"status_str": "success"},
+            }
+        }
+        with patch.object(rpg_api, "find_rpg_job", return_value={}):
+            fallback = rpg_api.history_to_rpg_status(prompt_id, only_base)
+        self.assertEqual(["RPGBox_scene_base_00001_.png"],
+                         [image["filename"] for image in fallback["images"]])
+
     def test_request_id_job_recovery(self):
         rows = [
             {"prompt_id": "old", "request_id": "scene_1"},

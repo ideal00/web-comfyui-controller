@@ -34,6 +34,21 @@ class ResultWorkbenchTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
 
+    def test_compare_dialog_pairs_first_and_second_pass(self):
+        script = (ROOT / "web/assets/js/result-workbench.js").read_text(encoding="utf-8")
+        for marker in ("HIRES_BASE_MARKER", "_base_", "首采 / 二采对照",
+                       "构图保持", "基于二采参数与补充词的规则判断",
+                       "isBaseImage", "lastBaseImages"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, script)
+
+    def test_hires_base_output_uses_a_dedicated_prefix(self):
+        backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+        self.assertIn('generation_filename_prefix(data, "_base")', backend)
+        self.assertIn("def generation_filename_prefix", backend)
+        mobile = (ROOT / "easy_panel_app/rpg_api.py").read_text(encoding="utf-8")
+        self.assertIn('HIRES_BASE_MARKER = "_base_"', mobile)
+
     def test_workbench_wraps_payload_and_result_rendering(self):
         script = (ROOT / "web/assets/js/result-workbench.js").read_text(encoding="utf-8")
         self.assertIn("window.payload", script)

@@ -307,6 +307,24 @@ class SamplingProfileTests(unittest.TestCase):
                    for node in self.nodes_of(nodes, "CLIPTextEncode")]
         self.assertFalse(any("torn clothes" in text for text in encoded))
 
+    def test_hires_saves_the_first_stage_image_for_comparison(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2})
+        nodes = self.build(data)
+        saves = self.nodes_of(nodes, "SaveImage")
+        self.assertEqual(2, len(saves))
+        self.assertEqual(["EasyPanel", "EasyPanel_base"],
+                         sorted(node["inputs"]["filename_prefix"] for node in saves))
+        base_save = next(node for node in saves
+                         if node["inputs"]["filename_prefix"].endswith("_base"))
+        # The first-stage file must come from the first decode, not the final image.
+        self.assertEqual("VAEDecode", nodes[str(base_save["inputs"]["images"][0])]["class_type"])
+
+        precision = self.build(payload("waiIllustriousSDXL_v140.safetensors"))
+        precision_saves = self.nodes_of(precision, "SaveImage")
+        self.assertEqual(1, len(precision_saves))
+        self.assertEqual("EasyPanel", precision_saves[0]["inputs"]["filename_prefix"])
+
     def test_model_specific_hires_and_generic_sdxl_capability(self):
         data = payload("gockSoAnimeLoveSong_gocksoanimeLoveSong.safetensors")
         data.update({"illustriousMode": "hires", "hiresSampler": "euler",
