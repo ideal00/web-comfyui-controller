@@ -523,7 +523,8 @@ CREATIVE_RECONCILE_ORPHAN_GRACE_SECONDS = 300
 TASK_QUEUE_FILE = PROJECT_DIR / "task_queue.json"
 _TASK_QUEUE: TaskQueue | None = None
 _TASK_RUNNER: TaskQueueRunner | None = None
-_TASK_QUEUE_LOCK = threading.Lock()
+# 必须可重入：start_task_queue_runner() 会在持锁时再调用 task_queue() 取同一个队列实例。
+_TASK_QUEUE_LOCK = threading.RLock()
 
 
 def task_queue() -> TaskQueue:
