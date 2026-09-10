@@ -203,5 +203,26 @@ class SharedStateTests(unittest.TestCase):
             )
 
 
+    def test_expression_category_is_kept_and_unknown_categories_fall_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            merged = store.merge(
+                {
+                    "promptPresets": [
+                        dict(preset("娇羞斜视", "coy smile, half-closed eyes"), category="expression"),
+                        dict(preset("未知分类", "x", item_id="preset_b"), category="not-a-category"),
+                    ],
+                    "characterFavorites": [],
+                },
+                0,
+            )
+            categories = {item["name"]: item["category"]
+                          for item in merged["state"]["promptPresets"]}
+            # 表情是正式分类；未知分类仍然回退到“其他补充”。
+            self.assertEqual("expression", categories["娇羞斜视"])
+            self.assertEqual("manual", categories["未知分类"])
+            self.assertEqual(2, len(store.read()["promptPresets"]))
+
+
 if __name__ == "__main__":
     unittest.main()

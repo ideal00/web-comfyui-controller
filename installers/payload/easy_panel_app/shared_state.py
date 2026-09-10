@@ -42,6 +42,7 @@ PROMPT_PRESET_CATEGORIES = {
     "clothing",
     "appearance",
     "subject",
+    "expression",
     "negative",
     "manual",
 }

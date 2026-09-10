@@ -15,6 +15,9 @@ class UserPromptPresetTests(unittest.TestCase):
             'id="userPresetList"', '>姿势串<', '>画师 / 画风串<',
             'id="userPresetComboMode"', 'id="userPresetComboPicker"',
             'id="userPresetComboFields"', '>组合保存<',
+            # 表情分类：预设下拉、分类筛选、组合保存按钮与标签搜索目标都要有。
+            'id="userPresetFilter"', 'value="expression">表情', '写入：表情',
+            'data-category="expression"',
         ):
             self.assertIn(marker, html)
         for marker in (
@@ -24,6 +27,9 @@ class UserPromptPresetTests(unittest.TestCase):
             "function deleteUserPromptPreset", "localStorage.setItem",
             "artist:{label:'画师 / 画风串',target:'promptStyle'}",
             "pose:{label:'姿势串',target:'promptPose'}",
+            # 表情分区：预设、标签搜索与组合保存都要能选“表情”。
+            "expression:{label:'表情',target:'promptExpression'}",
+            "expression:{label:'表情',target:'promptExpression'}",
             "function setUserPromptPresetMode", "function toggleUserPromptComboCategory",
             "function captureUserPromptComboCategory", "function userPromptComboSections",
             "item.category==='combo'", "Object.entries(item.sections||{})",
