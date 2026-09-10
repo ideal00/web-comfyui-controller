@@ -85,6 +85,9 @@ def list_output_images(limit: int = 80) -> list[dict]:
     for file in candidates:
         if file.suffix.lower() not in {".png", ".webp", ".jpg", ".jpeg"}:
             continue
+        # 高清二采的首采对照图不是成品，不能出现在“最近输出”与图生图候选里。
+        if "_base_" in file.name:
+            continue
         try:
             mtime = int(file.stat().st_mtime)
         except OSError:

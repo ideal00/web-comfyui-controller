@@ -1472,9 +1472,14 @@ class CreativeIndex:
         if row is None:
             return {}
         generation_id = str(row["generation_id"])
-        artifact_count = connection.execute(
-            "SELECT COUNT(*) FROM artifacts WHERE generation_id = ?", (generation_id,)
-        ).fetchone()[0]
+        # 高清二采的首采对照图（<前缀>_base_*.png）不是成品：数量与列表都不计入，
+        # 否则作品库里会同时出现“原图”和成品，看起来像重复生成。
+        artifact_rows = connection.execute(
+            "SELECT filename FROM artifacts WHERE generation_id = ?", (generation_id,)
+        ).fetchall()
+        artifact_count = sum(
+            1 for item in artifact_rows if not is_hires_base_filename(item["filename"])
+        )
         parent_count = connection.execute(
             "SELECT COUNT(*) FROM derivations WHERE child_generation_id = ?", (generation_id,)
         ).fetchone()[0]
@@ -1564,7 +1569,7 @@ class CreativeIndex:
             for row in rows
         ]
 
-    def get_generation(self, generation_id: Any) -> dict[str, Any] | None:
+    def get_generation(self, generation_id: Any, *, include_hires_base: bool = False) -> dict[str, Any] | None:
         wanted = _safe_generation_id(generation_id)
         with self._connection() as connection:
             row = connection.execute(
@@ -1577,6 +1582,11 @@ class CreativeIndex:
                 "SELECT * FROM artifacts WHERE generation_id = ? ORDER BY created_at ASC, artifact_id ASC",
                 (wanted,),
             ).fetchall()
+            # 旧记录里曾把二采的首采图一并存下来：默认不再返回给作品库，
+            # 需要核对时可用 include_hires_base=True 取回（数据本身不删）。
+            every_artifact = [self._artifact_from_row(item) for item in artifacts]
+            visible = [item for item in every_artifact if not is_hires_base_filename(item["filename"])]
+            hires_base_count = len(every_artifact) - len(visible)
             preview_row = _preview_artifact_row(connection, wanted)
             snapshot = _json_value(row["snapshot_json"])
             input_value = _json_value(row["input_json"])
@@ -1592,7 +1602,8 @@ class CreativeIndex:
                 "snapshot": snapshot,
                 "error": _json_value(row["error_json"]),
                 "loras": self._loras_for_generation(connection, wanted),
-                "artifacts": [self._artifact_from_row(item) for item in artifacts],
+                "artifacts": every_artifact if include_hires_base else visible,
+                "hires_base_count": hires_base_count,
                 # 与列表缩略图完全同一张图：客户端直接用 preview 显示大图。
                 "preview": self._artifact_from_row(preview_row) if preview_row is not None else None,
                 "replay": {
