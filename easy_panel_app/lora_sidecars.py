@@ -6,6 +6,7 @@ JSON header, and TXT recognition is deterministic and fully local.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,110 @@ from easy_panel_app.tag_classifier import (
 
 
 SIDECAR_MARKER = "# Easy Panel LoRA Sidecar v2"
+# LORA_MEMO_RULES.md §3.1 标准侧车：头部【键】与分项块
+STANDARD_HEADER_FIELDS = {
+    "显示标题": "title", "标题": "title",
+    "底模": "base_model", "适用底模": "base_model",
+    "建议权重": "weight", "推荐权重": "weight", "权重": "weight",
+    "页面url": "url", "页面 url": "url", "url": "url",
+    "顶层触发词": "trigger", "触发词": "trigger",
+}
+STANDARD_HEADER_SKIP = {"模型文件名", "文件名", "相对路径", "路径", "sha256", "生成器来源", "备注"}
+STANDARD_MAIN_FIELDS = {
+    "角色": "subject", "人物": "subject", "character": "subject", "subject": "subject",
+    "外貌": "appearance", "appearance": "appearance",
+    "服装": "clothing", "clothing": "clothing",
+    "姿势": "pose", "pose": "pose",
+    "构图": "composition", "composition": "composition",
+    "场景": "scene", "scene": "scene",
+    "光线": "lighting", "lighting": "lighting",
+    "画风": "style", "style": "style",
+    "上色": "coloring", "coloring": "coloring",
+    "负面": "negative", "negative": "negative",
+    "其他": "other", "other": "other",
+}
+RULE_MAIN_CLASSES = {
+    "subject": "character", "appearance": "appearance", "clothing": "clothing", "pose": "pose",
+    "composition": "composition", "scene": "scene", "lighting": "lighting", "style": "style",
+    "coloring": "coloring", "negative": "negative", "other": "other",
+}
+RULE_MAIN_LABELS = {
+    "subject": "角色", "appearance": "外貌", "clothing": "服装", "pose": "姿势",
+    "composition": "构图", "scene": "场景", "lighting": "光线", "style": "画风",
+    "coloring": "上色", "negative": "负面", "other": "其他",
+}
+
+
+def parse_standard_sidecar(text: str) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+    """Read the LORA_MEMO_RULES.md §3.1 layout.
+
+    Returns ``(items, meta)`` where each item is ``(name, category_field, content)``
+    and ``meta`` uses the same keys as :func:`_extract_meta` plus
+    ``_explicit_trigger`` when the file declares the top-level trigger state.
+    """
+    items: list[tuple[str, str, str]] = []
+    meta: dict[str, str] = {}
+    lines = [raw.strip() for raw in str(text or "").splitlines()]
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line:
+            index += 1
+            continue
+        header = re.match(r"^[\[【]([^\]】]{1,20})[\]】]\s*(.*)$", line)
+        if header:
+            key = normalize_tag(header.group(1))
+            value = header.group(2).strip()
+            field = STANDARD_HEADER_FIELDS.get(key) or STANDARD_HEADER_FIELDS.get(header.group(1).strip().lower())
+            if field:
+                if field == "trigger":
+                    meta["_explicit_trigger"] = "1"
+                    if value and not value.startswith("无"):
+                        meta["trigger"] = re.split(r"[,，;；]", value, maxsplit=1)[0].strip()
+                elif value and not meta.get(field):
+                    meta[field] = value
+            index += 1
+            continue
+        name = re.match(r"^名称\s*[:：]\s*(.*)$", line)
+        if not name:
+            index += 1
+            continue
+        item_name = name.group(1).strip()
+        cursor = index + 1
+        category = ""
+        if cursor < len(lines):
+            main = re.match(r"^主类\s*[:：]\s*(.+)$", lines[cursor])
+            if main:
+                parts = [part.strip() for part in main.group(1).split("/")]
+                category = STANDARD_MAIN_FIELDS.get(parts[0], "") if parts else ""
+                for part in reversed(parts[1:]):
+                    token = STANDARD_MAIN_FIELDS.get(part.lower(), "")
+                    if token:
+                        category = token
+                        break
+                cursor += 1
+        prompt = re.match(r"^提示词\s*[:：]\s*(.*)$", lines[cursor]) if cursor < len(lines) else None
+        if not prompt:
+            index = cursor
+            continue
+        body: list[str] = []
+        if prompt.group(1).strip():
+            body.append(prompt.group(1).strip())
+        cursor += 1
+        while cursor < len(lines):
+            candidate = lines[cursor]
+            if re.match(r"^(?:名称|主类|提示词)\s*[:：]", candidate) or re.match(r"^[\[【]", candidate):
+                break
+            if candidate:
+                body.append(candidate)
+            cursor += 1
+        content = "\n".join(body).strip()
+        if item_name and content:
+            items.append((item_name, category or "other", content))
+        index = cursor
+    return items, meta
+
+
 NOTE_FIELDS = ("subject", "appearance", "clothing", "pose", "composition", "scene",
                "lighting", "style", "coloring", "negative", "other")
 OUTFIT_MAIN_CLASS_FIELDS = (
@@ -268,6 +373,10 @@ def _text_blocks(text: str) -> list[tuple[str, list[str]]]:
         bracket = re.match(r"^[\[【]([^\]】]{1,60})[\]】]\s*(.*)$", line)
         if bracket:
             flush()
+            bracket_key = normalize_tag(bracket.group(1))
+            if bracket_key in STANDARD_HEADER_FIELDS or bracket_key in STANDARD_HEADER_SKIP:
+                bracket_context = ""
+                continue
             header = bracket.group(1).strip()
             bracket_context = header
             if bracket.group(2).strip():
@@ -403,6 +512,39 @@ def smart_parse_lora_sidecar(content: str, filename: str = "") -> dict:
     text = str(content or "")
     meta = _extract_meta(text, filename)
     meta["_source"] = filename
+    standard_items, standard_meta = parse_standard_sidecar(text)
+    for key, value in standard_meta.items():
+        if key == "_explicit_trigger":
+            meta["_explicit_trigger"] = value
+        elif value:
+            # 【键】头部比散落的中文冒号行更权威
+            meta[key] = value
+    if meta.get("_explicit_trigger") and not standard_meta.get("trigger"):
+        meta["trigger"] = ""
+    if standard_items:
+        standard_outfits: list[dict] = []
+        for item_name, category, item_content in standard_items:
+            sections = {name: [] for name in NOTE_FIELDS}
+            sections[category] = split_prompt_tags(item_content)
+            if any(sections.values()):
+                standard_outfits.append(_serialise_outfit(item_name, sections))
+        if standard_outfits:
+            standard_meta_out = {key: value for key, value in meta.items() if key != "_source"}
+            standard_meta_out.pop("_explicit_trigger", None)
+            return {
+                "schema_version": 2,
+                **standard_meta_out,
+                "outfits": standard_outfits,
+                "unclassified": [],
+                "stats": {
+                    "blocks": len(standard_outfits),
+                    "presets": len(standard_outfits),
+                    "classified_tags": sum(
+                        len(split_prompt_tags(item.get(category, ""))) for item in standard_outfits
+                        for category in NOTE_FIELDS
+                    ),
+                },
+            }
     base_sections = {category: [] for category in NOTE_FIELDS}
     named: list[tuple[str, dict[str, list[str]]]] = []
     unclassified: list[str] = []
@@ -467,7 +609,7 @@ def smart_parse_lora_sidecar(content: str, filename: str = "") -> dict:
     outfits.extend(_serialise_outfit(name, sections) for name, sections in named
                    if any(sections[category] for category in NOTE_FIELDS))
 
-    if not meta["trigger"]:
+    if not meta["trigger"] and not meta.get("_explicit_trigger"):
         subject_tags: list[str] = []
         for outfit in outfits:
             subject_tags.extend(split_prompt_tags(outfit.get("subject", "")))
@@ -475,6 +617,7 @@ def smart_parse_lora_sidecar(content: str, filename: str = "") -> dict:
         meta["trigger"] = candidate
 
     meta.pop("_source", None)
+    meta.pop("_explicit_trigger", None)
     return {
         "schema_version": 2,
         **meta,
@@ -562,6 +705,14 @@ def infer_base_model(metadata: dict[str, str], path: Path | None = None) -> str:
     return ""
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def sidecar_from_safetensors(path: Path, max_tags: int = 80) -> dict:
     """Build a smart sidecar document from embedded training metadata."""
     file = Path(path)
@@ -594,6 +745,8 @@ def sidecar_from_safetensors(path: Path, max_tags: int = 80) -> dict:
     return {
         "schema_version": 2,
         "title": title,
+        "file_name": file.name,
+        "sha256": file_sha256(file),
         "base_model": infer_base_model(metadata, file),
         "weight": metadata.get("modelspec.recommended_weight", "0.7"),
         "trigger": trigger,
@@ -605,22 +758,45 @@ def sidecar_from_safetensors(path: Path, max_tags: int = 80) -> dict:
 
 
 def render_sidecar(document: dict, source_name: str = "") -> str:
-    lines = [SIDECAR_MARKER, "# 本文件由本地元数据生成；请核对触发词后再正式出图。"]
-    lines.extend((
-        f"名称：{document.get('title', '')}",
-        f"适用底模：{document.get('base_model', '')}",
-        f"推荐权重：{document.get('weight', '')}",
-        f"触发词：{document.get('trigger', '')}",
-        f"来源：{document.get('url', '')}",
-    ))
-    if source_name:
-        lines.append(f"生成器来源：{source_name}")
+    """渲染 LORA_MEMO_RULES.md §3.1 标准的同名 TXT。"""
+    relative = str(document.get("relative_path") or source_name or "").replace("\\", "/")
+    file_name = str(document.get("file_name") or "") or (Path(relative).name if relative else "")
+    url = str(document.get("url", "") or "").strip()
+    known_url = bool(re.search(r"https?://", url))
+    trigger = str(document.get("trigger", "") or "").strip()
+    lines = [
+        SIDECAR_MARKER,
+        "# 本文件由本地元数据生成；请核对触发词后再正式出图。",
+        f"【显示标题】{document.get('title', '')}",
+        f"【模型文件名】{file_name}",
+        f"【相对路径】{relative}",
+        f"【SHA256】{document.get('sha256', '')}",
+        f"【底模】{document.get('base_model', '')}",
+        f"【建议权重】{str(document.get('weight', '') or '').strip()}",
+        f"【页面URL】{url if known_url else ''}",
+    ]
+    if not known_url:
+        lines.append("【顶层触发词】无（未确认独立触发词）")
+        lines.append("")
+        lines.append("备注：自动生成，未确认页面来源；请核对后再正式出图。")
+    elif trigger:
+        lines.append(f"【顶层触发词】{trigger}")
+    else:
+        lines.append("【顶层触发词】无")
     for outfit in document.get("outfits", []):
-        lines.extend(("", f"[{outfit.get('name', '自动提取')}]"))
-        for category in NOTE_FIELDS:
-            value = str(outfit.get(category, "") or "").strip()
-            if value:
-                lines.append(f"{SECTION_LABELS[category]}：{value}")
+        filled = [(category, str(outfit.get(category, "") or "").strip())
+                  for category in NOTE_FIELDS]
+        filled = [(category, value) for category, value in filled if value]
+        if not filled:
+            continue
+        base_name = str(outfit.get("name", "自动提取") or "自动提取").strip() or "自动提取"
+        for index, (category, value) in enumerate(filled):
+            label = RULE_MAIN_LABELS.get(category, category)
+            item_name = base_name if index == 0 else f"{base_name}·{label}"
+            main_class = RULE_MAIN_CLASSES.get(category, category)
+            lines.extend(("", f"名称：{item_name}",
+                          f"主类：{label} / {main_class} / {category}",
+                          "提示词：", value))
     lines.append("")
     return "\n".join(lines)
 

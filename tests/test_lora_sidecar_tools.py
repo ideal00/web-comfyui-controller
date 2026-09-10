@@ -145,8 +145,12 @@ class SafetensorsSidecarTests(unittest.TestCase):
             self.assertEqual("alice_trigger", document["trigger"])
             rendered = render_sidecar(document, model.name)
             self.assertTrue(rendered.startswith(SIDECAR_MARKER))
-            self.assertIn("角色外貌：blue hair", rendered)
-            self.assertIn("服装与配饰：red dress", rendered)
+            # LORA_MEMO_RULES.md §3.1：分项按“名称/主类/提示词”单独记录，不再使用旧的分类行。
+            self.assertIn("名称：自动提取·外貌", rendered)
+            self.assertIn("主类：外貌 / appearance / appearance", rendered)
+            self.assertIn("blue hair", rendered)
+            self.assertIn("主类：服装 / clothing / clothing", rendered)
+            self.assertIn("red dress", rendered)
 
 
 class NotesSafetyTests(unittest.TestCase):
