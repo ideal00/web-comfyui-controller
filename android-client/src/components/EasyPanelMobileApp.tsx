@@ -4,12 +4,20 @@ import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/e
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
 import { appendPromptText, parsePromptTranslation, type ParsedPromptTranslation } from '../lib/promptTranslation'
 import { useEasyPanelController } from '../hooks/useEasyPanelController'
+import { useEasyPanelWorkspace } from '../hooks/useEasyPanelWorkspace'
+import { EasyPanelDuplicateLayer, EasyPanelProjectPickerLayer, EasyPanelTaskCenter } from './EasyPanelTaskCenter'
+import { EasyPanelProjectCenter } from './EasyPanelProjectCenter'
+import { attachEasyPanelPendingDerivation, buildEasyPanelControllerRequest, createEasyPanelControllerRequestId } from '../lib/easyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
 import { getEasyPanelPromptInstruction } from '../services/easyPanelVisual'
 import type { EasyPanelGenerationArtifact, EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
 
 export default function EasyPanelMobileApp() {
   const controller = useEasyPanelController()
+  const workspace = useEasyPanelWorkspace({
+    baseUrl: controller.settings.baseUrl,
+    token: controller.settings.token,
+  })
   const [advancedOpen, setAdvancedOpen] = useState(true)
   const [advancedOpening, setAdvancedOpening] = useState(false)
   const [advancedError, setAdvancedError] = useState('')
@@ -149,9 +157,25 @@ export default function EasyPanelMobileApp() {
     setTranslationMessage(`已将 AI 的${kind === 'positive' ? '正向' : '负面'}提示词加入快速生图表单。`)
   }
 
-  function handleGenerateClick() {
+  // 提交前先查重复任务：命中后弹窗让用户选择「仍然生成 / 取消 / 打开已有结果」。
+  async function handleGenerateClick() {
     const interaction = reduceEasyPanelControllerInteraction(controller.settings, { type: 'generate-requested' })
-    if (interaction.shouldSubmit) void controller.generate()
+    if (!interaction.shouldSubmit) return
+    let payload: Record<string, unknown> | null = null
+    try {
+      const request = attachEasyPanelPendingDerivation(
+        buildEasyPanelControllerRequest(controller.settings, createEasyPanelControllerRequestId(), controller.restoredSnapshot),
+        controller.pendingDerivation,
+      )
+      payload = request as unknown as Record<string, unknown>
+    } catch {
+      payload = null
+    }
+    if (payload) {
+      const verdict = await workspace.checkGenerate(payload)
+      if (verdict === 'duplicate') return
+    }
+    await controller.generate()
   }
 
   async function restoreSnapshot(id: string, mode: 'full' | 'seed-only' | 'continue-editing') {
@@ -234,6 +258,26 @@ export default function EasyPanelMobileApp() {
             <span className="epm-mode-kicker">作品管理</span>
             <strong><BookOpen size={16} />作品库</strong>
             <small>浏览历史、谱系与恢复参数</small>
+          </button>
+          <button
+            type="button"
+            className="epm-mode-option epm-mode-action"
+            onClick={() => workspace.setTaskCenterOpen(true)}
+            disabled={!controller.hydrated || !controller.settings.baseUrl.trim()}
+          >
+            <span className="epm-mode-kicker">批处理</span>
+            <strong><RefreshCw size={16} />任务队列</strong>
+            <small>暂停 / 取消 / 失败自动跳过</small>
+          </button>
+          <button
+            type="button"
+            className="epm-mode-option epm-mode-action"
+            onClick={() => workspace.setProjectsOpen(true)}
+            disabled={!controller.hydrated || !controller.settings.baseUrl.trim()}
+          >
+            <span className="epm-mode-kicker">作品项目</span>
+            <strong><GitBranch size={16} />角色图集</strong>
+            <small>分区整理、精选与关联资源</small>
           </button>
         </section>
         {advancedError && <div className="epm-advanced-error" role="alert"><XCircle size={15} /><span>{advancedError}</span></div>}
@@ -607,14 +651,37 @@ export default function EasyPanelMobileApp() {
           {working ? controller.statusLabel : '生成图片'}
         </button>
       </footer>
-      {libraryOpen && <EasyPanelLibraryDialog controller={controller} onClose={() => setLibraryOpen(false)} />}
+      {libraryOpen && <EasyPanelLibraryDialog controller={controller}
+        onAddToProject={(generationId) => workspace.openProjectPicker(generationId)}
+        onClose={() => setLibraryOpen(false)} />}
+      {workspace.taskCenterOpen && <EasyPanelTaskCenter workspace={workspace}
+        onClose={() => workspace.setTaskCenterOpen(false)} />}
+      <EasyPanelDuplicateLayer workspace={workspace}
+        onStillGenerate={() => void controller.generate()}
+        onOpenExisting={(generationId) => {
+          workspace.dismissDuplicate()
+          setLibraryOpen(true)
+          void controller.openLibraryGeneration(generationId)
+        }} />
+      {workspace.projectsOpen && <EasyPanelProjectCenter workspace={workspace}
+        onClose={() => workspace.setProjectsOpen(false)}
+        onOpenGeneration={(generationId) => {
+          workspace.setProjectsOpen(false)
+          setLibraryOpen(true)
+          void controller.openLibraryGeneration(generationId)
+        }}
+        thumbnailSources={controller.libraryThumbnailSources} />}
+      {workspace.pickerOpen && <EasyPanelProjectPickerLayer workspace={workspace}
+        onAdded={() => { workspace.closeProjectPicker(); setLibraryOpen(false); workspace.setProjectsOpen(true) }}
+        onClose={() => workspace.closeProjectPicker()} />}
     </div>
   )
 }
 
-function EasyPanelLibraryDialog({ controller, onClose }: {
+function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
   controller: ReturnType<typeof useEasyPanelController>
   onClose: () => void
+  onAddToProject?: (generationId: string) => void
 }) {
   const detail = controller.libraryDetail
   // Keep the list scroll offset while a detail view is open so returning to the
@@ -723,6 +790,7 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           onCreateGroup={(name, id) => void controller.createLibraryGroup(name, id)}
           onRenameGroup={(groupId, name) => void controller.renameLibraryGroup(groupId, name)}
           onDeleteGroup={(groupId) => void controller.deleteLibraryGroup(groupId)}
+          onAddToProject={onAddToProject}
           onDelete={(id) => void removeGeneration(id)}
         /> : <LibraryList
           items={controller.library}
@@ -919,7 +987,7 @@ function isHiresBaseArtifact(filename?: string): boolean {
   return name.includes('_base_')
 }
 
-function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onToggleFavorite, groups, onSaveGroups, onCreateGroup, onRenameGroup, onDeleteGroup, onDelete }: {
+function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onToggleFavorite, groups, onSaveGroups, onCreateGroup, onRenameGroup, onDeleteGroup, onAddToProject, onDelete }: {
   detail: EasyPanelGenerationDetail
   lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
   thumbnailSource?: string
@@ -935,6 +1003,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
   onCreateGroup: (name: string, generationId?: string) => void
   onRenameGroup: (groupId: string, name: string) => void
   onDeleteGroup: (groupId: string) => void
+  onAddToProject?: (generationId: string) => void
   onDelete: (id: string) => void
 }) {
   const previewArtifact = (() => {
@@ -989,6 +1058,10 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
         <button type="button" className="epm-secondary-button" onClick={() => onRestore('reproduce')}>复现到当前表单</button>
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('seed-variant')}>换 Seed 到当前表单</button>
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('continue-edit')}>继续编辑</button>
+        {onAddToProject
+          ? <button type="button" className="epm-quiet-button"
+              onClick={() => onAddToProject(detail.generation_id)}>加入项目</button>
+          : null}
         <button type="button" className="epm-danger-button" onClick={() => onDelete(detail.generation_id)}><Trash2 size={14} />删除此作品</button>
       </div>
       <p className="epm-library-note">恢复只会填入当前表单，不会自动生成，也不会自动选择某个输出作为图生图 / 重绘输入；下一次生成会记录派生关系，也可在表单中取消关联。</p>

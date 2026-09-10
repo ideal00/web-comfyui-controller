@@ -6362,3 +6362,39 @@ textarea:focus-visible {
 .epm-library-item-delete{display:inline-flex;align-items:center;justify-content:center;align-self:center;width:30px;min-height:54px;border:1px solid rgba(255,120,130,.45);border-radius:10px;background:rgba(70,20,24,.55);color:#ffc9ce;cursor:pointer}
 .epm-library-item-delete:active{transform:scale(.94)}
 .epm-library-actions .epm-danger-button{display:inline-flex;align-items:center;gap:5px;background:rgba(122,30,40,.6);border-color:rgba(255,110,120,.55);color:#ffd5d8}
+
+/* ===== 任务批处理控制 / 重复检测 / 作品项目（2026-09-10）===== */
+.epm-task-dialog, .epm-duplicate-dialog, .epm-project-dialog, .epm-project-picker { max-width: 720px; }
+.epm-task-header-actions { display: flex; gap: 8px; align-items: center; }
+.epm-task-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.epm-task-controls button { flex: 0 1 auto; }
+.epm-task-switch { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+.epm-task-switch small { display: block; opacity: .72; }
+.epm-task-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow: auto; margin-top: 8px; }
+.epm-task-item { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; }
+.epm-task-item-check { display: flex; gap: 8px; align-items: center; min-width: 0; flex: 1 1 auto; }
+.epm-task-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.epm-task-item-meta { display: flex; gap: 8px; align-items: center; flex: 0 1 auto; }
+.epm-task-badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,.2); white-space: nowrap; }
+.epm-task-badge.is-running { border-color: #4f9cf9; color: #4f9cf9; }
+.epm-task-badge.is-completed { border-color: #3fbf7f; color: #3fbf7f; }
+.epm-task-badge.is-error { border-color: #ef6b6b; color: #ef6b6b; }
+.epm-task-badge.is-cancelled, .epm-task-badge.is-skipped { opacity: .7; }
+.epm-task-error { color: #ef6b6b; font-size: 12px; }
+.epm-task-still-button { padding: 8px 14px; }
+.epm-duplicate-list { margin: 8px 0 0 16px; padding: 0; max-height: 26vh; overflow: auto; font-size: 13px; }
+.epm-project-create { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.epm-project-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.epm-project-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.16); background: transparent; color: inherit; }
+.epm-project-chip.is-on { border-color: #4f9cf9; }
+.epm-project-detail { border-top: 1px solid rgba(255,255,255,.12); padding-top: 10px; }
+.epm-project-detail-head { display: flex; gap: 10px; justify-content: space-between; flex-wrap: wrap; align-items: flex-start; }
+.epm-project-links { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.epm-project-link-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.epm-project-link-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.epm-project-section { margin-top: 12px; border-top: 1px dashed rgba(255,255,255,.14); padding-top: 8px; }
+.epm-project-section header { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; }
+.epm-project-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; }
+.epm-project-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; }
+.epm-project-item img { width: 100%; height: 120px; object-fit: cover; border-radius: 8px; }
+.epm-project-item-empty { display: flex; align-items: center; justify-content: center; height: 120px; border-radius: 8px; background: rgba(255,255,255,.06); font-size: 12px; text-align: center; padding: 4px; }

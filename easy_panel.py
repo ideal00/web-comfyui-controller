@@ -4884,6 +4884,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.send_json({"api_version": RPG_API_VERSION,
                                 "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION, **detail})
+            elif parsed.path == "/api/rpg/tasks":
+                if not self.require_rpg_auth():
+                    return
+                self.send_json(task_queue_snapshot())
             elif parsed.path == "/api/rpg/library/projects":
                 if not self.require_rpg_auth():
                     return
@@ -5192,7 +5196,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -5326,6 +5330,22 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("safetyLevel", "safe"),
                 ))
                 return
+            # 移动端（仅持有 RPG Token）用的任务队列与重复检测入口，逻辑与桌面端完全一致。
+            if self.path == "/api/rpg/tasks":
+                self.send_json(task_queue_snapshot())
+                return
+            if self.path == "/api/rpg/tasks/add":
+                self.send_json(add_tasks(data))
+                return
+            if self.path == "/api/rpg/tasks/control":
+                self.send_json(control_tasks(data))
+                return
+            if self.path == "/api/rpg/generate-check":
+                checked = data.get("payload") if isinstance(data.get("payload"), dict) else None
+                if checked is None:
+                    checked = build_rpg_payload(data, rpg_model_catalog())
+                self.send_json(duplicate_check({"payload": checked}))
+                return
             if self.path == "/api/rpg/generate":
                 client = data.get("client") if isinstance(data.get("client"), dict) else {}
                 request_id = str(client.get("requestId") or data.get("requestId") or "").strip()
@@ -5342,6 +5362,22 @@ class Handler(BaseHTTPRequestHandler):
                         self.send_json(status, HTTPStatus.OK)
                         return
                 payload = build_rpg_payload(data, rpg_model_catalog())
+                if str(data.get("duplicatePolicy") or "ask").strip().casefold() == "skip":
+                    found = _duplicate_lookup(payload, limit=1)
+                    if found["items"]:
+                        existing = found["items"][0]
+                        self.send_json({
+                            "api_version": RPG_API_VERSION,
+                            "skipped": True, "duplicate": True,
+                            "fingerprint": found["fingerprint"],
+                            "generation_id": existing["generation_id"],
+                            "job_id": existing.get("prompt_id") or "",
+                            "prompt_id": existing.get("prompt_id") or "",
+                            "created_at": existing["created_at"],
+                            "status": "completed",
+                            "message": "发现完全相同的生成任务，已跳过。",
+                        })
+                        return
                 result = comfy_json("/prompt", "POST", build_workflow(payload))
                 prompt_id = str(result.get("prompt_id") or "")
                 if not re.fullmatch(r"[0-9a-fA-F-]{36}", prompt_id):
