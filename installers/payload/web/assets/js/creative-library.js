@@ -655,6 +655,28 @@
     };
   }
 
+  function isHiresBaseName(value) {
+    const name = asText(value).replace(/\\/gu, '/').split('/').pop() || '';
+    return name.includes('_base_');
+  }
+
+  // 列表缩略图（summary.primary_artifact_id）与详情大图必须是同一张：
+  // 高清二采会同时产出首采图与成品，服务端已按“非首采的最后一张输出”选定代表图。
+  function previewArtifactOf(detail) {
+    const artifacts = detail && Array.isArray(detail.artifacts) ? detail.artifacts : [];
+    const wanted = asText(detail && detail.preview && detail.preview.artifact_id).toLowerCase();
+    if (wanted) {
+      const matched = artifacts.find((item) => asText(item.artifact_id).toLowerCase() === wanted);
+      if (matched) return matched;
+    }
+    const primary = asText(detail && detail.primary_artifact_id).toLowerCase();
+    if (primary) {
+      const matched = artifacts.find((item) => asText(item.artifact_id).toLowerCase() === primary);
+      if (matched) return matched;
+    }
+    return artifacts.find((item) => item.exists !== false) || artifacts[0] || null;
+  }
+
   function flagsPayload(patch) {
     const source = patch && typeof patch === 'object' ? patch : {};
     const body = {};
@@ -811,7 +833,8 @@
     outputs.forEach((artifact) => {
       const row = createElement('div', 'creative-library-output-row');
       const source = state.imageUrls.get(imageKeyForArtifact(artifact.artifact_id));
-      const filename = `${asText(artifact.filename) || '未命名图片'}${artifact.exists === false ? '（文件缺失）' : ''}`;
+      const base = isHiresBaseName(artifact.filename) ? '（首采对照，非成品）' : '';
+      const filename = `${asText(artifact.filename) || '未命名图片'}${base}${artifact.exists === false ? '（文件缺失）' : ''}`;
       const name = createElement('span', 'creative-library-output-name', filename);
       row.append(name);
       if (source) appendSafeImageLink(row, source, '打开预览', 'creative-library-image-link snapshot-output');
@@ -965,8 +988,8 @@
     root.replaceChildren();
     const summary = createElement('div', 'creative-library-detail-summary');
     const preview = createElement('div', 'creative-library-detail-preview');
-    const firstArtifact = Array.isArray(detail.artifacts) ? detail.artifacts[0] : null;
-    const previewSource = firstArtifact && state.imageUrls.get(imageKeyForArtifact(firstArtifact.artifact_id));
+    const previewArtifact = previewArtifactOf(detail);
+    const previewSource = previewArtifact && state.imageUrls.get(imageKeyForArtifact(previewArtifact.artifact_id));
     const thumbSource = state.imageUrls.get(imageKeyForThumbnail(detail.generation_id));
     const source = previewSource || thumbSource;
     if (source) {

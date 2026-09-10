@@ -296,6 +296,8 @@ Easy Panel 同时在服务端定期对账 ComfyUI 历史。即使手机或电脑
 
 Easy Panel 2.2.x 在不改变 JSON 源记录的前提下维护一个可重建的 SQLite 创作索引。Android 快速页面和桌面 Web 面板的“作品库”入口读取以下只读接口：
 
+作品代表图：列表响应的 `thumbnail_url`、`primary_artifact_id` 与详情响应的 `preview`（同一个 artifact）都指向同一张**成品图**——索引库按“优先非首采、文件仍存在的最后一张输出”选择；高清二采的 `<prefix>_base_*.png` 只在旧记录中作为输出列出（`artifacts`），不会被选为代表图，也不会出现在手机端结果列表。
+
 - `GET /api/rpg/library/generations`：分页列表，支持 `limit`、`offset`、`operation`、`status`、`model`、`favorite`、`group`、`sort` 和 `order`；`favorite=favorite` 只返回已入选，`favorite=unfavorite` 只返回未入选；`group=<组编号>` 只看该收藏组，`group=ungrouped` 只看未加入任何收藏组的作品（未知组编号返回空列表，不会静默当成全部）；
 - `GET /api/rpg/library/generations/{generation_id}`：作品详情、完整快照、LoRA、输出和结构化 replay / variation 预览；
 - `GET /api/rpg/library/generations/{generation_id}/lineage`：父 / 子作品谱系；

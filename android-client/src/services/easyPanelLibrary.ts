@@ -39,6 +39,8 @@ export interface EasyPanelGenerationSummary {
   parent_count: number
   child_count: number
   thumbnail_url?: string | null
+  /** 代表图（列表缩略图与详情大图共用同一张；二采时不会是首采图）。 */
+  primary_artifact_id?: string | null
   /** 入选（最佳版本）标记；只是作品标记，不影响任何生成参数。 */
   favorite?: boolean
   /** 0–5 星人工评分。 */
@@ -101,6 +103,8 @@ export interface EasyPanelGenerationDetail extends EasyPanelGenerationSummary {
   error: Record<string, unknown>
   loras: EasyPanelGenerationLora[]
   artifacts: EasyPanelGenerationArtifact[]
+  /** 与列表缩略图完全一致的成品图；客户端大图直接用它。 */
+  preview?: EasyPanelGenerationArtifact | null
   replay: EasyPanelReplayPreview
   variation: EasyPanelReplayPreview
 }

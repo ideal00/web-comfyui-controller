@@ -2378,9 +2378,8 @@ def safe_generation_filename_prefix(data: dict, default: str = "EasyPanel") -> s
 def generation_filename_prefix(data: dict, suffix: str = "") -> str:
     """Return the SaveImage prefix shared by every output of one job.
 
-    The hi-res first pass reuses it with a ``_base`` suffix, so the desktop panel
-    can pair 首采 / 二采 images without guessing and mobile can filter the pair
-    apart again.
+    ``suffix`` is kept for callers that need a distinct prefix (older builds
+    saved the hi-res first pass as ``<prefix>_base``).
     """
     transparent = data.get("transparentBackground") or {}
     transparent_mode = (str(transparent.get("mode", "off") or "off")
@@ -3284,13 +3283,8 @@ def build_workflow(data: dict) -> dict:
                 "samples": sample_ref, "vae": vae_ref,
             }}
         color_reference_ref = [base_decode_id, 0]
-        # The first-stage decode is saved as its own output so the panel can show
-        # a real 首采 / 二采 comparison; the mobile result list filters it out.
-        base_save_id = alloc()
-        nodes[base_save_id] = {"class_type": "SaveImage", "inputs": {
-            "filename_prefix": generation_filename_prefix(data, "_base"),
-            "images": [base_decode_id, 0],
-        }}
+        # 首采只在内存里作为二采的输入（并供调色取色）；不再另存首采原图，
+        # 作品库与输出目录只保留二采后的成品图。
         nodes[upscale_loader_id] = {
             "class_type": "UpscaleModelLoader",
             "inputs": {"model_name": HIRES_UPSCALE_MODEL},

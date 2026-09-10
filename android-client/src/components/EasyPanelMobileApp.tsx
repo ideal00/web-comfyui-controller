@@ -914,6 +914,11 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
   )
 }
 
+function isHiresBaseArtifact(filename?: string): boolean {
+  const name = String(filename ?? '').replace(/\\/gu, '/').split('/').pop() ?? ''
+  return name.includes('_base_')
+}
+
 function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onToggleFavorite, groups, onSaveGroups, onCreateGroup, onRenameGroup, onDeleteGroup, onDelete }: {
   detail: EasyPanelGenerationDetail
   lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
@@ -932,7 +937,16 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
   onDeleteGroup: (groupId: string) => void
   onDelete: (id: string) => void
 }) {
-  const previewArtifact = detail.artifacts.find((artifact) => artifact.exists !== false && Boolean(artifact.url))
+  const previewArtifact = (() => {
+    // 列表小图取 summary.thumbnail_url，详情大图必须指向同一张（服务端 preview / primary_artifact_id）
+    const preferred = detail.preview?.artifact_id || detail.primary_artifact_id || ''
+    const matched = preferred
+      ? detail.artifacts.find((artifact) => artifact.artifact_id === preferred)
+      : undefined
+    return matched
+      || detail.artifacts.find((artifact) => artifact.exists !== false && Boolean(artifact.url))
+      || detail.artifacts[0]
+  })()
   const [newGroupName, setNewGroupName] = useState('')
   const [renaming, setRenaming] = useState<{ groupId: string; value: string } | null>(null)
   const assigned = new Set((detail.groups ?? []).map((group) => group.group_id))
@@ -1057,7 +1071,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
         <h3><ImageIcon size={16} />输出文件</h3>
         {detail.artifacts.length ? <div className="epm-library-artifact-list">
           {detail.artifacts.map((artifact) => <div className="epm-library-artifact" key={artifact.artifact_id}>
-            <span>{artifact.filename}{artifact.exists === false ? '（文件缺失）' : ''}</span>
+            <span>{artifact.filename}{isHiresBaseArtifact(artifact.filename) ? '（首采对照，非成品）' : ''}{artifact.exists === false ? '（文件缺失）' : ''}</span>
             <button type="button" className="epm-quiet-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={artifact.exists === false || !artifact.url || Boolean(downloadLoading)}>
               {downloadLoading === artifact.artifact_id ? <LoaderCircle size={14} className="epm-spin" /> : <Download size={14} />}下载
             </button>

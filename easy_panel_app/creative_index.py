@@ -28,6 +28,8 @@ MAX_PAGE_SIZE = 100
 GROUP_NAME_LIMIT = 60
 MAX_FAVORITE_GROUPS = 200
 MAX_GROUPS_PER_GENERATION = 24
+# 高清二采会把首采图另存为 <前缀>_base_*.png；它只是对照用途，不能当作品代表图。
+HIRES_BASE_FILE_MARKER = "_base_"
 MAX_OFFSET = 1_000_000
 MAX_LINEAGE_NODES = 100
 MAX_SNAPSHOT_TEXT = 2_000_000
@@ -321,6 +323,45 @@ def _group_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "created_at": int(row["created_at"]),
         "updated_at": int(row["updated_at"]),
     }
+
+
+def is_hires_base_filename(value: Any) -> bool:
+    """True for the first-pass hires image (``<prefix>_base_00001_.png``)."""
+
+    return HIRES_BASE_FILE_MARKER in Path(str(value or "")).name
+
+
+def _artifact_exists(row: sqlite3.Row) -> bool:
+    metadata = _json_value(row["metadata_json"])
+    return not (isinstance(metadata, Mapping) and metadata.get("exists") is False)
+
+
+def _preview_artifact_row(connection: sqlite3.Connection, generation_id: str) -> sqlite3.Row | None:
+    """Return the single artifact that represents a work everywhere.
+
+    列表缩略图、详情大图与手机端预览必须指向同一张图。高清二采会同时产出首采图
+    与二采成品，而 ComfyUI 两个 SaveImage 的落盘顺序并不稳定，所以代表图要显式选
+    择：非首采、文件仍存在的最后一张输出；实在只剩首采时才退回用它。
+    """
+
+    rows = connection.execute(
+        "SELECT * FROM artifacts WHERE generation_id = ? AND image_type = 'output' "
+        "ORDER BY created_at DESC, artifact_id DESC",
+        (generation_id,),
+    ).fetchall()
+    if not rows:
+        rows = connection.execute(
+            "SELECT * FROM artifacts WHERE generation_id = ? "
+            "ORDER BY created_at DESC, artifact_id DESC",
+            (generation_id,),
+        ).fetchall()
+    usable = [row for row in rows if _artifact_exists(row)]
+    for row in usable:
+        if not is_hires_base_filename(row["filename"]):
+            return row
+    if usable:
+        return usable[0]
+    return rows[0] if rows else None
 
 
 def _row_flag(row: sqlite3.Row, name: str) -> bool:
@@ -1331,24 +1372,15 @@ class CreativeIndex:
             "SELECT COUNT(*) FROM generation_loras WHERE generation_id = ?", (generation_id,)
         ).fetchone()[0]
         thumbnail_url = None
-        # Prefer the first output whose file still exists so a deleted leading
-        # image does not leave the record without a usable thumbnail.  The
-        # "exists" flag is refreshed by prune_missing_outputs before listing.
-        thumbnails = connection.execute(
-            """SELECT filename, subfolder, image_type, metadata_json FROM artifacts
-               WHERE generation_id = ? ORDER BY created_at ASC, artifact_id ASC""",
-            (generation_id,),
-        ).fetchall()
-        for thumbnail in thumbnails:
-            metadata = _json_value(thumbnail["metadata_json"])
-            if isinstance(metadata, Mapping) and metadata.get("exists") is False:
-                continue
+        preview_row = _preview_artifact_row(connection, generation_id)
+        primary_artifact_id = ""
+        if preview_row is not None:
+            primary_artifact_id = str(preview_row["artifact_id"])
             thumbnail_url = artifact_url(
-                str(thumbnail["filename"]),
-                str(thumbnail["subfolder"]),
-                str(thumbnail["image_type"]),
+                str(preview_row["filename"]),
+                str(preview_row["subfolder"]),
+                str(preview_row["image_type"]),
             )
-            break
         return {
             "generation_id": generation_id,
             "snapshot_id": row["snapshot_id"] or None,
@@ -1375,6 +1407,8 @@ class CreativeIndex:
             "artifact_count": int(artifact_count),
             "parent_count": int(parent_count),
             "child_count": int(child_count),
+            # 列表、桌面详情与手机详情共用同一个代表图，避免小图与大图不一致。
+            "primary_artifact_id": primary_artifact_id or None,
             "thumbnail_url": thumbnail_url,
         }
 
@@ -1429,6 +1463,7 @@ class CreativeIndex:
                 "SELECT * FROM artifacts WHERE generation_id = ? ORDER BY created_at ASC, artifact_id ASC",
                 (wanted,),
             ).fetchall()
+            preview_row = _preview_artifact_row(connection, wanted)
             snapshot = _json_value(row["snapshot_json"])
             input_value = _json_value(row["input_json"])
             compiled = _json_value(row["compiled_json"])
@@ -1444,6 +1479,8 @@ class CreativeIndex:
                 "error": _json_value(row["error_json"]),
                 "loras": self._loras_for_generation(connection, wanted),
                 "artifacts": [self._artifact_from_row(item) for item in artifacts],
+                # 与列表缩略图完全同一张图：客户端直接用 preview 显示大图。
+                "preview": self._artifact_from_row(preview_row) if preview_row is not None else None,
                 "replay": {
                     "can_submit": False,
                     "action": "restore_to_form",

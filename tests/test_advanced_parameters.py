@@ -307,18 +307,20 @@ class SamplingProfileTests(unittest.TestCase):
                    for node in self.nodes_of(nodes, "CLIPTextEncode")]
         self.assertFalse(any("torn clothes" in text for text in encoded))
 
-    def test_hires_saves_the_first_stage_image_for_comparison(self):
+    def test_hires_keeps_only_the_refined_image(self):
         data = payload("waiIllustriousSDXL_v140.safetensors")
         data.update({"illustriousMode": "hires", "hiresScale": 1.2})
         nodes = self.build(data)
         saves = self.nodes_of(nodes, "SaveImage")
-        self.assertEqual(2, len(saves))
-        self.assertEqual(["EasyPanel", "EasyPanel_base"],
-                         sorted(node["inputs"]["filename_prefix"] for node in saves))
-        base_save = next(node for node in saves
-                         if node["inputs"]["filename_prefix"].endswith("_base"))
-        # The first-stage file must come from the first decode, not the final image.
-        self.assertEqual("VAEDecode", nodes[str(base_save["inputs"]["images"][0])]["class_type"])
+        # 二采不再另存首采原图：输出目录只保留二采后的成品。
+        self.assertEqual(1, len(saves))
+        self.assertEqual("EasyPanel", saves[0]["inputs"]["filename_prefix"])
+        self.assertFalse(any(
+            node["inputs"]["filename_prefix"].endswith("_base")
+            for node in nodes.values() if node.get("class_type") == "SaveImage"
+        ))
+        # 首采解码仍然存在，但只作为二采（与调色取色）的内部输入。
+        self.assertTrue(any(node.get("class_type") == "VAEDecode" for node in nodes.values()))
 
         precision = self.build(payload("waiIllustriousSDXL_v140.safetensors"))
         precision_saves = self.nodes_of(precision, "SaveImage")
