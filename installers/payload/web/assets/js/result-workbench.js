@@ -1,0 +1,313 @@
+/* Result workbench: keep one finished generation editable instead of a dead file.
+ * Reuses the existing panel form as the "state": every action below only touches
+ * one input, so the next generation is a single-variable variation of the last one.
+ */
+(function () {
+  "use strict";
+
+  const byId = (id) => document.getElementById(id);
+  const text = (value, fallback) => {
+    const result = String(value == null ? "" : value).trim();
+    return result || (fallback || "");
+  };
+  const esc = (value) => String(value == null ? "" : value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const baseName = (value) => String(value == null ? "" : value).replace(/\\/g, "/").split("/").pop() || "";
+
+  let lastPayload = null;
+  let lastImages = [];
+  let focusTimer = 0;
+
+  const WORKBENCH_STYLE = `
+.result-workbench{margin-top:8px;border:1px solid var(--line,#3a3a46);border-radius:10px;padding:8px 10px;background:rgba(255,255,255,.02)}
+.result-workbench .workbench-head{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}
+.result-workbench .workbench-head b{color:#cfc4ff;font-size:13px}
+.result-workbench .workbench-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.result-workbench .workbench-actions button{padding:4px 9px;font-size:12px;border-radius:8px}
+.result-workbench .workbench-note{margin-top:6px;color:var(--muted,#9a9aa8)}
+.workbench-focus{outline:2px solid #7c8cff;outline-offset:2px;transition:outline-color .25s ease}
+`;
+
+  function injectStyle() {
+    if (byId("resultWorkbenchStyle")) return;
+    const style = document.createElement("style");
+    style.id = "resultWorkbenchStyle";
+    style.textContent = WORKBENCH_STYLE;
+    document.head.appendChild(style);
+  }
+
+  function status(message) {
+    const element = byId("status");
+    if (element) element.textContent = message;
+  }
+
+  function focusField(id, label, message, tab) {
+    if (typeof window.setStudioCreationTab === "function") window.setStudioCreationTab(tab || "prompt");
+    const field = byId(id);
+    if (!field) {
+      status(`未找到「${label}」输入框；请手动切换到提示词分区。`);
+      return;
+    }
+    field.scrollIntoView({ behavior: "smooth", block: "center" });
+    field.focus();
+    field.classList.add("workbench-focus");
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(() => field.classList.remove("workbench-focus"), 2400);
+    status(message || `已定位到「${label}」：只修改这一项，其他参数保持不变，改完点“生成图片”。`);
+  }
+
+  function randomSeed() {
+    return String(Math.floor(Math.random() * 900000000000000000) + 1);
+  }
+
+  function batchSize() {
+    const count = Number.parseInt(String(byId("batchCount")?.value || "1"), 10);
+    return Number.isFinite(count) && count > 0 ? Math.min(16, count) : 1;
+  }
+
+  function seedOnly() {
+    const input = byId("seed");
+    if (!input) return;
+    const previous = String(input.value || "").trim();
+    const step = BigInt(batchSize());
+    let next;
+    if (/^\d+$/.test(previous)) {
+      try { next = (BigInt(previous) + step).toString(); } catch (_) { next = randomSeed(); }
+    } else {
+      next = randomSeed();
+    }
+    input.value = next;
+    status(`已只修改 Seed：${previous || "随机"} → ${next}；模型、提示词、LoRA、尺寸和二采参数全部保持不变，点“生成图片”即可。`);
+  }
+
+  function repeat() {
+    if (typeof window.generate !== "function") return;
+    status("已按当前面板参数重新提交一次相同生成…");
+    window.generate();
+  }
+
+  function hiresSummary(data) {
+    if (text(data.illustriousMode, "precision") !== "hires") return "二采：未启用";
+    const mode = text(data.hiresPromptMode, "append");
+    const label = mode === "inherit" ? "继承首采" : mode === "append" ? "追加补充" : "完全独立";
+    const lock = data.hiresCompositionLock === true ? " · 优先保持首采构图" : "";
+    return `二采：${text(data.hiresScale, "1.3")}× / denoise ${text(data.hiresDenoise, "0.25")} / ${text(data.hiresSteps, "16")} 步 / CFG ${text(data.hiresCfg, "4")} · ${label}${lock}`;
+  }
+
+  function cardSummary() {
+    const data = lastPayload || {};
+    const parts = [
+      baseName(data.model) || "未记录模型",
+      `${text(data.width, "?")} × ${text(data.height, "?")}`,
+    ];
+    const customSampler = text(data.sampler, "auto") === "auto" ? "" : ` / ${data.sampler}`;
+    parts.push(`${text(data.steps, "?")} 步 · CFG ${text(data.cfg, "?")}${customSampler}`);
+    parts.push(hiresSummary(data));
+    const loras = Array.isArray(data.loras) ? data.loras.filter((item) => text(item?.name)) : [];
+    parts.push(loras.length ? `${loras.length} 个 LoRA` : "无 LoRA");
+    if (lastImages.length > 1) parts.push(`本次 ${lastImages.length} 张`);
+    return parts.join(" · ");
+  }
+
+  function parameterText() {
+    const data = lastPayload || {};
+    const loras = Array.isArray(data.loras) ? data.loras.filter((item) => text(item?.name)) : [];
+    const lines = [
+      `模型：${baseName(data.model) || "未知"}`,
+      `尺寸：${text(data.width, "?")} × ${text(data.height, "?")}`,
+      `Seed：${data.seed == null ? "随机" : data.seed}`,
+      `首采：${text(data.steps, "?")} 步 / CFG ${text(data.cfg, "?")} / ${text(data.sampler, "auto")} + ${text(data.scheduler, "auto")}`,
+      hiresSummary(data),
+      `LoRA：${loras.length ? loras.map((item) => `${baseName(item.name)}${item.weight == null ? "" : `(${item.weight})`}`).join(", ") : "无"}`,
+      "",
+      "正向：",
+      text(byId("compiledPositive")?.value, ""),
+      "",
+      "负向：",
+      text(byId("compiledNegative")?.value, ""),
+    ];
+    return lines.join("\n");
+  }
+
+  async function copyParameters() {
+    const content = parameterText();
+    const fallbackCopy = () => {
+      const area = document.createElement("textarea");
+      area.value = content;
+      area.setAttribute("readonly", "readonly");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      area.remove();
+      return ok;
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(content);
+        } catch (clipboardError) {
+          // Some browsers refuse the async API when the page lost focus; the
+          // selection based fallback still works in that case.
+          if (!fallbackCopy()) throw clipboardError;
+        }
+      } else if (!fallbackCopy()) {
+        throw new Error("浏览器不支持自动复制");
+      }
+      status("已复制本次参数（含首采正负向与二采设置），可直接粘贴到别处留档。");
+    } catch (error) {
+      status("复制失败：" + (error && error.message ? error.message : error));
+    }
+  }
+
+  function continueHires() {
+    const select = byId("illustriousMode");
+    const supported = typeof window.supportsHiresClient === "function" && window.supportsHiresClient();
+    if (!select || !supported) {
+      status("当前模型不支持高清二次采样；如需放大请改用“输出增强”（Anime6B / SeedVR2 / Ultimate）。");
+      return;
+    }
+    select.value = "hires";
+    if (typeof window.setStudioCreationTab === "function") window.setStudioCreationTab("settings");
+    if (typeof window.applyIllustriousMode === "function") window.applyIllustriousMode();
+    byId("hiresControls")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    focusField("hiresPositive", "二采补充 Prompt",
+      "已切换到高清二次采样：在「二采补充 Prompt」里只写要强化的细节（发丝、材质、表情），构图交给首采。", "settings");
+  }
+
+  async function toImg2img() {
+    const name = text(lastImages[0]?.filename, "");
+    const toggle = byId("img2imgEnabled");
+    if (!toggle) return;
+    toggle.checked = true;
+    if (typeof window.toggleImg2img === "function") window.toggleImg2img();
+    status("已启用整图重绘；正在把本图设为底图…");
+    const select = byId("img2imgOutput");
+    if (select && name) {
+      const hasOption = () => Array.from(select.options).some((option) => option.value === name);
+      if (!hasOption() && typeof window.loadOutputImages === "function") {
+        try {
+          await Promise.race([
+            window.loadOutputImages(),
+            new Promise((resolve) => setTimeout(resolve, 4000)),
+          ]);
+        } catch (_) { /* keep the manual picker */ }
+      }
+      if (hasOption()) {
+        select.value = name;
+        if (typeof window.selectImg2imgOutput === "function") window.selectImg2imgOutput();
+      }
+    }
+    byId("img2imgControls")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    status("已启用整图重绘并选中本图作为底图；调整重绘幅度后点“生成图片”，即可在不改提示词的前提下重绘这张结果。");
+  }
+
+  function renderWorkbench() {
+    const root = ensureContainer();
+    if (!root) return;
+    if (!lastImages.length) {
+      root.hidden = true;
+      root.innerHTML = "";
+      return;
+    }
+    root.hidden = false;
+    root.innerHTML = `
+      <div class="workbench-head"><b>本次生成 · 可继续创作</b><span class="small">${esc(cardSummary())}</span></div>
+      <div class="workbench-actions">
+        <button class="secondary" type="button" data-workbench="continue">✏️ 继续编辑</button>
+        <button class="secondary" type="button" data-workbench="seed">🎲 只换 Seed</button>
+        <button class="secondary" type="button" data-workbench="repeat">🔁 重复生成</button>
+        <button class="secondary" type="button" data-workbench="copy">📋 复制参数</button>
+      </div>
+      <div class="workbench-actions"><span class="small">只改一项：</span>
+        <button class="secondary" type="button" data-focus="promptClothing" data-label="服装与材质">服装</button>
+        <button class="secondary" type="button" data-focus="promptScene" data-label="场景">场景</button>
+        <button class="secondary" type="button" data-focus="promptPose" data-label="姿势">姿势</button>
+        <button class="secondary" type="button" data-focus="promptAppearance" data-label="外貌 / 表情">表情</button>
+        <button class="secondary" type="button" data-workbench="hires">🖼 继续二采</button>
+        <button class="secondary" type="button" data-workbench="img2img">♻️ 转整图重绘</button>
+      </div>
+      <div class="small workbench-note">改动只作用于下一次生成：其他参数保持锁定，结果会作为子版本记录在生成快照 / 作品库（可复现、可查看父子谱系）。</div>`;
+  }
+
+  function bindActions(root) {
+    root.addEventListener("click", (event) => {
+      const button = event.target.closest("button");
+      if (!button) return;
+      const focusId = button.dataset ? button.dataset.focus : "";
+      if (focusId) {
+        focusField(focusId, button.dataset.label || focusId);
+        return;
+      }
+      const action = button.dataset ? button.dataset.workbench : "";
+      if (action === "continue") {
+        focusField("promptSubject", "人物与角色",
+          "已回到提示词分区；只修改需要变化的部分，其他参数保持不变，改完点“生成图片”。");
+      } else if (action === "seed") seedOnly();
+      else if (action === "repeat") repeat();
+      else if (action === "copy") copyParameters();
+      else if (action === "hires") continueHires();
+      else if (action === "img2img") toImg2img();
+    });
+  }
+
+  function watchResult(result) {
+    if (typeof MutationObserver !== "function") return;
+    const observer = new MutationObserver(() => {
+      const root = byId("resultWorkbench");
+      if (!root || root.hidden) return;
+      // "Submitting…" / "not generated yet" placeholders must not keep showing
+      // the previous generation's actions.
+      if (!result.querySelector("img")) root.hidden = true;
+    });
+    observer.observe(result, { childList: true, subtree: true });
+  }
+
+  function ensureContainer() {
+    let root = byId("resultWorkbench");
+    if (root) return root;
+    const result = byId("result");
+    if (!result) return null;
+    root = document.createElement("div");
+    root.id = "resultWorkbench";
+    root.className = "result-workbench";
+    root.hidden = true;
+    result.insertAdjacentElement("afterend", root);
+    bindActions(root);
+    watchResult(result);
+    return root;
+  }
+
+  function capturePayload() {
+    if (typeof window.payload !== "function" || window.payload.__workbenchWrapped) return;
+    const original = window.payload;
+    const wrapped = function () {
+      const data = original.apply(this, arguments);
+      if (data && typeof data === "object") lastPayload = data;
+      return data;
+    };
+    wrapped.__workbenchWrapped = true;
+    window.payload = wrapped;
+  }
+
+  function wrapRender() {
+    const original = window.renderGeneratedImages;
+    if (typeof original !== "function" || original.__workbenchWrapped) return;
+    const wrapped = function (images) {
+      const output = original.apply(this, arguments);
+      lastImages = Array.isArray(images)
+        ? images.filter((item) => item && item.filename)
+        : [];
+      renderWorkbench();
+      return output;
+    };
+    wrapped.__workbenchWrapped = true;
+    window.renderGeneratedImages = wrapped;
+  }
+
+  injectStyle();
+  capturePayload();
+  wrapRender();
+}());

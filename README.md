@@ -89,6 +89,7 @@ Easy Panel 预览区
 - DWPose / OpenPose 骨架提取、预览、缓存和手动编辑。
 - 双人及多人柔边区域 conditioning，以及角色 LoRA 空间隔离。
 - Illustrious 精准、高清二次采样和局部蒙版修复。
+- 生成结果工作台：每张结果附带状态卡（模型 / 尺寸 / Seed / 采样 / 二采 / LoRA），可直接「继续编辑 / 只换 Seed / 重复生成 / 只改服装、场景、姿势、表情 / 继续二采 / 转整图重绘 / 复制参数」；二采补充词只作用于高清阶段，不污染首采提示词。
 - 手部修复工作台：磁性套索、锚点调整、魔棒、选区扩缩/羽化/反选，以及内置 miniPaint 仿制与像素修补。
 - Krea 2 底图转 Illustrious / Anima 二次元画风。
 - 读取 ComfyUI、A1111 WebUI、NovelAI 图片元数据并回填参数。
