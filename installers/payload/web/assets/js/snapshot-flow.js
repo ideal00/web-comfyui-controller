@@ -101,9 +101,9 @@
       if (element && data[id] != null) element.value = String(data[id]);
     });
     setValue('hiresPromptMode', data.hiresPromptMode);
-    setChecked('hiresLockComposition', data.hiresLockComposition);
+    setChecked('hiresCompositionLock', data.hiresCompositionLock);
     if (typeof hiresPromptModeChanged === 'function') hiresPromptModeChanged(true);
-    if (typeof hiresLockCompositionChanged === 'function') hiresLockCompositionChanged(true);
+    if (typeof hiresCompositionLockChanged === 'function') hiresCompositionLockChanged(true);
     if (data.guidance) {
       setValue('guidanceMode', data.guidance.mode);
       setValue('sagScale', data.guidance.sagScale);

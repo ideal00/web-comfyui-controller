@@ -479,7 +479,7 @@ def build_rpg_payload(request: Mapping[str, Any], model_catalog: Optional[Mappin
     }
     for key in ("steps", "cfg", "sampler", "scheduler", "hiresScale", "hiresDenoise",
                 "hiresSteps", "hiresCfg", "hiresSampler", "hiresScheduler",
-                "hiresPromptMode", "hiresPositive", "hiresNegative"):
+                "hiresPromptMode", "hiresPositive", "hiresNegative", "hiresCompositionLock"):
         if key in generation and generation.get(key) not in (None, ""):
             payload[key] = generation.get(key)
     for key in ("steps", "cfg", "sampler", "scheduler"):

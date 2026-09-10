@@ -227,23 +227,65 @@ class SamplingProfileTests(unittest.TestCase):
         self.assertEqual("blurry details", text_of(samplers[1]["inputs"]["negative"]))
         self.assertNotIn("1girl", hires_positive)
 
-    def test_hires_prompt_inherit_and_unknown_modes_reuse_first_stage(self):
-        for mode in (None, "banana"):
-            with self.subTest(mode=mode):
-                data = payload("waiIllustriousSDXL_v140.safetensors")
-                data.update({"illustriousMode": "hires", "hiresScale": 1.2,
-                             "hiresPositive": "torn clothes"})
-                if mode:
-                    data["hiresPromptMode"] = mode
-                nodes = self.build(data)
-                samplers = self.nodes_of(nodes, "KSampler")
-                self.assertEqual(samplers[0]["inputs"]["positive"],
-                                 samplers[1]["inputs"]["positive"])
-                self.assertEqual(samplers[0]["inputs"]["negative"],
-                                 samplers[1]["inputs"]["negative"])
-                encoded = [node["inputs"]["text"]
-                           for node in self.nodes_of(nodes, "CLIPTextEncode")]
-                self.assertFalse(any("torn clothes" in text for text in encoded))
+    def test_hires_prompt_inherit_mode_reuses_first_stage_conditioning(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                     "hiresPromptMode": "inherit",
+                     "hiresPositive": "torn clothes"})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        self.assertEqual(samplers[0]["inputs"]["positive"],
+                         samplers[1]["inputs"]["positive"])
+        self.assertEqual(samplers[0]["inputs"]["negative"],
+                         samplers[1]["inputs"]["negative"])
+        encoded = [node["inputs"]["text"]
+                   for node in self.nodes_of(nodes, "CLIPTextEncode")]
+        self.assertFalse(any("torn clothes" in text for text in encoded))
+
+    def test_hires_prompt_defaults_to_append_and_uses_the_supplement(self):
+        # API callers may send only the supplement text; the default mode must
+        # use it instead of silently ignoring it.
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                     "hiresPositive": "torn clothes"})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        hires_positive = nodes[str(samplers[1]["inputs"]["positive"][0])]["inputs"]["text"]
+        self.assertIn("torn clothes", hires_positive)
+        self.assertIn("1girl", hires_positive)
+
+    def test_hires_prompt_unknown_mode_falls_back_to_append(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                     "hiresPromptMode": "banana", "hiresPositive": "torn clothes"})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        hires_positive = nodes[str(samplers[1]["inputs"]["positive"][0])]["inputs"]["text"]
+        self.assertIn("torn clothes", hires_positive)
+
+    def test_hires_prompt_without_supplement_keeps_single_stage_graph(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                     "hiresPromptMode": "append"})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        self.assertEqual(samplers[0]["inputs"]["positive"],
+                         samplers[1]["inputs"]["positive"])
+        self.assertEqual(samplers[0]["inputs"]["negative"],
+                         samplers[1]["inputs"]["negative"])
+
+    def test_hires_prompt_composition_lock_clamps_second_stage_denoise(self):
+        locked = payload("waiIllustriousSDXL_v140.safetensors")
+        locked.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                       "hiresDenoise": 0.6, "hiresCompositionLock": True})
+        nodes = self.build(locked)
+        self.assertEqual(0.35, self.nodes_of(nodes, "KSampler")[1]["inputs"]["denoise"])
+
+        unlocked = payload("waiIllustriousSDXL_v140.safetensors")
+        unlocked.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                         "hiresDenoise": 0.6})
+        nodes = self.build(unlocked)
+        self.assertEqual(0.6, self.nodes_of(nodes, "KSampler")[1]["inputs"]["denoise"])
 
     def test_hires_prompt_keeps_regional_conditioning(self):
         data = payload("waiIllustriousSDXL_v140.safetensors")
@@ -713,7 +755,7 @@ class HiresPromptWiringTests(unittest.TestCase):
     """The two-stage prompt fields must reach the snapshot, the UI and mobile."""
 
     ROOT = Path(__file__).resolve().parents[1]
-    FIELDS = ("hiresPromptMode", "hiresPositive", "hiresNegative", "hiresLockComposition")
+    FIELDS = ("hiresPromptMode", "hiresPositive", "hiresNegative", "hiresCompositionLock")
 
     def read(self, *parts: str) -> str:
         return (self.ROOT.joinpath(*parts)).read_text(encoding="utf-8")
@@ -739,7 +781,8 @@ class HiresPromptWiringTests(unittest.TestCase):
         android = self.ROOT / "android-client/src/services/easyPanelVisual.ts"
         if android.exists():
             text = android.read_text(encoding="utf-8")
-            for field in ("hiresPromptMode", "hiresPositive", "hiresNegative"):
+            for field in ("hiresPromptMode", "hiresPositive", "hiresNegative",
+                          "hiresCompositionLock"):
                 self.assertIn(field, text)
 
 

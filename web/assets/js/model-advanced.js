@@ -41,8 +41,10 @@
 
   const HIRES_PROMPT_TEMPLATES = {
     detail: "fine details, detailed hair strands, detailed fabric texture",
+    hair: "detailed hair strands, individual hair strands, glossy hair",
     clothing: "clothing details, fabric folds, damaged clothing details",
     expression: "subtle facial expression, detailed eyes, natural expression",
+    lighting: "soft rim light, volumetric light, cinematic lighting",
   };
 
   const HIRES_COMPOSITION_TERMS = [
@@ -53,7 +55,7 @@
   ];
 
   function hiresPromptMode() {
-    return byId("hiresPromptMode")?.value || "inherit";
+    return byId("hiresPromptMode")?.value || "append";
   }
 
   window.hiresPromptModeChanged = function (silent) {
@@ -82,7 +84,7 @@
       return;
     }
     const text = String(byId("hiresPositive")?.value || "").toLowerCase();
-    const locked = byId("hiresLockComposition")?.checked === true;
+    const locked = byId("hiresCompositionLock")?.checked === true;
     const notes = [mode === "append"
       ? "追加补充 = 首采提示词 + 补充词；建议写局部细节、材质、表情、服装破损、发丝、皮肤细节，不建议重复构图、镜头、人物位置。"
       : "完全独立 = 只用下方两框；某一框留空时该项沿用首采内容。"];
@@ -96,8 +98,8 @@
     hint.textContent = notes.join(" ");
   };
 
-  window.hiresLockCompositionChanged = function (silent) {
-    const locked = byId("hiresLockComposition")?.checked === true;
+  window.hiresCompositionLockChanged = function (silent) {
+    const locked = byId("hiresCompositionLock")?.checked === true;
     const denoise = byId("hiresDenoise");
     if (denoise) {
       denoise.max = locked ? "0.35" : "1";
@@ -244,11 +246,12 @@
         <textarea id="hiresPositive" rows="2" placeholder="例如：torn clothes, bloodstains, finer fabric texture, detailed hair strands" oninput="hiresPromptInputChanged()"></textarea>
         <div class="field-title"><span>二采负面 Prompt</span><span class="small">留空时沿用首采负面词</span></div>
         <textarea id="hiresNegative" rows="2" placeholder="例如：blurry details, smeared fabric texture, plastic skin" oninput="hiresPromptInputChanged()"></textarea>
-        <div class="actions"><button class="secondary" type="button" onclick="insertHiresPromptTemplate('detail')">＋ 细节强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('clothing')">＋ 服装强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('expression')">＋ 表情强化</button></div>
-        <div class="switch" style="margin-top:6px"><input id="hiresLockComposition" type="checkbox" onchange="hiresLockCompositionChanged()"><div><b>锁定首采构图</b><div class="small">勾选后二采重绘幅度上限锁到 0.35，只做细节增强；不建议再写镜头、景别、构图类提示词。</div></div></div>
+        <div class="actions"><button class="secondary" type="button" onclick="insertHiresPromptTemplate('detail')">＋ 细节强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('hair')">＋ 发丝强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('clothing')">＋ 服装强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('expression')">＋ 表情强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('lighting')">＋ 光影强化</button></div>
+        <div class="switch" style="margin-top:6px"><input id="hiresCompositionLock" type="checkbox" checked onchange="hiresCompositionLockChanged()"><div><b>优先保持首采构图</b><div class="small">勾选后二采重绘幅度上限锁到 0.35（前端与后端都会限制），只做细节增强；不建议再写镜头、景别、构图类提示词。</div></div></div>
         <div id="hiresPromptHint" class="small" style="margin-top:6px"></div>`;
       hiresControls.appendChild(promptBlock);
       window.hiresPromptModeChanged(true);
+      window.hiresCompositionLockChanged(true);
     }
 
     const size = byId("size");
@@ -601,7 +604,7 @@
     if (typeof original !== "function" || original.__hiresLockWrapped) return;
     const wrapped = function (...args) {
       const result = original.apply(this, args);
-      if (byId("hiresLockComposition")?.checked) {
+      if (byId("hiresCompositionLock")?.checked) {
         const denoise = byId("hiresDenoise");
         if (denoise) {
           denoise.max = "0.35";

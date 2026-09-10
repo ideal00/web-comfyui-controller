@@ -1706,9 +1706,12 @@ def illustrious_preflight(data: dict) -> dict:
     hires_negative = str(data.get("hiresNegative", "") or "").strip()
     if str(data.get("hiresPromptMode", "") or "").strip().lower() not in HIRES_PROMPT_MODES:
         if str(data.get("hiresPromptMode", "") or "").strip():
-            warnings.append("二采提示词模式无效，已按“继承首采”处理；可选 inherit / append / replace。")
+            warnings.append("二采提示词模式无效，已按“追加补充”处理；可选 inherit / append / replace。")
     if (hires_positive or hires_negative) and mode != "hires":
         warnings.append("二采提示词只在高清模式（二次采样）下生效；当前生成模式不是高清模式。")
+    if mode == "hires" and bool(data.get("hiresCompositionLock", False)):
+        if bounded(data.get("hiresDenoise"), 0.25, 0.05, 1.0, integer=False) > 0.35:
+            warnings.append("已开启“优先保持首采构图”：二采重绘幅度会自动限制到 0.35。")
     if mode == "hires" and hires_mode != "inherit" and (hires_positive or hires_negative):
         if len(split_prompt_terms(hires_positive, limit=360)) > 40:
             warnings.append("二采补充提示词条目偏多；高清阶段建议只保留 10–20 项细节词，避免二采重新抢构图。")
@@ -2034,9 +2037,14 @@ def regional_mask_layout(regions: list[dict], width: int, height: int) -> list[d
 
 
 def normalized_hires_prompt_mode(data: dict) -> str:
-    """Return the hi-res prompt mode, defaulting to inherit for old payloads."""
+    """Return the hi-res prompt mode, defaulting to append.
+
+    Appending nothing is identical to inheriting, so a payload that only sends
+    ``hiresPositive``/``hiresNegative`` without a mode still gets its supplement
+    used instead of being silently ignored.
+    """
     mode = str(data.get("hiresPromptMode", "") or "").strip().lower()
-    return mode if mode in HIRES_PROMPT_MODES else "inherit"
+    return mode if mode in HIRES_PROMPT_MODES else "append"
 
 
 def regional_global_prompt(data: dict, compiled: dict, bound_loras: set[str]) -> str:
@@ -3143,6 +3151,11 @@ def build_workflow(data: dict) -> dict:
                         1.0, 8.0, integer=False)
         hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.35),
                                 0.05, 1.0, integer=False)
+        if bool(data.get("hiresCompositionLock", False)) and hires_denoise > 0.35:
+            # "Keep the first-stage framing" is a real guard, not just a UI hint:
+            # API and mobile callers get the same protection against a second
+            # pass that redraws the composition.
+            hires_denoise = 0.35
         hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 1, 150)
         hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 1, 30, integer=False)
         hires_sampler = str(hires_defaults.get("sampler", "auto") or "auto")
@@ -3163,10 +3176,14 @@ def build_workflow(data: dict) -> dict:
         hires_mode = normalized_hires_prompt_mode(data)
         if regional_mode:
             hires_mode = "inherit"
+        hires_supplement_positive = str(data.get("hiresPositive", "") or "").strip()[:4000]
+        hires_supplement_negative = str(data.get("hiresNegative", "") or "").strip()[:4000]
+        if hires_mode == "append" and not (hires_supplement_positive or hires_supplement_negative):
+            # Appending nothing is identical to inheriting; keep the graph lean.
+            hires_mode = "inherit"
         hires_positive_text, hires_negative_text = merge_hires_prompt(
             base_positive, negative,
-            str(data.get("hiresPositive", "") or "")[:4000],
-            str(data.get("hiresNegative", "") or "")[:4000], hires_mode)
+            hires_supplement_positive, hires_supplement_negative, hires_mode)
         hires_positive_ref, hires_negative_ref = positive_ref, negative_ref
         if hires_mode != "inherit":
             hires_positive_id, hires_negative_id = alloc(), alloc()

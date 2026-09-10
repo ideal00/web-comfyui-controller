@@ -323,11 +323,14 @@ function snapshotGeneration(
   const scalarKeys = [
     'steps', 'cfg', 'sampler', 'scheduler', 'hiresScale', 'hiresDenoise', 'hiresSteps',
     'hiresCfg', 'hiresSampler', 'hiresScheduler', 'hiresPromptMode', 'hiresPositive',
-    'hiresNegative', 'styleFamily', 'illustriousMode',
+    'hiresNegative', 'hiresCompositionLock', 'styleFamily', 'illustriousMode',
   ] as const
   for (const key of scalarKeys) {
     const value = payload[key] ?? sourceGeneration[key] ?? enhancements[key]
-    if (typeof value === 'string' || typeof value === 'number') result[key] = value as never
+    if (typeof value === 'string' || typeof value === 'number' ||
+        (key === 'hiresCompositionLock' && typeof value === 'boolean')) {
+      result[key] = value as never
+    }
   }
   const sourceLoras = Array.isArray(source.loras) ? source.loras : []
   const payloadLoras = Array.isArray(payload.loras) ? payload.loras : sourceLoras

@@ -131,7 +131,7 @@ Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Pane
 ```
 
 `generation` 还可以携带与桌面面板同名的高级参数：`steps`、`cfg`、`sampler`、`scheduler`、`illustriousMode`、`guidance`、`vae`、`modelEnhancement` 等。高清二次采样使用 `hiresScale`、`hiresDenoise`、`hiresSteps`、`hiresCfg`、`hiresSampler`、`hiresScheduler`，并可用
-`hiresPromptMode`（`inherit` / `append` / `replace`，默认 `inherit`）、`hiresPositive`、`hiresNegative` 指定二采提示词：
+`hiresPromptMode`（`inherit` / `append` / `replace`，默认 `append`）、`hiresPositive`、`hiresNegative` 指定二采提示词，用 `hiresCompositionLock` 开启“优先保持首采构图”（二采重绘幅度强制 ≤ 0.35）：
 
 ```json
 "generation": {
@@ -142,11 +142,12 @@ Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Pane
   "hiresCfg": 4.0,
   "hiresPromptMode": "append",
   "hiresPositive": "torn clothes, bloodstains, detailed fabric texture",
-  "hiresNegative": ""
+  "hiresNegative": "",
+  "hiresCompositionLock": true
 }
 ```
 
-首采提示词决定构图，二采提示词只负责补细节：`inherit` 直接沿用首采；`append` 在首采基础上追加；`replace` 完全独立（某一框留空时该项沿用首采）。多人区域提示词开启时二采会按 `inherit` 处理，请勿同时依赖区域蒙版与独立二采提示词。
+首采提示词决定构图，二采提示词只负责补细节：`inherit` 直接沿用首采；`append` 在首采基础上追加（留空则等同 `inherit`，不会白白多建节点）；`replace` 完全独立（某一框留空时该项沿用首采）。多人区域提示词开启时二采会按 `inherit` 处理，请勿同时依赖区域蒙版与独立二采提示词。
 
 `requestId` 是幂等键：同一个 `requestId` 因网络超时而重复 POST 时，Easy Panel 会返回已有任务，不会再次提交 ComfyUI。
 
