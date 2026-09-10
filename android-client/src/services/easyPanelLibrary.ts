@@ -39,6 +39,12 @@ export interface EasyPanelGenerationSummary {
   parent_count: number
   child_count: number
   thumbnail_url?: string | null
+  /** 入选（最佳版本）标记；只是作品标记，不影响任何生成参数。 */
+  favorite?: boolean
+  /** 0–5 星人工评分。 */
+  rating?: number
+  /** 人工备注，最多 2000 字。 */
+  note?: string
 }
 
 export interface EasyPanelGenerationArtifact {
@@ -138,6 +144,7 @@ export interface EasyPanelLibraryQuery {
   operation?: EasyPanelLibraryOperation | ''
   status?: EasyPanelLibraryStatus | ''
   model?: string
+  favorite?: 'favorite' | 'unfavorite' | ''
   sort?: 'created_at' | 'updated_at' | 'status' | 'operation' | 'model'
   order?: 'asc' | 'desc'
 }
@@ -152,6 +159,7 @@ export async function getEasyPanelLibrary(
   if (query.operation) params.set('operation', query.operation)
   if (query.status) params.set('status', query.status)
   if (query.model?.trim()) params.set('model', query.model.trim().slice(0, 200))
+  if (query.favorite === 'favorite' || query.favorite === 'unfavorite') params.set('favorite', query.favorite)
   if (query.sort) params.set('sort', query.sort)
   if (query.order) params.set('order', query.order)
   return jsonRequest<EasyPanelLibraryListResponse>(config, `/api/rpg/library/generations?${params.toString()}`)
@@ -199,6 +207,36 @@ export function safeGenerationId(value: string): string {
   const id = value.trim().toLowerCase()
   if (!/^[0-9a-f]{32}$/u.test(id)) throw new Error('作品编号无效。')
   return id
+}
+
+/** 与网页端一致：作品标记不属于生成参数，不会创建新版本。 */
+export function libraryFlagsPayload(patch: {
+  favorite?: boolean
+  rating?: number
+  note?: string
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  if (Object.prototype.hasOwnProperty.call(patch, 'favorite')) body.favorite = Boolean(patch.favorite)
+  if (Object.prototype.hasOwnProperty.call(patch, 'rating') && Number.isFinite(patch.rating)) {
+    body.rating = Math.min(5, Math.max(0, Math.round(patch.rating as number)))
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'note')) body.note = String(patch.note ?? '').slice(0, 2000)
+  return body
+}
+
+/** Mark a generation as 入选 / 评分 / 备注 without touching the recipe. */
+export async function setEasyPanelGenerationFlags(
+  config: EasyPanelVisualConfig,
+  generationId: string,
+  patch: { favorite?: boolean; rating?: number; note?: string },
+): Promise<EasyPanelLibraryDetailResponse> {
+  const id = safeGenerationId(generationId)
+  const body = libraryFlagsPayload(patch)
+  if (!Object.keys(body).length) throw new Error('没有需要保存的收藏字段。')
+  return jsonRequest<EasyPanelLibraryDetailResponse>(config, '/api/rpg/library/favorite', {
+    method: 'POST',
+    body: JSON.stringify({ generation_id: id, ...body }),
+  })
 }
 
 function clampInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {

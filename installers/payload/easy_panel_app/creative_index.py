@@ -266,6 +266,45 @@ def _new_id() -> str:
     return secrets.token_hex(16)
 
 
+def _flag_value(value: Any) -> bool:
+    """Coerce the review flags accepted from web, mobile and JSON stores."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().casefold() in {
+        "1", "true", "yes", "on", "star", "favorite", "favourite", "入选", "最佳",
+    }
+
+
+def _note_text(value: Any, limit: int = 2000) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _row_flag(row: sqlite3.Row, name: str) -> bool:
+    """Read a 0/1 column that may be absent from a not-yet-migrated row."""
+
+    try:
+        return bool(row[name])
+    except (IndexError, KeyError):
+        return False
+
+
+def _row_int(row: sqlite3.Row, name: str) -> int:
+    try:
+        return int(row[name] or 0)
+    except (IndexError, KeyError, TypeError, ValueError):
+        return 0
+
+
+def _row_text(row: sqlite3.Row, name: str, limit: int = 2000) -> str:
+    try:
+        return str(row[name] or "")[:limit]
+    except (IndexError, KeyError):
+        return ""
+
+
 _STABLE_ID_NAMESPACE = "easy-panel:creative-index:stable-id:v1"
 
 
@@ -488,6 +527,11 @@ class CreativeIndex:
                 "workflow_json": "TEXT NOT NULL DEFAULT '{}'",
                 "snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
                 "error_json": "TEXT NOT NULL DEFAULT '{}'",
+                # Review fields are additive and default-valued, so an older
+                # database keeps working and the migration stays retryable.
+                "favorite": "INTEGER NOT NULL DEFAULT 0",
+                "rating": "INTEGER NOT NULL DEFAULT 0",
+                "note": "TEXT NOT NULL DEFAULT ''",
             },
             "artifacts": {
                 "generation_id": "TEXT",
@@ -562,7 +606,10 @@ class CreativeIndex:
                 inference_json TEXT NOT NULL DEFAULT '{}',
                 workflow_json TEXT NOT NULL DEFAULT '{}',
                 snapshot_json TEXT NOT NULL DEFAULT '{}',
-                error_json TEXT NOT NULL DEFAULT '{}'
+                error_json TEXT NOT NULL DEFAULT '{}',
+                favorite INTEGER NOT NULL DEFAULT 0,
+                rating INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -1252,6 +1299,9 @@ class CreativeIndex:
             "width": row["width"],
             "height": row["height"],
             "quality": row["quality"] or "",
+            "favorite": _row_flag(row, "favorite"),
+            "rating": _row_int(row, "rating"),
+            "note": _row_text(row, "note"),
             "lora_count": int(lora_count),
             "artifact_count": int(artifact_count),
             "parent_count": int(parent_count),
@@ -1484,6 +1534,49 @@ class CreativeIndex:
             "artifact_count": len(targets),
         }
 
+    def set_generation_flags(
+        self,
+        generation_id: Any,
+        *,
+        favorite: Any = None,
+        rating: Any = None,
+        note: Any = None,
+    ) -> dict[str, Any] | None:
+        """Save the human review state (入选 / 评分 / 备注) of one generation.
+
+        These fields never change the recipe: the snapshot payload stays the
+        same, so 收藏 marks a version instead of creating a new one.
+        """
+
+        wanted = _safe_generation_id(generation_id)
+        assignments: list[str] = []
+        params: list[Any] = []
+        if favorite is not None:
+            assignments.append("favorite = ?")
+            params.append(1 if _flag_value(favorite) else 0)
+        if rating is not None:
+            assignments.append("rating = ?")
+            params.append(max(0, min(5, _safe_int(rating, 0) or 0)))
+        if note is not None:
+            assignments.append("note = ?")
+            params.append(_note_text(note))
+        if not assignments:
+            raise CreativeIndexError("没有需要保存的收藏字段。")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM generations WHERE generation_id = ?", (wanted,)
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                f"UPDATE generations SET {', '.join(assignments)} WHERE generation_id = ?",
+                tuple(params) + (wanted,),
+            )
+            updated = connection.execute(
+                "SELECT * FROM generations WHERE generation_id = ?", (wanted,)
+            ).fetchone()
+            return self._summary_from_row(connection, updated) if updated else None
+
     def list_generations(
         self,
         *,
@@ -1492,6 +1585,7 @@ class CreativeIndex:
         operation: Any = "",
         status: Any = "",
         model: Any = "",
+        favorite: Any = None,
         sort: Any = "created_at",
         order: Any = "desc",
     ) -> dict[str, Any]:
@@ -1512,9 +1606,16 @@ class CreativeIndex:
         if state:
             where.append("g.status = ?")
             params.append(state)
+        favorite_filter = str(favorite or "").strip().casefold()
+        if favorite_filter in {"1", "true", "yes", "favorite", "favourite", "star", "入选"}:
+            where.append("g.favorite = 1")
+        elif favorite_filter in {"0", "false", "no", "unfavorite", "unfavourite", "未入选"}:
+            where.append("g.favorite = 0")
         if model_filter:
             where.append("LOWER(g.model) LIKE LOWER(?)")
             params.append(f"%{model_filter}%")
+        if _flag_value(favorite):
+            where.append("g.favorite = 1")
         where_sql = " WHERE " + " AND ".join(where) if where else ""
         with self._connection() as connection:
             total = int(connection.execute(f"SELECT COUNT(*) FROM generations g{where_sql}", tuple(params)).fetchone()[0])

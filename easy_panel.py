@@ -4535,6 +4535,7 @@ class Handler(BaseHTTPRequestHandler):
                     operation=operation,
                     status=status,
                     model=query.get("model", [""])[0],
+                    favorite=query.get("favorite", [""])[0],
                     sort=query.get("sort", ["created_at"])[0],
                     order=query.get("order", ["desc"])[0],
                 )
@@ -4841,7 +4842,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -4896,6 +4897,27 @@ class Handler(BaseHTTPRequestHandler):
                     "api_version": RPG_API_VERSION,
                     "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
                     **result,
+                })
+                return
+            if self.path == "/api/rpg/library/favorite":
+                generation_id = str(data.get("generation_id") or "").strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{32}", generation_id):
+                    raise ValueError("作品编号无效。")
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                updated = creative_index.set_generation_flags(
+                    generation_id,
+                    favorite=data["favorite"] if "favorite" in data else None,
+                    rating=data["rating"] if "rating" in data else None,
+                    note=data["note"] if "note" in data else None,
+                )
+                if updated is None:
+                    self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "generation": updated,
                 })
                 return
             if self.path in {"/api/prompt-instruction", "/api/rpg/prompt-instruction"}:

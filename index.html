@@ -175,7 +175,7 @@
       <div class="status" id="status">正在读取 ComfyUI 模型…</div>
       <div id="pendingDerivation" class="pending-derivation" hidden role="status" aria-live="polite"><span id="pendingDerivationText"></span><button class="secondary" type="button" onclick="clearPendingDerivationContext()">取消派生关联</button></div>
       <button class="primary" id="generate" onclick="generate()">生成图片</button>
-      <div class="actions" style="margin-top:6px"><button class="secondary" type="button" onclick="enqueueJob()">＋ 加入任务队列</button><button class="secondary" type="button" onclick="sendJobQueue()">发送队列（<span id="jobQueueCount">0</span>）</button><button class="secondary" type="button" onclick="clearJobQueue()">清空队列</button></div>
+      <div class="actions" style="margin-top:6px"><button class="secondary" type="button" onclick="enqueueJob()">＋ 加入任务队列</button><button class="secondary" type="button" onclick="openBatchExperiment()" title="固定其它参数，只改动一个变量批量对比">单变量实验</button><button class="secondary" type="button" onclick="sendJobQueue()">发送队列（<span id="jobQueueCount">0</span>）</button><button class="secondary" type="button" onclick="clearJobQueue()">清空队列</button></div>
       <div id="jobQueueList" class="small" style="margin-top:6px"></div>
       </div>
       <details><summary>严格 LoRA 对比实验室</summary><div class="color-panel"><div class="small">点击创建时冻结当前模型、最终提示词、seed、尺寸、采样器和全部增强参数；每个变体只改变 LoRA 顺序或一个 LoRA 的权重。</div><div class="two" style="margin-top:8px"><div><div class="field-title"><span>实验类型</span></div><select id="experimentMode" onchange="renderExperimentControls()"><option value="order">全部 LoRA 顺序排列</option><option value="weight">单个 LoRA 权重扫描</option></select></div><div><div class="field-title"><span>每个变体的种子数</span></div><input id="experimentSeeds" type="number" min="1" max="4" step="1" value="1"></div></div><div id="experimentWeightControls"><div class="field-title"><span>扫描对象</span></div><select id="experimentLora"></select><div class="field-title"><span>权重列表</span><span class="small">逗号分隔，最多 8 个</span></div><input id="experimentWeights" value="0.50, 0.65, 0.80, 0.95"></div><div class="actions"><button type="button" onclick="createStrictExperiment()">冻结基线并加入对比队列</button></div><div id="experimentInfo" class="small"></div></div></details>
@@ -281,6 +281,7 @@
       <form id="creativeLibraryFilters" class="creative-library-filters">
         <label>操作<select id="creativeLibraryOperation"><option value="">全部操作</option><option value="txt2img">文生图</option><option value="seed_variant">换 Seed</option><option value="img2img">图生图</option><option value="inpaint">局部重绘</option><option value="face_fix">修脸</option><option value="hand_fix">修手</option><option value="upscale">放大</option><option value="outfit_change">换服装</option><option value="scene_change">换场景</option><option value="style_change">换风格</option><option value="unknown">未知操作</option></select></label>
         <label>状态<select id="creativeLibraryStatus"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">生成中</option><option value="completed">已完成</option><option value="error">失败</option><option value="cancelled">已取消</option><option value="unknown">未知状态</option></select></label>
+        <label>收藏<select id="creativeLibraryFavorite"><option value="">全部作品</option><option value="favorite">★ 已入选</option><option value="unfavorite">未入选</option></select></label>
         <label class="creative-library-model-filter">模型<input id="creativeLibraryModel" type="search" maxlength="200" autocomplete="off" placeholder="按模型名称筛选"></label>
         <label>排序<select id="creativeLibrarySort"><option value="created_at">创建时间</option><option value="updated_at">更新时间</option><option value="status">状态</option><option value="operation">操作</option><option value="model">模型</option></select></label>
         <label>顺序<select id="creativeLibraryOrder"><option value="desc">降序</option><option value="asc">升序</option></select></label>
@@ -353,6 +354,8 @@
 <script src="/assets/js/transparent-background.js?v=1"></script>
 <script src="/assets/js/snapshot-flow.js?v=2"></script>
 <script src="/assets/js/result-workbench.js?v=1"></script>
-<script src="/assets/js/creative-library.js?v=4"></script>
+<script src="/assets/js/creative-library.js?v=5"></script>
+<script src="/assets/js/preflight-check.js?v=1"></script>
+<script src="/assets/js/batch-experiment.js?v=1"></script>
 </body>
 </html>

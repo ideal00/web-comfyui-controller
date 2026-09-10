@@ -6,6 +6,7 @@
     'hand_fix', 'upscale', 'outfit_change', 'scene_change', 'style_change', 'unknown',
   ]);
   const STATUSES = Object.freeze(['queued', 'running', 'completed', 'error', 'cancelled', 'unknown']);
+  const FAVORITES = Object.freeze(['favorite', 'unfavorite']);
   const PAGE_SIZE = 24;
   const MAX_PAGE_SIZE = 100;
   const MAX_OFFSET = 1000000;
@@ -37,6 +38,8 @@
     if (status) params.set('status', status);
     const model = asText(input.model).slice(0, 200);
     if (model) params.set('model', model);
+    const favorite = oneOf(input.favorite, FAVORITES);
+    if (favorite) params.set('favorite', favorite);
     const sort = oneOf(input.sort, ['created_at', 'updated_at', 'status', 'operation', 'model']);
     const order = oneOf(input.order, ['asc', 'desc']);
     if (sort) params.set('sort', sort);
@@ -423,6 +426,7 @@
       const heading = createElement('span', 'creative-library-item-heading');
       heading.append(createElement('strong', '', asText(item.model) || '自动模型'));
       heading.append(createElement('small', '', formatTime(item.created_at)));
+      if (item.favorite) heading.append(createElement('span', 'creative-library-star-mark', '★ 入选'));
       const operation = createElement('span', 'creative-library-item-operation', `${operationLabel(item.operation)} · ${statusLabel(item.status)}`);
       const details = createElement('span', 'creative-library-item-details', `seed ${item.seed == null ? '?' : item.seed} · ${item.width || '?'}×${item.height || '?'}`);
       const markers = createElement('span', 'creative-library-item-markers');
@@ -430,6 +434,16 @@
       copy.append(heading, operation, details, markers);
       button.append(thumb, copy);
       wrap.append(button);
+      const star = createElement('button', 'creative-library-item-star', item.favorite ? '★' : '☆');
+      star.type = 'button';
+      star.title = item.favorite ? '取消入选标记' : '标记为入选（最佳版本）';
+      star.setAttribute('aria-pressed', item.favorite ? 'true' : 'false');
+      star.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        saveFlags(item.generation_id, { favorite: !item.favorite });
+      });
+      wrap.append(star);
       const remove = createElement('button', 'creative-library-item-delete', '删除');
       remove.type = 'button';
       remove.title = '删除记录与对应本地图片（需二次确认）';
@@ -461,10 +475,69 @@
     return {
       operation: byId('creativeLibraryOperation')?.value || '',
       status: byId('creativeLibraryStatus')?.value || '',
+      favorite: byId('creativeLibraryFavorite')?.value || '',
       model: byId('creativeLibraryModel')?.value || '',
       sort: byId('creativeLibrarySort')?.value || 'created_at',
       order: byId('creativeLibraryOrder')?.value || 'desc',
     };
+  }
+
+  function favoriteFlags(item) {
+    const source = item && typeof item === 'object' ? item : {};
+    return {
+      favorite: Boolean(source.favorite),
+      rating: clampInteger(source.rating, 0, 0, 5),
+      note: asText(source.note).slice(0, 2000),
+    };
+  }
+
+  function flagsPayload(patch) {
+    const source = patch && typeof patch === 'object' ? patch : {};
+    const body = {};
+    if (Object.prototype.hasOwnProperty.call(source, 'favorite')) body.favorite = Boolean(source.favorite);
+    if (Object.prototype.hasOwnProperty.call(source, 'rating')) body.rating = clampInteger(source.rating, 0, 0, 5);
+    if (Object.prototype.hasOwnProperty.call(source, 'note')) body.note = asText(source.note).slice(0, 2000);
+    return body;
+  }
+
+  function applyFlagsLocally(generationId, body) {
+    const merge = (item) => (item && item.generation_id === generationId ? { ...item, ...body } : item);
+    state.items = state.items.map(merge);
+    if (state.detail && state.detail.generation_id === generationId) {
+      state.detail = { ...state.detail, ...body };
+    }
+  }
+
+  // 收藏 / 评分 / 备注只是人对作品的标记，不会改变任何生成参数，
+  // 因此先把界面状态改好再同步到电脑端；失败时也只会影响这个标记本身。
+  function saveFlags(generationId, patch, options) {
+    let id;
+    try { id = safeGenerationId(generationId); } catch (error) { showNotice(error.message, 'error'); return; }
+    const body = flagsPayload(patch);
+    if (!Object.keys(body).length) return;
+    const rerender = !options || options.rerender !== false;
+    applyFlagsLocally(id, body);
+    renderList();
+    if (rerender && state.detail) renderDetail();
+    (async () => {
+      try {
+        const data = await postJson('/api/rpg/library/favorite', state.token, { generation_id: id, ...body });
+        const updated = data && data.generation;
+        if (updated && updated.generation_id) applyFlagsLocally(id, favoriteFlags(updated));
+        renderList();
+        if (state.detail) renderDetail();
+        if (Object.prototype.hasOwnProperty.call(body, 'favorite')) {
+          showNotice(body.favorite ? '已标记为入选（最佳版本）。' : '已取消入选标记。', 'success');
+        } else if (Object.prototype.hasOwnProperty.call(body, 'rating')) {
+          showNotice('评分已保存。', 'success');
+        } else {
+          showNotice('备注已保存。', 'success');
+        }
+      } catch (error) {
+        showNotice(libraryErrorMessage(error, '保存收藏标记'), errorStatus(error) === 404 ? 'warning' : 'error');
+        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
+      }
+    })();
   }
 
   function detailFromResponse(data) {
@@ -673,6 +746,40 @@
     appendMeta(copy, 'Seed', detail.seed == null ? '?' : detail.seed);
     appendMeta(copy, '尺寸 / 质量', `${detail.width || '?'}×${detail.height || '?'} · ${asText(detail.quality) || '自定义'}`);
     appendMeta(copy, '作品 ID', detail.generation_id);
+    const flags = favoriteFlags(detail);
+    const favoriteRow = createElement('div', 'creative-library-flags');
+    const favoriteButton = createElement(
+      'button',
+      flags.favorite ? 'primary creative-library-star' : 'secondary creative-library-star',
+      flags.favorite ? '★ 已入选' : '☆ 设为入选',
+    );
+    favoriteButton.type = 'button';
+    favoriteButton.setAttribute('aria-pressed', flags.favorite ? 'true' : 'false');
+    favoriteButton.title = '入选标记只记录“这是当前最佳版本”，不会改变生成参数。';
+    favoriteButton.addEventListener('click', () => saveFlags(detail.generation_id, { favorite: !flags.favorite }));
+    const ratingLabel = createElement('label', 'creative-library-rating', '评分');
+    const ratingSelect = createElement('select');
+    [0, 1, 2, 3, 4, 5].forEach((value) => {
+      const option = createElement('option', '', value ? '★'.repeat(value) : '未评分');
+      option.value = String(value);
+      if (flags.rating === value) option.selected = true;
+      ratingSelect.append(option);
+    });
+    ratingSelect.addEventListener('change', () => saveFlags(detail.generation_id, { rating: Number(ratingSelect.value) }));
+    ratingLabel.append(ratingSelect);
+    const noteLabel = createElement('label', 'creative-library-note', '备注');
+    const noteInput = createElement('input');
+    noteInput.type = 'text';
+    noteInput.maxLength = 200;
+    noteInput.value = flags.note;
+    noteInput.placeholder = '例如：构图最好 / 手部需要重绘';
+    // 备注输入时不重建详情面板，避免光标丢失。
+    noteInput.addEventListener('change', () => {
+      saveFlags(detail.generation_id, { note: noteInput.value }, { rerender: false });
+    });
+    noteLabel.append(noteInput);
+    favoriteRow.append(favoriteButton, ratingLabel, noteLabel);
+    copy.append(favoriteRow);
     summary.append(preview, copy);
     root.append(summary);
 

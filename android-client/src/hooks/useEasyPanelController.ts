@@ -39,6 +39,7 @@ import {
   getEasyPanelGeneration,
   getEasyPanelLineage,
   getEasyPanelLibrary,
+  setEasyPanelGenerationFlags,
 } from '../services/easyPanelLibrary'
 import type {
   EasyPanelGenerationArtifact,
@@ -123,6 +124,9 @@ export interface EasyPanelController {
   openLibraryGeneration: (id: string) => Promise<boolean>
   clearLibraryDetail: () => void
   deleteLibraryGeneration: (id: string) => Promise<boolean>
+  saveLibraryFlags: (id: string, patch: { favorite?: boolean; rating?: number; note?: string }) => Promise<boolean>
+  libraryFavoriteOnly: boolean
+  toggleLibraryFavoriteFilter: () => void
   restoreLibraryGeneration: (mode?: EasyPanelLibraryRestoreMode) => Promise<boolean>
   clearPendingDerivation: () => void
   downloadLibraryArtifact: (artifact: EasyPanelGenerationArtifact) => Promise<void>
@@ -167,6 +171,8 @@ export function useEasyPanelController(): EasyPanelController {
   const [libraryLoading, setLibraryLoading] = useState(false)
   const [libraryMessage, setLibraryMessage] = useState('连接后读取作品库')
   const [libraryError, setLibraryError] = useState('')
+  // 只看入选作品是纯本地筛选条件，与电脑端请求同时生效。
+  const [libraryFavoriteOnly, setLibraryFavoriteOnly] = useState(false)
   const [libraryDetail, setLibraryDetail] = useState<EasyPanelGenerationDetail>()
   const [libraryLineage, setLibraryLineage] = useState<EasyPanelLibraryLineage>()
   const [libraryThumbnailSources, setLibraryThumbnailSources] = useState<Record<string, string>>({})
@@ -478,7 +484,8 @@ export function useEasyPanelController(): EasyPanelController {
     }
   }, [enqueueLibraryThumbnail])
 
-  const refreshLibrary = useCallback(async () => {
+  const refreshLibrary = useCallback(async (favoriteOnlyOverride?: boolean) => {
+    const favoriteOnly = typeof favoriteOnlyOverride === 'boolean' ? favoriteOnlyOverride : libraryFavoriteOnly
     try {
       normalizeEasyPanelBaseUrl(settings.baseUrl)
     } catch (caught) {
@@ -501,9 +508,15 @@ export function useEasyPanelController(): EasyPanelController {
     setLibraryLineage(undefined)
     setLibraryLoading(true)
     setLibraryError('')
-    setLibraryMessage('正在读取电脑端作品库…')
+    setLibraryMessage(favoriteOnly ? '正在读取入选作品…' : '正在读取电脑端作品库…')
     try {
-      const response = await getEasyPanelLibrary(config, { limit: LIBRARY_PAGE_SIZE, offset: 0, sort: 'created_at', order: 'desc' })
+      const response = await getEasyPanelLibrary(config, {
+        limit: LIBRARY_PAGE_SIZE,
+        offset: 0,
+        favorite: favoriteOnly ? 'favorite' : '',
+        sort: 'created_at',
+        order: 'desc',
+      })
       if (libraryRequestRef.current !== requestNumber) return
       setLibrary(response.items)
       setLibraryTotal(response.total)
@@ -519,7 +532,13 @@ export function useEasyPanelController(): EasyPanelController {
     } finally {
       if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
     }
-  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, resetLibraryThumbnailQueue, settings.baseUrl, settings.token])
+  }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, resetLibraryThumbnailQueue, settings.baseUrl, settings.token, libraryFavoriteOnly])
+
+  const toggleLibraryFavoriteFilter = useCallback(() => {
+    const next = !libraryFavoriteOnly
+    setLibraryFavoriteOnly(next)
+    void refreshLibrary(next)
+  }, [libraryFavoriteOnly, refreshLibrary])
 
   const loadMoreLibrary = useCallback(async () => {
     if (libraryLoading || !libraryHasMore) return
@@ -542,6 +561,7 @@ export function useEasyPanelController(): EasyPanelController {
       const response = await getEasyPanelLibrary(config, {
         limit: LIBRARY_PAGE_SIZE,
         offset,
+        favorite: libraryFavoriteOnly ? 'favorite' : '',
         sort: 'created_at',
         order: 'desc',
       })
@@ -561,7 +581,7 @@ export function useEasyPanelController(): EasyPanelController {
     } finally {
       if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
     }
-  }, [config, library, libraryHasMore, libraryLoading, loadLibraryThumbnails, settings.baseUrl, settings.token])
+  }, [config, library, libraryHasMore, libraryLoading, loadLibraryThumbnails, settings.baseUrl, settings.token, libraryFavoriteOnly])
 
   const openLibraryGeneration = useCallback(async (id: string) => {
     try {
@@ -686,6 +706,41 @@ export function useEasyPanelController(): EasyPanelController {
       return false
     } finally {
       setLibraryLoading(false)
+    }
+  }, [config, settings.baseUrl, settings.token])
+
+  // 收藏 / 评分 / 备注：只标记“这是当前最佳版本”，不会改变任何生成参数。
+  const saveLibraryFlags = useCallback(async (
+    id: string,
+    patch: { favorite?: boolean; rating?: number; note?: string },
+  ) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '保存收藏标记'))
+      return false
+    }
+    if (!settings.token.trim()) {
+      setLibraryError('请先填写 RPG Token，再保存收藏标记。')
+      return false
+    }
+    setLibraryError('')
+    try {
+      const response = await setEasyPanelGenerationFlags(config, id, patch)
+      const updated = response.generation
+      setLibrary((previous) => previous.map((item) => (item.generation_id === id
+        ? { ...item, favorite: updated.favorite, rating: updated.rating, note: updated.note }
+        : item)))
+      setLibraryDetail((previous) => (previous && previous.generation_id === id
+        ? { ...previous, favorite: updated.favorite, rating: updated.rating, note: updated.note }
+        : previous))
+      setLibraryMessage(patch.favorite === undefined
+        ? '作品标记已保存。'
+        : patch.favorite ? '已标记为入选（最佳版本）。' : '已取消入选标记。')
+      return true
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '保存收藏标记'))
+      return false
     }
   }, [config, settings.baseUrl, settings.token])
 
@@ -988,6 +1043,9 @@ export function useEasyPanelController(): EasyPanelController {
     libraryLoading,
     libraryMessage,
     libraryError,
+    libraryFavoriteOnly,
+    toggleLibraryFavoriteFilter,
+    saveLibraryFlags,
     libraryDetail,
     libraryLineage,
     libraryThumbnailSources,

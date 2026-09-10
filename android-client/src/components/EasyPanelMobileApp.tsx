@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Trash2, Wifi, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Star, Trash2, Wifi, X, XCircle } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
@@ -717,12 +717,14 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           onRestore={restore}
           onPreview={(artifact) => void openOriginal(artifact)}
           onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
+          onToggleFavorite={(id, favorite) => void controller.saveLibraryFlags(id, { favorite })}
           onDelete={(id) => void removeGeneration(id)}
         /> : <LibraryList
           items={controller.library}
           thumbnailSources={controller.libraryThumbnailSources}
           total={controller.libraryTotal}
           hasMore={controller.libraryHasMore}
+          favoriteOnly={controller.libraryFavoriteOnly}
           thumbnailLoading={controller.libraryThumbnailLoading}
           loading={controller.libraryLoading}
           error={controller.libraryError}
@@ -730,6 +732,8 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           savedScrollTop={listScrollRef.current}
           onScrollTopChange={(top) => { listScrollRef.current = top }}
           onRefresh={() => void controller.refreshLibrary()}
+          onToggleFavoriteFilter={controller.toggleLibraryFavoriteFilter}
+          onToggleFavorite={(id, favorite) => void controller.saveLibraryFlags(id, { favorite })}
           onLoadMore={() => void controller.loadMoreLibrary()}
           onLoadThumbnail={controller.loadLibraryThumbnail}
           onOpen={(id) => void controller.openLibraryGeneration(id)}
@@ -750,11 +754,12 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
   )
 }
 
-function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading, loading, error, message, savedScrollTop = 0, onScrollTopChange, onRefresh, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
+function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, thumbnailLoading, loading, error, message, savedScrollTop = 0, onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
   total: number
   hasMore: boolean
+  favoriteOnly: boolean
   thumbnailLoading: Record<string, boolean>
   loading: boolean
   error: string
@@ -762,6 +767,8 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
   savedScrollTop?: number
   onScrollTopChange?: (top: number) => void
   onRefresh: () => void
+  onToggleFavoriteFilter: () => void
+  onToggleFavorite: (id: string, favorite: boolean) => void
   onLoadMore: () => void
   onLoadThumbnail: (item: EasyPanelGenerationSummary) => void
   onOpen: (id: string) => void
@@ -821,9 +828,18 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
     >
       <div className="epm-library-toolbar">
         <span>{message}</span>
-        <button type="button" className="epm-quiet-button epm-inline-button" onClick={onRefresh} disabled={loading}>
-          {loading ? <LoaderCircle size={15} className="epm-spin" /> : <RefreshCw size={15} />}刷新
-        </button>
+        <div className="epm-library-toolbar-actions">
+          <button
+            type="button"
+            className="epm-quiet-button epm-inline-button"
+            aria-pressed={favoriteOnly}
+            title="只看标记为入选（最佳版本）的作品"
+            onClick={onToggleFavoriteFilter}
+          >{favoriteOnly ? <Star size={15} fill="currentColor" /> : <Star size={15} />}只看入选</button>
+          <button type="button" className="epm-quiet-button epm-inline-button" onClick={onRefresh} disabled={loading}>
+            {loading ? <LoaderCircle size={15} className="epm-spin" /> : <RefreshCw size={15} />}刷新
+          </button>
+        </div>
       </div>
       {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
       {items.length ? <>
@@ -841,6 +857,16 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
                 <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
               </div>
             </button>
+            <button
+              type="button"
+              className={item.favorite ? 'epm-library-item-star is-on' : 'epm-library-item-star'}
+              aria-pressed={Boolean(item.favorite)}
+              aria-label={`${item.favorite ? '取消入选' : '标记为入选'} ${item.model || '作品'}`}
+              title={item.favorite ? '取消入选标记' : '标记为入选（最佳版本）'}
+              onClick={() => onToggleFavorite(item.generation_id, !item.favorite)}
+            >
+              {item.favorite ? <Star size={15} fill="currentColor" /> : <Star size={15} />}
+            </button>
             <button type="button" className="epm-library-item-delete" title="删除记录与对应本地图片" aria-label={`删除 ${item.model || '作品'}`} onClick={() => onDelete(item.generation_id)}>
               <Trash2 size={15} />
             </button>
@@ -855,7 +881,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
   )
 }
 
-function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onDelete }: {
+function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onToggleFavorite, onDelete }: {
   detail: EasyPanelGenerationDetail
   lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
   thumbnailSource?: string
@@ -865,6 +891,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
   onRestore: (mode: 'reproduce' | 'seed-variant' | 'continue-edit') => void
   onPreview: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
   onDownload: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
+  onToggleFavorite: (id: string, favorite: boolean) => void
   onDelete: (id: string) => void
 }) {
   const previewArtifact = detail.artifacts.find((artifact) => artifact.exists !== false && Boolean(artifact.url))
@@ -873,7 +900,16 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
     <div className="epm-library-content">
       <div className="epm-library-detail-toolbar">
         <button type="button" className="epm-quiet-button epm-inline-button" onClick={onBack}><ArrowLeft size={15} />返回列表</button>
-        <span>{libraryOperationLabel(detail.operation)} · {libraryStatusLabel(detail.status)}</span>
+        <div className="epm-library-toolbar-actions">
+          <span>{libraryOperationLabel(detail.operation)} · {libraryStatusLabel(detail.status)}</span>
+          <button
+            type="button"
+            className={detail.favorite ? 'epm-quiet-button epm-inline-button is-on' : 'epm-quiet-button epm-inline-button'}
+            aria-pressed={Boolean(detail.favorite)}
+            title={detail.favorite ? '取消入选标记' : '标记为入选（最佳版本）'}
+            onClick={() => onToggleFavorite(detail.generation_id, !detail.favorite)}
+          >{detail.favorite ? <Star size={14} fill="currentColor" /> : <Star size={14} />}{detail.favorite ? '已入选' : '设为入选'}</button>
+        </div>
       </div>
       <div className="epm-library-detail-grid">
         {previewArtifact ? <button type="button" className="epm-library-detail-preview" onClick={() => onPreview(previewArtifact)} aria-label="点击查看原图">
