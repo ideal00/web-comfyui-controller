@@ -1057,7 +1057,14 @@
     remove.type = 'button';
     remove.title = '删除记录并删除电脑端对应的本地图片文件（需二次确认）';
     remove.addEventListener('click', () => { deleteGeneration(detail.generation_id); });
-    actions.append(reproduce, seedVariant, continueEdit, remove);
+    const addToProject = createElement('button', 'secondary', '加入项目');
+    addToProject.type = 'button';
+    addToProject.title = '把这张图归入某个作品项目（角色图集 / 场景等）的分区';
+    addToProject.addEventListener('click', () => {
+      if (typeof global.openProjectPicker === 'function') global.openProjectPicker(detail.generation_id);
+      else showNotice('项目功能尚未载入。', 'error');
+    });
+    actions.append(reproduce, seedVariant, continueEdit, addToProject, remove);
     root.append(actions);
     root.append(createElement('p', 'creative-library-safe-note', '这些操作只恢复参数，不会自动提交任务；请确认后手动点击“生成图片”。'));
     appendGroupSection(root, detail);
@@ -1282,6 +1289,12 @@
     byId('creativeLibraryNext')?.addEventListener('click', goNext);
     byId('creativeLibraryBack')?.addEventListener('click', backToList);
     byId('creativeLibraryDialog')?.addEventListener('close', cleanupAfterClose);
+    global.document.addEventListener('easy-panel:open-generation', (event) => {
+      const generationId = event && event.detail ? asText(event.detail.generationId) : '';
+      if (!generationId) return;
+      state.offset = 0;
+      void loadList().then(() => openDetail(generationId));
+    });
     global.openCreativeLibrary = openDialog;
     global.closeCreativeLibrary = closeDialog;
   }

@@ -104,6 +104,8 @@ from easy_panel_app.queueing import (
     MAX_BATCH_TASKS,
     expand_generation_jobs,
 )
+from easy_panel_app.fingerprint import fingerprint_summary, generation_fingerprint
+from easy_panel_app.task_queue import TaskQueue, TaskQueueRunner
 from easy_panel_app.rpg_api import (
     RPG_API_VERSION,
     RPG_JOB_FILE,
@@ -518,6 +520,320 @@ CREATIVE_RECONCILE_IMAGE_EXTENSIONS = frozenset({
     ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp",
 })
 CREATIVE_RECONCILE_ORPHAN_GRACE_SECONDS = 300
+TASK_QUEUE_FILE = PROJECT_DIR / "task_queue.json"
+_TASK_QUEUE: TaskQueue | None = None
+_TASK_RUNNER: TaskQueueRunner | None = None
+_TASK_QUEUE_LOCK = threading.Lock()
+
+
+def task_queue() -> TaskQueue:
+    """面板侧批量任务队列：可暂停、可取消当前/后续、失败自动跳过。"""
+
+    global _TASK_QUEUE
+    with _TASK_QUEUE_LOCK:
+        if _TASK_QUEUE is None:
+            _TASK_QUEUE = TaskQueue(TASK_QUEUE_FILE)
+        return _TASK_QUEUE
+
+
+def runner_state() -> dict:
+    runner = _TASK_RUNNER
+    return {"alive": bool(runner and runner.alive),
+            "last_error": str(runner.last_error) if runner else ""}
+
+
+def task_label(payload: dict, index: int = 0) -> str:
+    """任务在队列里的显示名：实验项优先用“变量：值”，其次用模型 + seed。"""
+
+    experiment = payload.get("experiment") if isinstance(payload.get("experiment"), dict) else {}
+    label = str(experiment.get("label") or experiment.get("name") or "").strip()
+    value = str(experiment.get("value") or "").strip()
+    if label and value:
+        return f"{label}：{value}"[:120]
+    if label:
+        return label[:120]
+    model = Path(str(payload.get("model") or "")).name or "任务"
+    seed = str(payload.get("seed") or "").strip()
+    return (f"{model} · seed {seed}" if seed else f"{model} · #{index + 1}")[:120]
+
+
+def _duplicate_lookup(payload: dict, *, limit: int = 3) -> dict:
+    fingerprint = generation_fingerprint(payload)
+    if not fingerprint:
+        return {"fingerprint": "", "items": [], "total": 0}
+    try:
+        found = get_creative_index().find_generations_by_fingerprint(fingerprint, limit=limit)
+    except Exception:
+        found = {"items": [], "total": 0}
+    return {"fingerprint": fingerprint, **found}
+
+
+def duplicate_check(data: dict) -> dict:
+    """提交前的重复任务检测：同模型 + 同 LoRA + 同提示词 + 同 seed + 同参数。"""
+
+    if not isinstance(data, dict):
+        raise ValueError("重复检测需要 JSON 对象。")
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
+    found = _duplicate_lookup(payload, limit=int(data.get("limit") or 3))
+    return {"duplicate": bool(found["items"]), "duplicates": found.get("items", []),
+            "fingerprint": found.get("fingerprint", ""), "parts": fingerprint_summary(payload)["parts"]}
+
+
+def add_tasks(data: dict) -> dict:
+    """把一批任务放进面板队列（不再一次向 ComfyUI 倾泻全部任务）。"""
+
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    policy = str((data or {}).get("duplicatePolicy") or "ask").strip().casefold()
+    expanded = expand_generation_jobs(jobs)
+    queue = task_queue()
+    duplicates: list[dict] = []
+    skip_fingerprints: set[str] = set()
+    if policy == "skip":
+        index = get_creative_index()
+        for item in expanded:
+            payload = item["payload"]
+            fingerprint = generation_fingerprint(payload)
+            if not fingerprint or fingerprint in skip_fingerprints:
+                continue
+            try:
+                found = index.find_generations_by_fingerprint(fingerprint, limit=1)
+            except Exception:
+                found = {"items": []}
+            if found["items"]:
+                skip_fingerprints.add(fingerprint)
+                duplicates.append({"fingerprint": fingerprint, "label": task_label(payload),
+                                   "generation_id": found["items"][0]["generation_id"],
+                                   "created_at": found["items"][0]["created_at"]})
+    rows: list[dict] = []
+    for item in expanded:
+        payload = item["payload"]
+        if generation_fingerprint(payload) in skip_fingerprints:
+            continue
+        experiment = payload.get("experiment") if isinstance(payload.get("experiment"), dict) else {}
+        rows.append({
+            "label": task_label(payload, item["image_index"]),
+            "kind": "generate",
+            "payload": payload,
+            "task_index": item["task_index"],
+            "image_index": item["image_index"],
+            "image_count": item["image_count"],
+            "selected": payload.get("selected", True) is not False,
+            "experiment": str(experiment.get("label") or ""),
+            "experiment_variable": str(experiment.get("variable") or ""),
+            "experiment_value": str(experiment.get("value") or ""),
+        })
+    if not rows:
+        queue.note(f"全部 {len(expanded)} 个任务与已有作品完全相同，已跳过重复任务。")
+        return {**queue.snapshot(), "added_count": 0, "duplicates": duplicates,
+                "duplicate_skipped": len(skip_fingerprints)}
+    result = queue.add(rows, message=f"已加入 {len(rows)} 个任务。")
+    if bool((data or {}).get("run", True)):
+        queue.control("run")
+    result["duplicates"] = duplicates
+    result["duplicate_skipped"] = len(skip_fingerprints)
+    return result
+
+
+def comfy_delete_prompts(prompt_ids: list[str]) -> int:
+    """从 ComfyUI 待执行队列里删除指定 task（用于“取消后续”）。"""
+
+    wanted = [str(item) for item in prompt_ids if str(item or "").strip()]
+    if not wanted:
+        return 0
+    try:
+        comfy_json("/queue", "POST", {"delete": wanted})
+    except Exception:
+        return 0
+    return len(wanted)
+
+
+def comfy_interrupt() -> bool:
+    """中断当前正在执行的任务（用于“取消当前”）。"""
+
+    try:
+        comfy_json("/interrupt", "POST", {})
+        return True
+    except Exception:
+        return False
+
+
+def control_tasks(data: dict) -> dict:
+    """运行 / 暂停 / 取消当前 / 取消后续 / 只运行入选 / 清理失败。"""
+
+    action = str((data or {}).get("action") or "").strip().casefold()
+    queue = task_queue()
+    result = queue.control(action, value=(data or {}).get("value"), ids=(data or {}).get("ids"),
+                           selected=(data or {}).get("selected", True))
+    prompt_ids = [str(item) for item in result.pop("prompt_ids", []) if str(item or "").strip()]
+    deleted = comfy_delete_prompts(prompt_ids)
+    interrupted = False
+    if action == "cancel-current":
+        interrupted = comfy_interrupt()
+    result["comfy"] = {"deleted": deleted, "interrupted": interrupted}
+    result["runner"] = runner_state()
+    return result
+
+
+def task_queue_snapshot() -> dict:
+    snapshot = task_queue().snapshot()
+    snapshot["runner"] = runner_state()
+    return snapshot
+
+
+def _comfy_history_images(entry: dict) -> list[dict]:
+    images: list[dict] = []
+    outputs = entry.get("outputs") if isinstance(entry.get("outputs"), dict) else {}
+    for node in outputs.values():
+        if not isinstance(node, dict):
+            continue
+        for image in node.get("images") or []:
+            if isinstance(image, dict) and image.get("filename"):
+                images.append({"filename": str(image["filename"]),
+                               "subfolder": str(image.get("subfolder") or ""),
+                               "type": str(image.get("type") or "output")})
+    return images
+
+
+def _comfy_error_text(status: dict) -> str:
+    messages = status.get("messages") if isinstance(status.get("messages"), list) else []
+    for message in reversed(messages):
+        if isinstance(message, (list, tuple)) and len(message) >= 2 and isinstance(message[1], dict):
+            text = str(message[1].get("exception_message") or "").strip()
+            if text:
+                return text[:400]
+    return "ComfyUI 执行失败。"
+
+
+def task_comfy_probe(prompt_id: str) -> tuple[str, dict]:
+    """查询一个已提交任务的执行状态。"""
+
+    if not prompt_id:
+        return "missing", {}
+    try:
+        history = comfy_json("/history/" + str(prompt_id)) or {}
+    except Exception:
+        return "missing", {}
+    entry = history.get(str(prompt_id))
+    if not isinstance(entry, dict):
+        return "missing", {}
+    status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+    state = str(status.get("status_str") or "").casefold()
+    if state == "error":
+        return "error", {"error": _comfy_error_text(status)}
+    if state in {"success", "completed"}:
+        return "completed", {"images": _comfy_history_images(entry)}
+    return "running", {}
+
+
+def task_comfy_submit(item: dict) -> dict:
+    """提交一个队列任务，并立刻登记创作索引（与单张生成同一套流程）。"""
+
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = comfy_json("/prompt", "POST", build_workflow(payload))
+    prompt_id = str(result.get("prompt_id") or "")
+    snapshot = create_generation_snapshot(payload, prompt_id)
+    indexed = index_snapshot_best_effort(snapshot, source_request=payload, status="queued")
+    return {"prompt_id": prompt_id, "snapshot_id": snapshot["id"],
+            "generation_id": indexed.get("generation_id", "")}
+
+
+def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
+    """任务结束时回写快照输出与创作索引状态（失败不会影响后续任务）。"""
+
+    snapshot_id = str((item or {}).get("snapshot_id") or "")
+    if not snapshot_id:
+        return
+    images = (payload or {}).get("images") if isinstance((payload or {}).get("images"), list) else []
+    if status == "completed" and images:
+        try:
+            attach_snapshot_outputs(snapshot_id, [image.get("filename") if isinstance(image, dict) else image
+                                                  for image in images])
+            return
+        except Exception:
+            pass
+    try:
+        update_creative_index_status_best_effort(snapshot_id, {
+            "status": "error" if status == "error" else "cancelled",
+            "images": images,
+        })
+    except Exception:
+        pass
+
+
+def start_task_queue_runner() -> TaskQueueRunner:
+    """启动面板队列后台线程（单任务串行，便于暂停与取消）。"""
+
+    global _TASK_RUNNER
+    with _TASK_QUEUE_LOCK:
+        if _TASK_RUNNER is None:
+            _TASK_RUNNER = TaskQueueRunner(task_queue(), submit=task_comfy_submit,
+                                           probe=task_comfy_probe, on_outputs=task_queue_outputs)
+            _TASK_RUNNER.start()
+        return _TASK_RUNNER
+
+
+def project_action(data: dict) -> dict:
+    """作品项目：新建 / 分区 / 加入移除 / 精选 / 关联资源。"""
+
+    index = get_creative_index()
+    index.initialize()
+    action = str((data or {}).get("action") or "list").strip().casefold()
+    if action == "list":
+        return index.list_projects()
+    if action == "get":
+        detail = index.get_project((data or {}).get("project_id"))
+        if detail is None:
+            raise ValueError("项目不存在。")
+        return detail
+    if action == "create":
+        return index.create_project((data or {}).get("name"), note=(data or {}).get("note") or "",
+                                    sections=(data or {}).get("sections"))
+    if action == "update":
+        fields = {key: data[key] for key in ("name", "note", "sections", "favorites_group_id")
+                  if key in data and data[key] is not None}
+        if not fields:
+            raise ValueError("没有需要保存的项目字段。")
+        return {"project": index.update_project(data.get("project_id"), **fields)}
+    if action == "delete":
+        removed = index.delete_project((data or {}).get("project_id"))
+        if removed is None:
+            raise ValueError("项目不存在。")
+        return removed
+    if action == "add-items":
+        return index.add_project_items((data or {}).get("project_id"),
+                                       (data or {}).get("generation_ids"),
+                                       section=(data or {}).get("section") or "")
+    if action == "remove-items":
+        return index.remove_project_items((data or {}).get("project_id"),
+                                          item_ids=(data or {}).get("item_ids"),
+                                          generation_ids=(data or {}).get("generation_ids"))
+    if action == "update-item":
+        item = index.update_project_item((data or {}).get("project_id"), (data or {}).get("item_id"),
+                                         section=data.get("section") if "section" in data else None,
+                                         note=data.get("note") if "note" in data else None,
+                                         position=data.get("position") if "position" in data else None)
+        if item is None:
+            raise ValueError("项目条目不存在。")
+        return {"item": item}
+    if action == "set-cover":
+        project = index.set_project_cover((data or {}).get("project_id"),
+                                          artifact_id=(data or {}).get("artifact_id") or "",
+                                          generation_id=(data or {}).get("generation_id") or "")
+        if project is None:
+            raise ValueError("项目不存在。")
+        return {"project": project}
+    if action == "add-link":
+        project = index.add_project_link((data or {}).get("project_id"), (data or {}).get("kind"),
+                                         (data or {}).get("ref"), label=(data or {}).get("label") or "")
+        if project is None:
+            raise ValueError("项目不存在。")
+        return {"project": project}
+    if action == "remove-link":
+        removed = index.remove_project_link((data or {}).get("project_id"), (data or {}).get("link_id"))
+        if removed is None:
+            raise ValueError("项目不存在。")
+        return removed
+    raise ValueError(f"未知的项目操作：{action}")
 
 
 def get_creative_index() -> CreativeIndex:
@@ -4178,6 +4494,8 @@ def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: 
         "id": uuid.uuid4().hex,
         "createdAt": int(time.time() * 1000),
         "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
+        # 任务指纹：用于重复提交检测（同模型 + 同 LoRA + 同提示词 + 同 seed + 同参数）。
+        "fingerprint": generation_fingerprint(clean),
         "promptId": prompt_id,
         "outputs": [],
         "label": str((clean.get("experiment") or {}).get("label", "") or ""),
@@ -4554,6 +4872,26 @@ class Handler(BaseHTTPRequestHandler):
                     "groups": groups["items"],
                     "total": groups["total"],
                 })
+            elif re.fullmatch(r"/api/rpg/library/projects/[0-9a-fA-F]{32}", parsed.path):
+                if not self.require_rpg_auth():
+                    return
+                project_id = parsed.path.rsplit("/", 1)[-1].casefold()
+                creative_index = get_creative_index()
+                creative_index.initialize()
+                detail = creative_index.get_project(project_id)
+                if detail is None:
+                    self.send_json({"error": "项目不存在。"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_json({"api_version": RPG_API_VERSION,
+                                "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION, **detail})
+            elif parsed.path == "/api/rpg/library/projects":
+                if not self.require_rpg_auth():
+                    return
+                creative_index = get_creative_index()
+                creative_index.initialize()
+                projects = creative_index.list_projects()
+                self.send_json({"api_version": RPG_API_VERSION,
+                                "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION, **projects})
             elif re.fullmatch(r"/api/rpg/library/generations/[0-9a-fA-F]{32}/lineage", parsed.path):
                 if not self.require_rpg_auth():
                     return
@@ -4827,6 +5165,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r"[0-9a-f-]{36}", job):
                     raise ValueError("无效任务编号。")
                 self.send_json(comfy_json("/history/" + job))
+            elif parsed.path == "/api/tasks":
+                self.send_json(task_queue_snapshot())
             elif parsed.path == "/output":
                 name = urllib.parse.parse_qs(parsed.query).get("name", [""])[0]
                 safe_name = Path(name).name
@@ -4852,7 +5192,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -5080,9 +5420,40 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             elif self.path == "/api/lora-import-sidecar":
                 self.send_json(import_lora_sidecar(str(data.get("name", ""))))
+            elif self.path == "/api/generate-check":
+                self.send_json(duplicate_check(data))
+            elif self.path == "/api/tasks/add":
+                self.send_json(add_tasks(data))
+            elif self.path == "/api/tasks/control":
+                self.send_json(control_tasks(data))
+            elif self.path == "/api/rpg/library/projects":
+                self.send_json(project_action(data))
             elif self.path == "/api/generate-batch":
                 jobs = data.get("jobs")
+                policy = str(data.get("duplicatePolicy") or "ask").strip().casefold()
                 expanded = expand_generation_jobs(jobs)
+                duplicate_skipped: list[dict] = []
+                if policy == "skip":
+                    duplicated: set[str] = set()
+                    for item in expanded:
+                        fingerprint = generation_fingerprint(item["payload"])
+                        if not fingerprint or fingerprint in duplicated:
+                            continue
+                        found = _duplicate_lookup(item["payload"], limit=1)
+                        if found["items"]:
+                            duplicated.add(fingerprint)
+                            duplicate_skipped.append({
+                                "fingerprint": fingerprint,
+                                "generation_id": found["items"][0]["generation_id"],
+                                "label": task_label(item["payload"]),
+                            })
+                    expanded = [item for item in expanded
+                                if generation_fingerprint(item["payload"]) not in duplicated]
+                if not expanded:
+                    self.send_json({"jobs": [], "logical_tasks": len(jobs), "total_images": 0,
+                                    "skipped_duplicates": duplicate_skipped,
+                                    "message": "全部任务与已有作品完全相同，已跳过重复任务。"})
+                    return
                 # Build every workflow before submitting the first one. This
                 # prevents a malformed late task from leaving a partially sent
                 # queue that the panel can no longer account for.
@@ -5106,8 +5477,24 @@ class Handler(BaseHTTPRequestHandler):
                                       **({"generation_id": indexed["generation_id"]}
                                          if indexed.get("generation_id") else {})})
                 self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
-                                "total_images": len(submitted)})
+                                "total_images": len(submitted),
+                                "skipped_duplicates": duplicate_skipped})
             else:
+                policy = str(data.get("duplicatePolicy") or "ask").strip().casefold()
+                if policy == "skip":
+                    found = _duplicate_lookup(data, limit=1)
+                    if found["items"]:
+                        existing = found["items"][0]
+                        self.send_json({
+                            "skipped": True, "duplicate": True,
+                            "fingerprint": found["fingerprint"],
+                            "generation_id": existing["generation_id"],
+                            "snapshot_id": existing.get("snapshot_id"),
+                            "prompt_id": existing.get("prompt_id"),
+                            "created_at": existing["created_at"],
+                            "message": "发现完全相同的生成任务，已跳过。",
+                        })
+                        return
                 result = comfy_json("/prompt", "POST", build_workflow(data))
                 snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""))
                 indexed = index_snapshot_best_effort(
@@ -5131,5 +5518,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     start_creative_index_reconciler()
+    start_task_queue_runner()
     print(f"Easy Panel: http://{HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

@@ -23,7 +23,7 @@
     { key: 'hiresCfg', label: '二采 CFG', inputId: 'hiresCfg', kind: 'number', hint: '高清阶段 CFG' },
   ];
 
-  const state = { pendingLabel: '', running: false };
+  const state = { pendingLabel: '', pendingVariable: '', pendingValue: '', pendingSelected: true, running: false };
 
   function byId(id) {
     return global.document ? global.document.getElementById(id) : null;
@@ -104,7 +104,11 @@
           strict: false,
           mode: 'single-variable',
           label: state.pendingLabel,
+          variable: state.pendingVariable,
+          value: state.pendingValue,
         };
+        // 未勾选“入选”的取值仍进队列，但标记 selected=false，配合“只运行入选实验”跳过。
+        if (state.pendingSelected === false) data.selected = false;
       }
       return data;
     };
@@ -115,15 +119,21 @@
 
   /* ------------------------------------------------------------------ 执行 */
 
-  function enqueueOne(variable, value) {
+  function enqueueOne(variable, value, selected) {
     if (typeof global.enqueueJob !== 'function') return { ok: false, message: '当前页面缺少任务队列。' };
     const statusNode = byId('status');
     const before = statusNode ? statusNode.textContent : '';
     state.pendingLabel = `实验 ${variable.label}=${value}`;
+    state.pendingVariable = variable.label;
+    state.pendingValue = String(value);
+    state.pendingSelected = selected !== false;
     try {
       global.enqueueJob();
     } finally {
       state.pendingLabel = '';
+      state.pendingVariable = '';
+      state.pendingValue = '';
+      state.pendingSelected = true;
     }
     const after = statusNode ? statusNode.textContent : '';
     const failed = /失败/u.test(after) && after !== before;
@@ -143,11 +153,13 @@
     const original = currentValue(variable);
     const queuedValues = [];
     const failures = [];
+    const selection = Array.isArray(options && options.selectedValues) ? options.selectedValues : null;
     state.running = true;
     try {
       parsed.values.forEach((value) => {
         if (!writeVariable(variable, value)) return;
-        const result = enqueueOne(variable, value);
+        const selected = selection ? selection.indexOf(String(value)) >= 0 : true;
+        const result = enqueueOne(variable, value, selected);
         if (result.ok) queuedValues.push(value);
         else failures.push(`${value}：${result.message}`);
       });
@@ -207,6 +219,9 @@
     const preview = createElement('p', 'small batch-experiment-preview');
     preview.id = 'batchExperimentPreview';
 
+    const selectionBox = createElement('div', 'batch-experiment-selection small');
+    selectionBox.id = 'batchExperimentSelection';
+
     const footer = createElement('div', 'actions');
     const cancel = createElement('button', 'secondary', '取消');
     cancel.type = 'button';
@@ -216,7 +231,7 @@
     start.type = 'button';
     footer.append(cancel, enqueue, start);
 
-    dialog.append(head, variableLabel, valueLabel, currentHint, hint, autoLabel, preview, footer);
+    dialog.append(head, variableLabel, valueLabel, currentHint, hint, autoLabel, preview, selectionBox, footer);
 
     let lastFocus = null;
 
@@ -237,6 +252,31 @@
       }
       if (parsed.invalid.length) parts.push(`忽略无效取值：${parsed.invalid.join('、')}`);
       preview.textContent = parts.join(' ');
+      renderSelection(parsed.values);
+    }
+
+    /* 每个取值一个勾选框：取消勾选的取值仍会进队列，但由“只运行入选实验”跳过。 */
+    function renderSelection(values) {
+      const previous = {};
+      selectionBox.querySelectorAll('input[type=checkbox]').forEach((input) => {
+        previous[input.value] = input.checked;
+      });
+      selectionBox.textContent = values.length ? '入选（不打勾的取值会在队列里标记为跳过）：' : '';
+      values.forEach((value) => {
+        const label = createElement('label', 'batch-experiment-selection-item');
+        const input = createElement('input');
+        input.type = 'checkbox';
+        input.value = String(value);
+        input.checked = previous[String(value)] !== false;
+        label.append(input, global.document.createTextNode(' ' + value));
+        selectionBox.append(label);
+      });
+    }
+
+    function selectedValues() {
+      return Array.from(selectionBox.querySelectorAll('input[type=checkbox]'))
+        .filter((input) => input.checked)
+        .map((input) => input.value);
     }
 
     function close() {
@@ -250,6 +290,7 @@
         key: select.value,
         values: valueInput.value,
         autoSend,
+        selectedValues: selectedValues(),
       });
       if (result.stopped) {
         setStatus(result.stopped);
@@ -257,6 +298,7 @@
       }
       const pieces = [`已加入 ${result.queued} 个单变量实验任务（${result.variable.label}）`];
       if (result.values.length) pieces.push(result.values.join(' / '));
+      pieces.push('未入选项会在“只运行入选实验”模式下跳过');
       if (result.failures && result.failures.length) pieces.push(`失败：${result.failures.join('；')}`);
       if (result.skipped && result.skipped.length) pieces.push(`忽略：${result.skipped.join('、')}`);
       setStatus(pieces.join('；') + '。');

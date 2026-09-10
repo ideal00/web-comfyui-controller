@@ -30,6 +30,13 @@ rpg_visual_profiles.json
 generation_snapshots.json
 generation_snapshots.tmp
 
+# ===== 面板批量任务队列（本机运行状态）与创作索引数据库 =====
+task_queue.json
+task_queue.json.tmp
+creative_index.sqlite3
+creative_index.sqlite3-wal
+creative_index.sqlite3-shm
+
 # ===== 本地截图 / 杂项 =====
 panel_layout_check.png
 

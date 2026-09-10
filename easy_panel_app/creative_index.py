@@ -28,6 +28,14 @@ MAX_PAGE_SIZE = 100
 GROUP_NAME_LIMIT = 60
 MAX_FAVORITE_GROUPS = 200
 MAX_GROUPS_PER_GENERATION = 24
+# 作品项目：一个项目 = 一次角色/场景创作，可包含多个分区与关联资源。
+PROJECT_NAME_LIMIT = 60
+PROJECT_SECTION_LIMIT = 24
+MAX_PROJECTS = 100
+MAX_PROJECT_ITEMS = 500
+MAX_PROJECT_LINKS = 120
+DEFAULT_PROJECT_SECTIONS = ("基准角色", "日常服装", "战斗服装", "废墟场景", "夜景", "最终精选")
+PROJECT_LINK_KINDS = ("lora", "preset", "experiment", "favorite_group")
 # 高清二采会把首采图另存为 <前缀>_base_*.png；它只是对照用途，不能当作品代表图。
 HIRES_BASE_FILE_MARKER = "_base_"
 MAX_OFFSET = 1_000_000
@@ -325,6 +333,55 @@ def _group_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _snapshot_fingerprint(snapshot: Mapping[str, Any]) -> str:
+    """读快照里的任务指纹（兼容 input / inference / 顶层三种写法）。"""
+
+    for container in (snapshot, snapshot.get("input"), snapshot.get("inference")):
+        if isinstance(container, Mapping):
+            value = container.get("fingerprint") or container.get("fingerprints")
+            if isinstance(value, Mapping):
+                value = value.get("hash")
+            text = _safe_text(value, 128).casefold()
+            if text:
+                return text
+    return ""
+
+
+def _normalized_project_name(value: Any) -> str:
+    name = " ".join(str(value or "").split())
+    if not name:
+        raise CreativeIndexError("项目名称不能为空。")
+    return name[:PROJECT_NAME_LIMIT]
+
+
+def _safe_project_id(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    if not re.fullmatch(r"[0-9a-f]{32}", text):
+        raise CreativeIndexError("项目编号无效。")
+    return text
+
+
+def _safe_project_sections(value: Any) -> list[str]:
+    """项目分区名：去重、限量，空值回退到默认分区。"""
+
+    raw = value if isinstance(value, (list, tuple)) else []
+    sections: list[str] = []
+    for entry in raw:
+        name = " ".join(str(entry or "").split())[:PROJECT_SECTION_LIMIT]
+        if name and name not in sections:
+            sections.append(name)
+        if len(sections) >= 16:
+            break
+    return sections or list(DEFAULT_PROJECT_SECTIONS)
+
+
+def _safe_link_kind(value: Any) -> str:
+    kind = str(value or "").strip().casefold()
+    if kind not in PROJECT_LINK_KINDS:
+        raise CreativeIndexError("项目关联类型无效。")
+    return kind
+
+
 def is_hires_base_filename(value: Any) -> bool:
     """True for the first-pass hires image (``<prefix>_base_00001_.png``)."""
 
@@ -614,6 +671,7 @@ class CreativeIndex:
                 "favorite": "INTEGER NOT NULL DEFAULT 0",
                 "rating": "INTEGER NOT NULL DEFAULT 0",
                 "note": "TEXT NOT NULL DEFAULT ''",
+                "fingerprint": "TEXT NOT NULL DEFAULT ''",
             },
             "artifacts": {
                 "generation_id": "TEXT",
@@ -691,7 +749,8 @@ class CreativeIndex:
                 error_json TEXT NOT NULL DEFAULT '{}',
                 favorite INTEGER NOT NULL DEFAULT 0,
                 rating INTEGER NOT NULL DEFAULT 0,
-                note TEXT NOT NULL DEFAULT ''
+                note TEXT NOT NULL DEFAULT '',
+                fingerprint TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -763,6 +822,50 @@ class CreativeIndex:
             )
             """
         )
+        # 作品项目：把「一张一张生图」升级成「做一个角色作品」。
+        # projects 存项目本身与分区定义，project_items 存项目内的作品（可分区、可排序、
+        # 可加备注），project_links 存 LoRA / Prompt 预设 / 实验 / 收藏组等关联资源。
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                project_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                sections_json TEXT NOT NULL DEFAULT '[]',
+                favorites_group_id TEXT NOT NULL DEFAULT '',
+                cover_artifact_id TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_items (
+                item_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                generation_id TEXT REFERENCES generations(generation_id) ON DELETE CASCADE,
+                section TEXT NOT NULL DEFAULT '',
+                position INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                UNIQUE(project_id, generation_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_links (
+                link_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                kind TEXT NOT NULL DEFAULT 'lora',
+                ref TEXT NOT NULL DEFAULT '',
+                label TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                UNIQUE(project_id, kind, ref)
+            )
+            """
+        )
 
     @staticmethod
     def _create_schema_v1_indexes(connection: sqlite3.Connection) -> None:
@@ -778,6 +881,14 @@ class CreativeIndex:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_favorite_groups_name "
             "ON favorite_groups(name COLLATE NOCASE)"
         )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_fingerprint ON generations(fingerprint)")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name ON projects(name COLLATE NOCASE)"
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_project_items_project ON project_items(project_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_project_items_generation ON project_items(generation_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_project_links_project ON project_links(project_id)")
 
     @contextlib.contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -1162,12 +1273,14 @@ class CreativeIndex:
             )
             merged_status = _merged_status(existing["status"], values["status"]) if existing else values["status"]
             created_at = int(existing["created_at"]) if existing else values["created_at"]
-            row_values = {**values, "status": merged_status, "created_at": created_at, "updated_at": now_ms()}
+            row_values = {**values, "status": merged_status, "created_at": created_at, "updated_at": now_ms(),
+                          "fingerprint": _snapshot_fingerprint(snapshot)}
             columns = (
                 "generation_id", "snapshot_id", "prompt_id", "request_id", "operation", "status",
                 "created_at", "updated_at", "schema_version", "panel_version", "workflow_version",
                 "inference_version", "model", "seed", "width", "height", "quality", "input_json",
                 "compiled_json", "inference_json", "workflow_json", "snapshot_json", "error_json",
+                "fingerprint",
             )
             if created:
                 connection.execute(
@@ -1402,6 +1515,7 @@ class CreativeIndex:
             "favorite": _row_flag(row, "favorite"),
             "rating": _row_int(row, "rating"),
             "note": _row_text(row, "note"),
+            "fingerprint": _row_text(row, "fingerprint"),
             "groups": _groups_for_generation(connection, generation_id),
             "lora_count": int(lora_count),
             "artifact_count": int(artifact_count),
@@ -1822,6 +1936,423 @@ class CreativeIndex:
                 "SELECT * FROM generations WHERE generation_id = ?", (wanted,)
             ).fetchone()
             return self._summary_from_row(connection, updated) if updated else None
+
+    def find_generations_by_fingerprint(
+        self,
+        fingerprint: Any,
+        *,
+        limit: Any = 5,
+        statuses: Sequence[Any] = ("completed",),
+    ) -> dict[str, Any]:
+        """按任务指纹查已有的相同作品（重复提交检测用）。
+
+        指纹只覆盖配方（模型 / LoRA / 提示词 / seed / 采样与二采参数），
+        所以同一次生成被点两次时能立刻找到已有结果。
+        """
+
+        wanted = _safe_text(fingerprint, 128).casefold()
+        if not wanted:
+            return {"items": [], "total": 0, "fingerprint": ""}
+        wanted_statuses = [normalize_status(status) for status in (statuses or ())]
+        clause = ""
+        params: list[Any] = [wanted]
+        if wanted_statuses:
+            clause = f" AND status IN ({', '.join('?' for _ in wanted_statuses)})"
+            params.extend(wanted_statuses)
+        params.append(max(1, min(MAX_PAGE_SIZE, _safe_int(limit, 5) or 5)))
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM generations WHERE fingerprint = ?" + clause
+                + " ORDER BY created_at DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+            items = [self._summary_from_row(connection, row) for row in rows]
+        return {"items": items, "total": len(items), "fingerprint": wanted}
+
+    # ---------------------------------------------------------------- 作品项目
+    @staticmethod
+    def _project_from_row(connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict[str, Any]:
+        if row is None:
+            return {}
+        project_id = str(row["project_id"])
+        sections = _json_value(row["sections_json"])
+        section_names = [str(item) for item in sections] if isinstance(sections, list) else []
+        cover_artifact_id = str(row["cover_artifact_id"] or "")
+        cover_url = None
+        if cover_artifact_id:
+            artifact = connection.execute(
+                "SELECT filename, subfolder, image_type FROM artifacts WHERE artifact_id = ?",
+                (cover_artifact_id,),
+            ).fetchone()
+            if artifact is not None:
+                cover_url = artifact_url(str(artifact["filename"]), str(artifact["subfolder"]),
+                                         str(artifact["image_type"]))
+        count = connection.execute(
+            "SELECT COUNT(*) FROM project_items WHERE project_id = ?", (project_id,)
+        ).fetchone()[0]
+        return {
+            "project_id": project_id,
+            "name": str(row["name"]),
+            "note": str(row["note"] or ""),
+            "sections": section_names or list(DEFAULT_PROJECT_SECTIONS),
+            "favorites_group_id": str(row["favorites_group_id"] or "") or None,
+            "cover_artifact_id": cover_artifact_id or None,
+            "cover_url": cover_url,
+            "item_count": int(count or 0),
+            "created_at": int(row["created_at"]),
+            "updated_at": int(row["updated_at"]),
+        }
+
+    def list_projects(self) -> dict[str, Any]:
+        """全部作品项目（按最近更新排序）。"""
+
+        with self._connection() as connection:
+            rows = connection.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+            items = [self._project_from_row(connection, row) for row in rows]
+        return {"items": items, "total": len(items), "defaultSections": list(DEFAULT_PROJECT_SECTIONS)}
+
+    def get_project(self, project_id: Any, *, limit: Any = MAX_PROJECT_ITEMS) -> dict[str, Any] | None:
+        """项目详情：按分区组织的作品 + 关联资源（LoRA / 预设 / 实验 / 收藏组）。"""
+
+        wanted = _safe_project_id(project_id)
+        bounded = max(1, min(MAX_PROJECT_ITEMS, _safe_int(limit, MAX_PROJECT_ITEMS) or MAX_PROJECT_ITEMS))
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM projects WHERE project_id = ?", (wanted,)).fetchone()
+            if row is None:
+                return None
+            project = self._project_from_row(connection, row)
+            item_rows = connection.execute(
+                "SELECT * FROM project_items WHERE project_id = ?"
+                " ORDER BY position ASC, created_at ASC LIMIT ?",
+                (wanted, bounded),
+            ).fetchall()
+            items: list[dict[str, Any]] = []
+            for item_row in item_rows:
+                generation_row = connection.execute(
+                    "SELECT * FROM generations WHERE generation_id = ?",
+                    (str(item_row["generation_id"]),),
+                ).fetchone()
+                items.append({
+                    "item_id": str(item_row["item_id"]),
+                    "section": str(item_row["section"] or ""),
+                    "position": int(item_row["position"]),
+                    "note": str(item_row["note"] or ""),
+                    "created_at": int(item_row["created_at"]),
+                    "generation": self._summary_from_row(connection, generation_row),
+                })
+            link_rows = connection.execute(
+                "SELECT * FROM project_links WHERE project_id = ? ORDER BY created_at ASC", (wanted,)
+            ).fetchall()
+        buckets: dict[str, list[dict[str, Any]]] = {kind: [] for kind in PROJECT_LINK_KINDS}
+        for link_row in link_rows:
+            kind = str(link_row["kind"])
+            buckets.setdefault(kind, []).append({
+                "link_id": str(link_row["link_id"]),
+                "kind": kind,
+                "ref": str(link_row["ref"]),
+                "label": str(link_row["label"] or ""),
+                "created_at": int(link_row["created_at"]),
+            })
+        names = list(project["sections"])
+        for item in items:
+            section = str(item["section"] or "")
+            if section and section not in names:
+                names.append(section)
+        sections = [{"name": name, "items": [item for item in items if str(item["section"]) == name]}
+                    for name in names]
+        ungrouped = [item for item in items if not str(item["section"])]
+        if ungrouped:
+            sections.append({"name": "", "items": ungrouped})
+        return {"project": project, "sections": sections, "links": buckets,
+                "total": len(items), "truncated": len(items) >= bounded}
+
+    def create_project(self, name: Any, *, note: Any = "", sections: Any = None) -> dict[str, Any]:
+        """新建项目；同名项目直接复用（不会创建第二个）。"""
+
+        clean = _normalized_project_name(name)
+        with self._write_transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM projects WHERE name = ? COLLATE NOCASE", (clean,)
+            ).fetchone()
+            if existing is not None:
+                return {"created": False, "project": self._project_from_row(connection, existing),
+                        "message": "已存在同名项目，直接打开该项目。"}
+            total = connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            if int(total or 0) >= MAX_PROJECTS:
+                raise CreativeIndexError(f"项目数量已达上限（{MAX_PROJECTS}）。")
+            stamp = now_ms()
+            project_id = _new_id()
+            connection.execute(
+                "INSERT INTO projects(project_id, name, note, sections_json, favorites_group_id,"
+                " cover_artifact_id, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (project_id, clean, _note_text(note), _json_text(_safe_project_sections(sections)),
+                 "", "", stamp, stamp),
+            )
+        detail = self.get_project(project_id) or {}
+        return {"created": True, "project": detail.get("project", {}), "message": "项目已创建。"}
+
+    def update_project(self, project_id: Any, *, name: Any = None, note: Any = None,
+                       sections: Any = None, favorites_group_id: Any = None) -> dict[str, Any] | None:
+        wanted = _safe_project_id(project_id)
+        assignments: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            assignments.append("name = ?")
+            params.append(_normalized_project_name(name))
+        if note is not None:
+            assignments.append("note = ?")
+            params.append(_note_text(note))
+        if sections is not None:
+            assignments.append("sections_json = ?")
+            params.append(_json_text(_safe_project_sections(sections)))
+        if favorites_group_id is not None:
+            assignments.append("favorites_group_id = ?")
+            params.append(_safe_text(favorites_group_id, 64).casefold())
+        if not assignments:
+            raise CreativeIndexError("没有需要保存的项目字段。")
+        with self._write_transaction() as connection:
+            row = connection.execute("SELECT * FROM projects WHERE project_id = ?", (wanted,)).fetchone()
+            if row is None:
+                return None
+            if name is not None:
+                clash = connection.execute(
+                    "SELECT project_id FROM projects WHERE name = ? COLLATE NOCASE AND project_id <> ?",
+                    (_normalized_project_name(name), wanted),
+                ).fetchone()
+                if clash is not None:
+                    raise CreativeIndexError("已存在同名项目，请换一个名称。")
+            connection.execute(
+                f"UPDATE projects SET {', '.join(assignments)}, updated_at = ? WHERE project_id = ?",
+                tuple(params) + (now_ms(), wanted),
+            )
+        detail = self.get_project(wanted) or {}
+        return detail.get("project")
+
+    def delete_project(self, project_id: Any) -> dict[str, Any] | None:
+        """删除项目；作品本身与收藏状态不受影响。"""
+
+        wanted = _safe_project_id(project_id)
+        with self._write_transaction() as connection:
+            row = connection.execute("SELECT name FROM projects WHERE project_id = ?", (wanted,)).fetchone()
+            if row is None:
+                return None
+            items = connection.execute(
+                "SELECT COUNT(*) FROM project_items WHERE project_id = ?", (wanted,)
+            ).fetchone()[0]
+            links = connection.execute(
+                "SELECT COUNT(*) FROM project_links WHERE project_id = ?", (wanted,)
+            ).fetchone()[0]
+            connection.execute("DELETE FROM projects WHERE project_id = ?", (wanted,))
+        return {"deleted": True, "project_id": wanted, "name": str(row["name"]),
+                "removed_items": int(items or 0), "removed_links": int(links or 0)}
+
+    def add_project_items(self, project_id: Any, generation_ids: Any, *,
+                          section: Any = "") -> dict[str, Any] | None:
+        """把作品加入项目（可指定分区）；已在项目里的作品会被跳过。"""
+
+        wanted = _safe_project_id(project_id)
+        candidates: list[str] = []
+        for raw in (generation_ids if isinstance(generation_ids, (list, tuple, set)) else [generation_ids]):
+            try:
+                candidate = _safe_generation_id(raw)
+            except CreativeIndexError:
+                continue
+            if candidate not in candidates:
+                candidates.append(candidate)
+        if not candidates:
+            raise CreativeIndexError("没有可加入项目的作品。")
+        placed = 0
+        skipped = 0
+        with self._write_transaction() as connection:
+            project = connection.execute("SELECT * FROM projects WHERE project_id = ?", (wanted,)).fetchone()
+            if project is None:
+                return None
+            defined = [str(item) for item in (_json_value(project["sections_json"]) or [])]
+            target = " ".join(str(section or "").split())[:PROJECT_SECTION_LIMIT]
+            if target and target not in defined:
+                raise CreativeIndexError("该项目没有这个分区，请先在项目里添加分区。")
+            count = int(connection.execute(
+                "SELECT COUNT(*) FROM project_items WHERE project_id = ?", (wanted,)
+            ).fetchone()[0] or 0)
+            stamp = now_ms()
+            for generation_id in candidates:
+                if connection.execute("SELECT 1 FROM generations WHERE generation_id = ?",
+                                      (generation_id,)).fetchone() is None:
+                    skipped += 1
+                    continue
+                if connection.execute(
+                    "SELECT 1 FROM project_items WHERE project_id = ? AND generation_id = ?",
+                    (wanted, generation_id),
+                ).fetchone() is not None:
+                    skipped += 1
+                    continue
+                if count >= MAX_PROJECT_ITEMS:
+                    raise CreativeIndexError(f"单个项目最多 {MAX_PROJECT_ITEMS} 件作品。")
+                connection.execute(
+                    "INSERT INTO project_items(item_id, project_id, generation_id, section, position,"
+                    " note, created_at) VALUES(?,?,?,?,?,?,?)",
+                    (_new_id(), wanted, generation_id, target, count, "", stamp),
+                )
+                count += 1
+                placed += 1
+            if placed:
+                connection.execute("UPDATE projects SET updated_at = ? WHERE project_id = ?",
+                                   (stamp, wanted))
+        return {"added": placed, "skipped": skipped, "message": f"已加入 {placed} 件作品。",
+                "project": (self.get_project(wanted) or {}).get("project")}
+
+    def remove_project_items(self, project_id: Any, *, item_ids: Any = None,
+                             generation_ids: Any = None) -> dict[str, Any] | None:
+        """从项目移除作品（可按 item_id 或 generation_id）。"""
+
+        wanted = _safe_project_id(project_id)
+        wanted_items = {str(item) for item in (
+            item_ids if isinstance(item_ids, (list, tuple, set)) else [item_ids]) if str(item or "").strip()}
+        wanted_generations: set[str] = set()
+        for raw in (generation_ids if isinstance(generation_ids, (list, tuple, set)) else [generation_ids]):
+            try:
+                wanted_generations.add(_safe_generation_id(raw))
+            except CreativeIndexError:
+                continue
+        if not wanted_items and not wanted_generations:
+            raise CreativeIndexError("没有要移除的项目内容。")
+        removed = 0
+        with self._write_transaction() as connection:
+            if connection.execute("SELECT 1 FROM projects WHERE project_id = ?", (wanted,)).fetchone() is None:
+                return None
+            rows = connection.execute(
+                "SELECT item_id, generation_id FROM project_items WHERE project_id = ?", (wanted,)
+            ).fetchall()
+            for row in rows:
+                if str(row["item_id"]) in wanted_items or str(row["generation_id"]) in wanted_generations:
+                    connection.execute("DELETE FROM project_items WHERE item_id = ?", (str(row["item_id"]),))
+                    removed += 1
+            if removed:
+                connection.execute("UPDATE projects SET updated_at = ? WHERE project_id = ?",
+                                   (now_ms(), wanted))
+        return {"removed": removed, "message": f"已移出 {removed} 件作品。",
+                "project": (self.get_project(wanted) or {}).get("project")}
+
+    def update_project_item(self, project_id: Any, item_id: Any, *, section: Any = None,
+                            note: Any = None, position: Any = None) -> dict[str, Any] | None:
+        """调整项目内一件作品的分区 / 备注 / 排序。"""
+
+        wanted = _safe_project_id(project_id)
+        wanted_item = _safe_text(item_id, 64)
+        if not wanted_item:
+            raise CreativeIndexError("项目条目编号无效。")
+        assignments: list[str] = []
+        params: list[Any] = []
+        if section is not None:
+            target = " ".join(str(section or "").split())[:PROJECT_SECTION_LIMIT]
+            assignments.append("section = ?")
+            params.append(target)
+        if note is not None:
+            assignments.append("note = ?")
+            params.append(_note_text(note))
+        if position is not None:
+            assignments.append("position = ?")
+            params.append(max(0, min(MAX_PROJECT_ITEMS, _safe_int(position, 0) or 0)))
+        if not assignments:
+            raise CreativeIndexError("没有需要保存的条目字段。")
+        with self._write_transaction() as connection:
+            project = connection.execute("SELECT * FROM projects WHERE project_id = ?", (wanted,)).fetchone()
+            if project is None:
+                return None
+            row = connection.execute(
+                "SELECT * FROM project_items WHERE project_id = ? AND item_id = ?", (wanted, wanted_item)
+            ).fetchone()
+            if row is None:
+                return None
+            if section is not None:
+                target = " ".join(str(section or "").split())[:PROJECT_SECTION_LIMIT]
+                defined = [str(item) for item in (_json_value(project["sections_json"]) or [])]
+                if target and target not in defined:
+                    raise CreativeIndexError("该项目没有这个分区，请先在项目里添加分区。")
+            connection.execute(
+                f"UPDATE project_items SET {', '.join(assignments)} WHERE item_id = ?",
+                tuple(params) + (wanted_item,),
+            )
+            connection.execute("UPDATE projects SET updated_at = ? WHERE project_id = ?",
+                               (now_ms(), wanted))
+        detail = self.get_project(wanted) or {}
+        for section_entry in detail.get("sections", []):
+            for item in section_entry.get("items", []):
+                if str(item["item_id"]) == wanted_item:
+                    return item
+        return None
+
+    def set_project_cover(self, project_id: Any, *, artifact_id: Any = "",
+                          generation_id: Any = "") -> dict[str, Any] | None:
+        """设置项目封面；也可以直接指定作品，取其代表图。"""
+
+        wanted = _safe_project_id(project_id)
+        wanted_artifact = _safe_text(artifact_id, 64)
+        wanted_generation = ""
+        if not wanted_artifact and generation_id:
+            try:
+                wanted_generation = _safe_generation_id(generation_id)
+            except CreativeIndexError:
+                wanted_generation = ""
+        if not wanted_artifact and not wanted_generation:
+            raise CreativeIndexError("请选择要作为封面的图片。")
+        with self._write_transaction() as connection:
+            if connection.execute("SELECT 1 FROM projects WHERE project_id = ?", (wanted,)).fetchone() is None:
+                return None
+            if wanted_generation:
+                preview = _preview_artifact_row(connection, wanted_generation)
+                if preview is not None:
+                    wanted_artifact = str(preview["artifact_id"])
+            if wanted_artifact and connection.execute(
+                "SELECT 1 FROM artifacts WHERE artifact_id = ?", (wanted_artifact,)
+            ).fetchone() is None:
+                raise CreativeIndexError("封面图片不存在。")
+            connection.execute(
+                "UPDATE projects SET cover_artifact_id = ?, updated_at = ? WHERE project_id = ?",
+                (wanted_artifact, now_ms(), wanted),
+            )
+        return (self.get_project(wanted) or {}).get("project")
+
+    def add_project_link(self, project_id: Any, kind: Any, ref: Any, *,
+                         label: Any = "") -> dict[str, Any] | None:
+        """给项目关联一条资源：LoRA / Prompt 预设 / 实验 / 收藏组。"""
+
+        wanted = _safe_project_id(project_id)
+        link_kind = _safe_link_kind(kind)
+        target = _safe_text(ref, 400)
+        if not target:
+            raise CreativeIndexError("关联内容不能为空。")
+        with self._write_transaction() as connection:
+            if connection.execute("SELECT 1 FROM projects WHERE project_id = ?", (wanted,)).fetchone() is None:
+                return None
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM project_links WHERE project_id = ?", (wanted,)
+            ).fetchone()[0] or 0)
+            if total >= MAX_PROJECT_LINKS:
+                raise CreativeIndexError(f"单个项目最多 {MAX_PROJECT_LINKS} 条关联。")
+            connection.execute(
+                "INSERT OR IGNORE INTO project_links(link_id, project_id, kind, ref, label, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (_new_id(), wanted, link_kind, target, _safe_text(label, 120), now_ms()),
+            )
+            connection.execute("UPDATE projects SET updated_at = ? WHERE project_id = ?",
+                               (now_ms(), wanted))
+        return (self.get_project(wanted) or {}).get("project")
+
+    def remove_project_link(self, project_id: Any, link_id: Any) -> dict[str, Any] | None:
+        wanted = _safe_project_id(project_id)
+        wanted_link = _safe_text(link_id, 64)
+        if not wanted_link:
+            raise CreativeIndexError("关联编号无效。")
+        with self._write_transaction() as connection:
+            if connection.execute("SELECT 1 FROM projects WHERE project_id = ?", (wanted,)).fetchone() is None:
+                return None
+            connection.execute(
+                "DELETE FROM project_links WHERE project_id = ? AND link_id = ?", (wanted, wanted_link)
+            )
+            connection.execute("UPDATE projects SET updated_at = ? WHERE project_id = ?",
+                               (now_ms(), wanted))
+        return {"removed": True, "project": (self.get_project(wanted) or {}).get("project")}
 
     def list_generations(
         self,
