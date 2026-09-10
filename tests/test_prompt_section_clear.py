@@ -11,12 +11,16 @@ class PromptSectionClearTests(unittest.TestCase):
         expected = (
             ("promptSubject", "人物与角色"),
             ("promptAppearance", "外貌"),
+            ("promptExpression", "表情"),
             ("promptClothing", "服装与材质"),
             ("promptPose", "姿势"),
             ("promptComposition", "构图与镜头"),
             ("promptScene", "场景"),
             ("promptLighting", "光线"),
             ("promptStyle", "画风与上色"),
+            ("promptNaturalLanguage", "自然语言"),
+            ("prompt", "其他补充"),
+            ("negative", "额外负面词"),
         )
         for field_id, label in expected:
             self.assertIn(

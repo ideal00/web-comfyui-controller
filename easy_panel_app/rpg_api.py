@@ -485,6 +485,11 @@ def build_rpg_payload(request: Mapping[str, Any], model_catalog: Optional[Mappin
                 "hiresPromptMode", "hiresPositive", "hiresNegative", "hiresCompositionLock"):
         if key in generation and generation.get(key) not in (None, ""):
             payload[key] = generation.get(key)
+    section_edit = generation.get("sectionEdit")
+    if isinstance(section_edit, Mapping):
+        # Same section-scoped edit shape as the desktop panel, so both clients
+        # can replace one prompt section without touching the others.
+        payload["sectionEdit"] = dict(section_edit)
     for key in ("steps", "cfg", "sampler", "scheduler"):
         if key not in payload:
             payload[key] = quality[key]

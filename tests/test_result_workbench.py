@@ -28,7 +28,7 @@ class ResultWorkbenchTests(unittest.TestCase):
         script = (ROOT / "web/assets/js/result-workbench.js").read_text(encoding="utf-8")
         for marker in ("继续编辑", "只换 Seed", "重复生成", "复制参数",
                        "继续二采", "转整图重绘",
-                       "promptClothing", "promptScene", "promptPose", "promptAppearance",
+                       "promptClothing", "promptScene", "promptPose", "promptExpression",
                        "renderGeneratedImages", "hiresPositive", "illustriousMode",
                        "img2imgOutput", "setStudioCreationTab"):
             with self.subTest(marker=marker):

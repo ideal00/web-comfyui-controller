@@ -87,6 +87,7 @@ from easy_panel_app.prompt_utils import (
     merge_hires_prompt,
     normalize_prompt_key,
     normalized_safety_level,
+    replace_prompt_section,
     split_prompt_terms,
     unique_prompt_terms,
 )
@@ -486,10 +487,11 @@ def validate_anima_tags(data: dict) -> dict:
     return {"results": results, "total": len(ANIMA_TAG_INDEX)}
 
 
-PROMPT_SECTION_KEYS = ("subject", "appearance", "clothing", "pose", "composition",
+PROMPT_SECTION_KEYS = ("subject", "appearance", "expression", "clothing", "pose", "composition",
                        "scene", "lighting", "style", "manual")
 PROMPT_SECTION_LABELS = {
-    "subject": "人物与角色", "appearance": "外貌", "clothing": "服装与材质",
+    "subject": "人物与角色", "appearance": "外貌", "expression": "表情",
+    "clothing": "服装与材质",
     "pose": "姿势", "composition": "构图", "scene": "场景",
     "lighting": "光线", "style": "画风与上色", "manual": "其他补充",
 }
@@ -499,7 +501,7 @@ PANEL_VERSION = "2.2.2"
 SNAPSHOT_FILE = PROJECT_DIR / "generation_snapshots.json"
 SNAPSHOT_SCHEMA_VERSION = 2
 SNAPSHOT_SOURCE_SECTION_KEYS = (
-    "subject", "appearance", "clothing", "pose", "composition", "scene",
+    "subject", "appearance", "expression", "clothing", "pose", "composition", "scene",
     "lighting", "styleColoring", "naturalLanguage", "manual",
 )
 SNAPSHOT_SECRET_KEY_MARKERS = (
@@ -603,6 +605,18 @@ def infer_creative_operation(data: dict | None) -> str:
         return "txt2img"
     if explicit:
         return "unknown"
+    section_edit = payload.get("sectionEdit") if isinstance(payload.get("sectionEdit"), dict) else {}
+    if not section_edit and isinstance(generation_payload.get("sectionEdit"), dict):
+        section_edit = generation_payload.get("sectionEdit")
+    if section_edit:
+        section = str(section_edit.get("section", "") or "").strip().casefold()
+        if section == "clothing":
+            return "outfit_change"
+        if section == "scene":
+            return "scene_change"
+        if section == "style":
+            return "style_change"
+        return "section_change"
     generation = payload.get("generation") if isinstance(payload.get("generation"), dict) else payload
     output_enhancement = generation.get("outputEnhancement") if isinstance(generation.get("outputEnhancement"), dict) else {}
     if output_enhancement.get("mode") not in (None, "", "off"):
@@ -1373,7 +1387,45 @@ def dynamic_negative_terms(positive: str) -> list[str]:
     return exact_unique_terms(", ".join(additions))
 
 
+def apply_section_edit(data: dict) -> dict:
+    """Apply one section-scoped replacement before compiling the prompt.
+
+    The desktop panel also writes the new text into its section field, so the
+    edit is idempotent there; API and mobile callers rely on this being the
+    actual edit.  Only the named section changes: appearance, composition, the
+    hi-res fields and the snapshot keep their own values.
+    """
+    edit = data.get("sectionEdit")
+    if not isinstance(edit, dict):
+        return data
+    section = str(edit.get("section", "") or "").strip().lower()
+    value = str(edit.get("value", "") or "").strip()[:12_000]
+    if not section or not value:
+        return data
+    mode = "append" if str(edit.get("mode", "") or "").strip().lower() == "append" else "replace"
+    raw_sections = data.get("promptSections")
+    sections = raw_sections if isinstance(raw_sections, dict) else {}
+    try:
+        updated = replace_prompt_section(sections, section, value, mode)
+    except ValueError:
+        # Unknown section names are ignored instead of failing the whole job.
+        result = dict(data)
+        result.pop("sectionEdit", None)
+        return result
+    result = dict(data)
+    result["promptSections"] = updated
+    record = dict(edit)
+    record["section"] = section
+    record["mode"] = mode
+    if not str(record.get("before", "") or "").strip():
+        record["before"] = str(sections.get(section, "") or "")
+    record["after"] = str(updated.get(section, "") or "")
+    result["sectionEdit"] = record
+    return result
+
+
 def compile_prompt(data: dict) -> dict:
+    data = apply_section_edit(data)
     model = str(data.get("model", ""))
     safety = normalized_safety_level(data)
     profile = model_prompt_profile(model, safety)

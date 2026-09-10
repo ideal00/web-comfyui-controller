@@ -310,7 +310,7 @@
     return {
       txt2img: '文生图', seed_variant: '换 Seed', img2img: '图生图', inpaint: '局部重绘',
       face_fix: '修脸', hand_fix: '修手', upscale: '放大', outfit_change: '换服装',
-      scene_change: '换场景', style_change: '换风格', unknown: '未知操作',
+      scene_change: '换场景', style_change: '换风格', section_change: '分区替换', unknown: '未知操作',
     }[asText(value)] || '未知操作';
   }
 

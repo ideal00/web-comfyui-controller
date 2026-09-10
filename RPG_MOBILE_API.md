@@ -133,6 +133,20 @@ Easy Panel 现在可以作为 RPGBox 的视觉后端。手机只访问 Easy Pane
 `generation` 还可以携带与桌面面板同名的高级参数：`steps`、`cfg`、`sampler`、`scheduler`、`illustriousMode`、`guidance`、`vae`、`modelEnhancement` 等。高清二次采样使用 `hiresScale`、`hiresDenoise`、`hiresSteps`、`hiresCfg`、`hiresSampler`、`hiresScheduler`，并可用
 `hiresPromptMode`（`inherit` / `append` / `replace`，默认 `append`）、`hiresPositive`、`hiresNegative` 指定二采提示词，用 `hiresCompositionLock` 开启“优先保持首采构图”（二采重绘幅度强制 ≤ 0.35）：
 
+`generation` 也支持桌面面板的「分区替换」（只改一项的同一个底层能力），只替换指定分区、其余全部保持：
+
+```json
+"generation": {
+  "sectionEdit": {
+    "section": "clothing",
+    "value": "maid outfit, white apron",
+    "mode": "replace"
+  }
+}
+```
+
+`section` 取值：`subject` / `appearance` / `expression` / `clothing` / `pose` / `composition` / `scene` / `lighting` / `style` / `naturalLanguage` / `manual`；`mode` 为 `replace`（默认，清空旧内容）或 `append`（保留旧内容，适合加饰品）。未知分区会被忽略而不会影响整次生成；生成的快照 / 作品库会把操作记为 `outfit_change` / `scene_change` / `style_change` / `section_change`。
+
 ```json
 "generation": {
   "illustriousMode": "hires",

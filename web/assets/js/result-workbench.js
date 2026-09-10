@@ -14,6 +14,10 @@
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const baseName = (value) => String(value == null ? "" : value).replace(/\\/g, "/").split("/").pop() || "";
+  const shortText = (value, limit) => {
+    const result = String(value == null ? "" : value).trim();
+    return result.length > limit ? `${result.slice(0, limit - 1)}…` : result;
+  };
 
   let lastPayload = null;
   let lastImages = [];
@@ -31,6 +35,87 @@
 
   const isBaseImage = (image) => image && String(image.filename || "").includes(HIRES_BASE_MARKER);
 
+  // One generic mechanism: every "只改一项" swaps exactly one prompt section.
+  const SECTION_SWAP = {
+    clothing: {
+      label: "服装", field: "promptClothing", category: "clothing",
+      tip: "只替换「服装与材质」分区；外貌、表情、姿势、构图、场景与二采设置保持不变。",
+      placeholder: "例如：maid outfit, white apron, black thighhighs",
+    },
+    scene: {
+      label: "场景", field: "promptScene", category: "scene",
+      tip: "只替换「场景」分区；构图、镜头、姿势与人物保持不变。",
+      placeholder: "例如：forest, tall trees, mossy ground, daylight",
+    },
+    pose: {
+      label: "姿势", field: "promptPose", category: "pose",
+      tip: "只替换「姿势」分区；服装、外貌、构图与场景保持不变。",
+      placeholder: "例如：sitting, leaning against wall, crossed legs",
+    },
+    expression: {
+      label: "表情", field: "promptExpression", category: "expression",
+      tip: "只替换「表情」分区；发色、眼睛、服装与姿势保持不变。",
+      placeholder: "例如：soft smile, half-closed eyes, blush",
+    },
+  };
+
+  let lastSectionEdit = null;
+  let swapDialog = null;
+
+  function swapOperation(section) {
+    if (section === "clothing") return "outfit_change";
+    if (section === "scene") return "scene_change";
+    if (section === "style") return "style_change";
+    return "section_change";
+  }
+
+  function sectionPresets(category) {
+    let presets = [];
+    try {
+      presets = Array.isArray(userPromptPresets) ? userPromptPresets : []; // eslint-disable-line no-undef
+    } catch (_) {
+      presets = [];
+    }
+    return presets.filter((item) => item && item.category === category && (item.content || item.sections));
+  }
+
+  function presetText(preset, section) {
+    if (!preset) return "";
+    const sections = preset.sections && typeof preset.sections === "object" ? preset.sections : {};
+    return text(sections[section], text(preset.content, ""));
+  }
+
+  function sectionValue(section) {
+    const config = SECTION_SWAP[section];
+    return config ? text(byId(config.field)?.value, "") : "";
+  }
+
+  function sectionLabel(key) {
+    return {
+      subject: "人物与角色", appearance: "外貌", expression: "表情", clothing: "服装与材质",
+      pose: "姿势", composition: "构图与镜头", scene: "场景", lighting: "光线",
+      style: "画风与上色", naturalLanguage: "自然语言", manual: "其他补充",
+    }[key] || key;
+  }
+
+  function swapResultValue(section, value, mode) {
+    const current = sectionValue(section);
+    if (mode !== "append" || !current) return value;
+    const seen = new Set();
+    const terms = [];
+    for (const part of [current, value]) {
+      for (const item of String(part).split(/[,;\n]+/)) {
+        const term = item.trim();
+        const key = term.toLowerCase();
+        if (term && !seen.has(key)) {
+          seen.add(key);
+          terms.push(term);
+        }
+      }
+    }
+    return terms.join(", ");
+  }
+
   const WORKBENCH_STYLE = `
 .result-workbench{margin-top:8px;border:1px solid var(--line,#3a3a46);border-radius:10px;padding:8px 10px;background:rgba(255,255,255,.02)}
 .result-workbench .workbench-head{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}
@@ -47,6 +132,8 @@ dialog.hires-compare figure{margin:0;display:grid;gap:4px;justify-items:center}
 dialog.hires-compare img{max-width:100%;max-height:46vh;border-radius:8px;border:1px solid var(--line,#3a3a46)}
 dialog.hires-compare .hc-block{margin-top:8px}
 dialog.hires-compare .hc-level{font-weight:600}
+dialog.section-swap select,dialog.section-swap textarea{width:100%;box-sizing:border-box}
+dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;margin-right:10px}
 @media (max-width:720px){dialog.hires-compare .hc-grid{grid-template-columns:1fr}}
 `;
 
@@ -319,6 +406,118 @@ dialog.hires-compare .hc-level{font-weight:600}
     dialog.showModal();
   }
 
+  function ensureSwapDialog() {
+    if (swapDialog) return swapDialog;
+    swapDialog = document.createElement("dialog");
+    swapDialog.id = "sectionSwapDialog";
+    swapDialog.className = "hires-compare section-swap";
+    swapDialog.addEventListener("click", (event) => {
+      if (event.target === swapDialog) swapDialog.close();
+    });
+    swapDialog.addEventListener("input", () => renderSwapPreview());
+    swapDialog.addEventListener("change", () => renderSwapPreview());
+    swapDialog.addEventListener("click", handleSwapClick);
+    document.body.appendChild(swapDialog);
+    return swapDialog;
+  }
+
+  let swapSection = "";
+
+  function swapChosenValue() {
+    const dialog = swapDialog;
+    if (!dialog) return "";
+    const preset = dialog.querySelector('[data-swap="preset"]')?.value || "";
+    if (preset) return preset;
+    return text(dialog.querySelector('[data-swap="custom"]')?.value, "");
+  }
+
+  function swapChosenMode() {
+    const dialog = swapDialog;
+    return dialog?.querySelector('[data-swap="mode"]:checked')?.value || "replace";
+  }
+
+  function renderSwapPreview() {
+    const dialog = swapDialog;
+    if (!dialog) return;
+    const config = SECTION_SWAP[swapSection];
+    if (!config) return;
+    const value = swapChosenValue();
+    const mode = swapChosenMode();
+    const current = sectionValue(swapSection) || "（空）";
+    const result = value ? swapResultValue(swapSection, value, mode) : "";
+    const preview = dialog.querySelector('[data-swap="preview"]');
+    if (preview) {
+      preview.innerHTML = `
+        <div class="small"><b>${esc(sectionLabel(swapSection))}</b>：${esc(current)} → ${esc(result || "（未填写）")}</div>
+        <div class="small">保持：${esc(Object.keys(SECTION_SWAP).filter((key) => key !== swapSection).map(sectionLabel).join("、"))}、构图与镜头、二采设置、模型与 LoRA</div>`;
+    }
+    const button = dialog.querySelector('[data-swap="apply"]');
+    if (button) button.disabled = !value;
+    const applyOnly = dialog.querySelector('[data-swap="applyOnly"]');
+    if (applyOnly) applyOnly.disabled = !value;
+  }
+
+  function openSectionSwap(section) {
+    const config = SECTION_SWAP[section];
+    if (!config) return;
+    swapSection = section;
+    const dialog = ensureSwapDialog();
+    const presets = sectionPresets(config.category);
+    const options = presets
+      .map((item) => `<option value="${esc(presetText(item, section))}">${esc(item.name)}</option>`)
+      .join("");
+    dialog.innerHTML = `
+      <div class="hc-head"><b>只换${esc(config.label)}</b><button class="secondary" type="button" data-swap="close">取消</button></div>
+      <div class="small" style="margin-top:6px">${esc(config.tip)}</div>
+      <div class="hc-block"><b>当前${esc(config.label)}</b><div class="small">${esc(sectionValue(section) || "（当前分区为空）")}</div></div>
+      <div class="hc-block"><b>替换为</b>
+        ${presets.length ? `<select data-swap="preset"><option value="">— 我的${esc(config.label)}预设（${presets.length} 条）—</option>${options}</select>` : ""}
+        <textarea data-swap="custom" rows="2" style="margin-top:6px" placeholder="${esc(config.placeholder)}"></textarea>
+      </div>
+      <div class="hc-block"><b>方式</b>
+        <label class="small"><input type="radio" name="swapMode" data-swap="mode" value="replace" checked> 替换（清空旧内容）</label>
+        <label class="small" style="margin-left:10px"><input type="radio" name="swapMode" data-swap="mode" value="append"> 追加（保留旧内容，适合加配饰）</label>
+      </div>
+      <div class="hc-block" data-swap="preview"></div>
+      <div class="hc-block"><button class="primary" type="button" data-swap="apply">生成新版本</button>
+        <button class="secondary" type="button" data-swap="applyOnly" style="margin-left:6px">仅应用到表单</button></div>`;
+    renderSwapPreview();
+    dialog.showModal();
+  }
+
+  function handleSwapClick(event) {
+    const target = event.target.closest ? event.target.closest("[data-swap]") : null;
+    if (!target) return;
+    const action = target.dataset.swap;
+    if (action === "close") swapDialog.close();
+    else if (action === "apply") applySectionSwap(true);
+    else if (action === "applyOnly") applySectionSwap(false);
+  }
+
+  function applySectionSwap(generate) {
+    const config = SECTION_SWAP[swapSection];
+    const value = swapChosenValue();
+    const mode = swapChosenMode();
+    if (!config || !value) return;
+    const field = byId(config.field);
+    if (!field) {
+      status(`当前面板没有「${config.label}」分区输入框；请先刷新面板。`);
+      return;
+    }
+    const before = String(field.value || "").trim();
+    const after = swapResultValue(swapSection, value, mode);
+    field.value = after;
+    if (typeof window.promptEditorChanged === "function") window.promptEditorChanged();
+    // Record the edit for the snapshot / library.  "replace" is deliberate: the
+    // field already holds the merged text, and the backend must not append twice.
+    lastSectionEdit = { section: swapSection, mode, originalMode: mode, before, after, value: after };
+    if (typeof window.setStudioCreationTab === "function") window.setStudioCreationTab("prompt");
+    status(`已把「${config.label}」改为：${after}（${mode === "append" ? "追加" : "替换"}）。其他分区、模型、LoRA、尺寸与二采设置保持不变。`);
+    swapDialog.close();
+    renderWorkbench();
+    if (generate && typeof window.generate === "function") window.generate();
+  }
+
   function renderWorkbench() {
     const root = ensureContainer();
     if (!root) return;
@@ -337,15 +536,15 @@ dialog.hires-compare .hc-level{font-weight:600}
         <button class="secondary" type="button" data-workbench="copy">📋 复制参数</button>
       </div>
       <div class="workbench-actions"><span class="small">只改一项：</span>
-        <button class="secondary" type="button" data-focus="promptClothing" data-label="服装与材质">服装</button>
-        <button class="secondary" type="button" data-focus="promptScene" data-label="场景">场景</button>
-        <button class="secondary" type="button" data-focus="promptPose" data-label="姿势">姿势</button>
-        <button class="secondary" type="button" data-focus="promptAppearance" data-label="外貌 / 表情">表情</button>
+        <button class="secondary" type="button" data-swap-section="clothing">换服装</button>
+        <button class="secondary" type="button" data-swap-section="scene">换场景</button>
+        <button class="secondary" type="button" data-swap-section="pose">换姿势</button>
+        <button class="secondary" type="button" data-swap-section="expression">换表情</button>
         <button class="secondary" type="button" data-workbench="hires">🖼 继续二采</button>
         <button class="secondary" type="button" data-workbench="img2img">♻️ 转整图重绘</button>
         ${lastBaseImages.length ? '<button class="secondary" type="button" data-workbench="compare">🔍 首采 / 二采对照</button>' : ""}
       </div>
-      <div class="small workbench-note">改动只作用于下一次生成：其他参数保持锁定，结果会作为子版本记录在生成快照 / 作品库（可复现、可查看父子谱系）。</div>`;
+      <div class="small workbench-note">${lastSectionEdit ? `本版本变化：${esc(sectionLabel(lastSectionEdit.section))} ${esc(shortText(lastSectionEdit.before, 36) || "空")} → ${esc(shortText(lastSectionEdit.after, 36))}（其余分区、模型、LoRA、采样与二采保持）；` : ""}改动只作用于下一次生成：结果会作为子版本记录在生成快照 / 作品库（可复现、可查看父子谱系）。</div>`;
   }
 
   function bindActions(root) {
@@ -353,6 +552,11 @@ dialog.hires-compare .hc-level{font-weight:600}
       const button = event.target.closest("button");
       if (!button) return;
       const focusId = button.dataset ? button.dataset.focus : "";
+      const swapSectionKey = button.dataset ? button.dataset.swapSection : "";
+      if (swapSectionKey) {
+        openSectionSwap(swapSectionKey);
+        return;
+      }
       if (focusId) {
         focusField(focusId, button.dataset.label || focusId);
         return;
@@ -402,7 +606,12 @@ dialog.hires-compare .hc-level{font-weight:600}
     const original = window.payload;
     const wrapped = function () {
       const data = original.apply(this, arguments);
-      if (data && typeof data === "object") lastPayload = data;
+      if (data && typeof data === "object") {
+        lastPayload = data;
+        // The section swap already edited the field; this record only carries the
+        // edit into the snapshot / library so a version can show 旧 → 新.
+        if (lastSectionEdit) data.sectionEdit = { ...lastSectionEdit };
+      }
       return data;
     };
     wrapped.__workbenchWrapped = true;

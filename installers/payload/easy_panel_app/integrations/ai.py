@@ -21,7 +21,7 @@ DEFAULT_ANTHROPIC_MESSAGES = "https://api.anthropic.com/v1/messages"
 DEFAULT_GEMINI_GENERATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GOOGLE_TRANSLATE = "https://translation.googleapis.com/language/translate/v2"
 PROMPT_SECTION_KEYS = (
-    "subject", "appearance", "clothing", "pose", "composition",
+    "subject", "appearance", "expression", "clothing", "pose", "composition",
     "scene", "lighting", "style", "manual",
 )
 
@@ -206,7 +206,7 @@ def parse_ai_json(content: str) -> dict:
 
 # --- Flat English prompt -> panel section classifier (AI translation application) ---
 
-_SECTION_ORDER = ("subject", "appearance", "clothing", "pose", "composition",
+_SECTION_ORDER = ("subject", "appearance", "expression", "clothing", "pose", "composition",
                   "scene", "lighting", "style", "manual")
 
 _SUBJECT_TERMS = ("1girl", "2girls", "3girls", "1boy", "2boys", "woman", "man", "girl",

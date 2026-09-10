@@ -39,6 +39,7 @@ SUPPORTED_OPERATIONS = frozenset({
     "outfit_change",
     "scene_change",
     "style_change",
+    "section_change",
 })
 KNOWN_STATUSES = frozenset({"queued", "running", "completed", "error", "cancelled", "unknown"})
 _STATUS_ALIASES = {
