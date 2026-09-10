@@ -210,6 +210,27 @@
     return data;
   }
 
+  async function postJson(path, token, body, fetchImpl) {
+    const fetcher = fetchImpl || global.fetch;
+    if (typeof fetcher !== 'function') throw new Error('当前浏览器不支持网络请求。');
+    const headers = { 'Content-Type': 'application/json' };
+    if (asText(token)) headers['X-RPG-Token'] = asText(token);
+    const response = await fetcher(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers,
+      body: JSON.stringify(body || {}),
+    });
+    let data = {};
+    try { data = await response.json(); } catch (_) { data = {}; }
+    if (!response.ok) {
+      const error = new Error(asText(data && data.error) || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+
   async function requestBlob(path, token, fetchImpl) {
     const fetcher = fetchImpl || global.fetch;
     if (typeof fetcher !== 'function') throw new Error('当前浏览器不支持网络请求。');
@@ -391,6 +412,7 @@
       return;
     }
     state.items.forEach((item) => {
+      const wrap = createElement('div', 'creative-library-item-wrap');
       const button = createElement('button', 'creative-library-item');
       button.type = 'button';
       button.dataset.generationId = safeGenerationId(item.generation_id);
@@ -407,7 +429,17 @@
       appendLineageMarker(markers, item);
       copy.append(heading, operation, details, markers);
       button.append(thumb, copy);
-      root.append(button);
+      wrap.append(button);
+      const remove = createElement('button', 'creative-library-item-delete', '删除');
+      remove.type = 'button';
+      remove.title = '删除记录与对应本地图片（需二次确认）';
+      remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteGeneration(item.generation_id);
+      });
+      wrap.append(remove);
+      root.append(wrap);
     });
   }
 
@@ -654,7 +686,11 @@
     const continueEdit = createElement('button', 'secondary', '继续编辑');
     continueEdit.type = 'button';
     continueEdit.addEventListener('click', () => restoreToForm('continue-edit'));
-    actions.append(reproduce, seedVariant, continueEdit);
+    const remove = createElement('button', 'danger', '删除此作品');
+    remove.type = 'button';
+    remove.title = '删除记录并删除电脑端对应的本地图片文件（需二次确认）';
+    remove.addEventListener('click', () => { deleteGeneration(detail.generation_id); });
+    actions.append(reproduce, seedVariant, continueEdit, remove);
     root.append(actions);
     root.append(createElement('p', 'creative-library-safe-note', '这些操作只恢复参数，不会自动提交任务；请确认后手动点击“生成图片”。'));
     appendLineageSection(root, detail, state.lineage);
@@ -722,6 +758,32 @@
       showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       if (root) root.replaceChildren(createElement('p', 'creative-library-muted', '无法显示该作品详情；可以返回列表继续使用现有面板。'));
     }
+  }
+
+  function deleteGeneration(generationId) {
+    let id;
+    try { id = safeGenerationId(generationId); } catch (error) { showNotice(error.message, 'error'); return; }
+    if (!global.confirm('确定删除该作品记录吗？删除会同时移除电脑端对应的本地图片文件，此操作无法撤销。')) return;
+    (async () => {
+      try {
+        const result = await postJson('/api/rpg/library/delete', state.token, { generation_id: id });
+        if (state.detail && state.detail.generation_id === id) {
+          state.detail = null;
+          state.lineage = null;
+          showListView();
+        }
+        const removed = Number(result && result.removed_files && result.removed_files.length) || 0;
+        const missing = Number(result && result.missing_files && result.missing_files.length) || 0;
+        const hint = result && result.deleted === false
+          ? '该记录已被其他会话清理；本地缺失文件数 ' + missing + ' 个。'
+          : `已删除记录${removed ? `，并删除 ${removed} 个本地图片文件` : ''}${missing ? `（另有 ${missing} 个文件已缺失）` : ''}。`;
+        showNotice(`删除完成；${hint}`, 'success');
+        state.offset = Math.max(0, Math.min(state.offset, Math.max(0, state.total - 1)));
+        void loadList();
+      } catch (error) {
+        showNotice(libraryErrorMessage(error, '删除作品'), errorStatus(error) === 404 ? 'warning' : 'error');
+      }
+    })();
   }
 
   function downloadArtifact(artifact) {

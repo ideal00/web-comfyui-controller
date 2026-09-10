@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from easy_panel_app.config import SETTINGS
 
 
+# ComfyUI is a local process (127.0.0.1 by default) and must never be routed
+# through a system or environment proxy: a proxy in the middle turns healthy
+# loopback calls into "HTTP Error 502: Bad Gateway".  Build a dedicated opener
+# with proxies disabled so panel requests always reach ComfyUI directly.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 @dataclass(frozen=True)
 class ComfyClient:
     base_url: str = SETTINGS.comfy_url
@@ -24,7 +31,7 @@ class ComfyClient:
             method=method,
             headers={"Content-Type": "application/json"} if data else {},
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with _NO_PROXY_OPENER.open(request, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
 

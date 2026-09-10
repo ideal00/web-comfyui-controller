@@ -30,6 +30,29 @@ def unique_prompt_terms(*chunks: str) -> str:
     return ", ".join(terms)
 
 
+def merge_hires_prompt(base_positive: str, base_negative: str,
+                       hires_positive: str, hires_negative: str,
+                       mode: str) -> tuple[str, str]:
+    """Merge first-stage and hi-res-stage prompts.
+
+    inherit: the hi-res pass reuses the first-stage conditioning verbatim.
+    append:  keep the first-stage composition and append hi-res detail terms.
+    replace: the hi-res pass uses only its own text; a blank field keeps the
+             first-stage text so an accidental empty box cannot wipe an
+             already validated prompt.
+    """
+    second_positive = str(hires_positive or "").strip()
+    second_negative = str(hires_negative or "").strip()
+    normalized = str(mode or "").strip().lower()
+    if normalized == "replace":
+        return (unique_prompt_terms(second_positive or base_positive),
+                unique_prompt_terms(second_negative or base_negative))
+    if normalized == "append":
+        return (unique_prompt_terms(base_positive, second_positive),
+                unique_prompt_terms(base_negative, second_negative))
+    return str(base_positive or ""), str(base_negative or "")
+
+
 def normalized_safety_level(data: dict) -> str:
     level = str(data.get("safetyLevel", "")).strip().lower()
     if level not in {"safe", "sensitive", "nsfw", "explicit"}:
@@ -38,6 +61,7 @@ def normalized_safety_level(data: dict) -> str:
 
 
 __all__ = [
+    "merge_hires_prompt",
     "normalize_prompt_key",
     "normalized_safety_level",
     "split_prompt_terms",

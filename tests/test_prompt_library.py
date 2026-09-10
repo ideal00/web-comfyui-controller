@@ -9,7 +9,7 @@ class PromptLibraryTests(unittest.TestCase):
         library = Path("web/assets/js/prompt-library.js").read_text(encoding="utf-8")
         css = Path("web/assets/css/panel.css").read_text(encoding="utf-8")
 
-        self.assertLess(html.index("prompt-library.js?v=5"), html.index("panel.js?v=58"))
+        self.assertLess(html.index("prompt-library.js?v="), html.index("panel.js?v="))
         for marker in ('id="tokenSearch"', 'id="tokenCategoryTabs"', "filterTokenLibrary()"):
             self.assertIn(marker, html)
         for marker in ("selectTokenGroup", "activeTokenGroup", "EASY_PANEL_PROMPT_LIBRARY"):

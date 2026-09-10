@@ -15,7 +15,7 @@ class QuickNavigationTests(unittest.TestCase):
             'onclick="jumpToPanelBottom()"',
             'id="quickGenerate"',
             'onclick="quickGenerateImage()"',
-            'src="/assets/js/panel.js?v=58"',
+            'src="/assets/js/panel.js?v='
         ):
             self.assertIn(marker, html)
         self.assertIn("function jumpToPanelSection", script)

@@ -6344,3 +6344,7 @@ textarea:focus-visible {
   .epm-library-viewer-viewport { padding: 8px; }
   .epm-library-viewer-footer { align-items: flex-end; }
 }
+.epm-library-item-wrap{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:stretch}
+.epm-library-item-delete{display:inline-flex;align-items:center;justify-content:center;align-self:center;width:30px;min-height:54px;border:1px solid rgba(255,120,130,.45);border-radius:10px;background:rgba(70,20,24,.55);color:#ffc9ce;cursor:pointer}
+.epm-library-item-delete:active{transform:scale(.94)}
+.epm-library-actions .epm-danger-button{display:inline-flex;align-items:center;gap:5px;background:rgba(122,30,40,.6);border-color:rgba(255,110,120,.55);color:#ffd5d8}

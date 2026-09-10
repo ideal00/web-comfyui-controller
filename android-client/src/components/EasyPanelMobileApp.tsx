@@ -1,5 +1,5 @@
-import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Wifi, X, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
+import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Trash2, Wifi, X, XCircle } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
 import { appendPromptText, parsePromptTranslation, type ParsedPromptTranslation } from '../lib/promptTranslation'
@@ -617,6 +617,9 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
   onClose: () => void
 }) {
   const detail = controller.libraryDetail
+  // Keep the list scroll offset while a detail view is open so returning to the
+  // records page lands on the same position instead of the top.
+  const listScrollRef = useRef(0)
   const [viewerArtifact, setViewerArtifact] = useState<EasyPanelGenerationArtifact>()
   const [viewerSource, setViewerSource] = useState('')
   const [viewerLoading, setViewerLoading] = useState(false)
@@ -686,6 +689,12 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
     if (restored) onClose()
   }
 
+  async function removeGeneration(id: string) {
+    const model = controller.libraryDetail?.model || '该作品'
+    if (!globalThis.confirm(`删除${model}的记录并删除电脑端对应的本地图片吗？此操作无法撤销。`)) return
+    await controller.deleteLibraryGeneration(id)
+  }
+
   return (
     <div className="epm-library-layer" role="dialog" aria-modal="true" aria-label="作品库">
       <button type="button" className="epm-library-backdrop" onClick={onClose} aria-label="关闭作品库" />
@@ -708,6 +717,7 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           onRestore={restore}
           onPreview={(artifact) => void openOriginal(artifact)}
           onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
+          onDelete={(id) => void removeGeneration(id)}
         /> : <LibraryList
           items={controller.library}
           thumbnailSources={controller.libraryThumbnailSources}
@@ -717,10 +727,13 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
           loading={controller.libraryLoading}
           error={controller.libraryError}
           message={controller.libraryMessage}
+          savedScrollTop={listScrollRef.current}
+          onScrollTopChange={(top) => { listScrollRef.current = top }}
           onRefresh={() => void controller.refreshLibrary()}
           onLoadMore={() => void controller.loadMoreLibrary()}
           onLoadThumbnail={controller.loadLibraryThumbnail}
           onOpen={(id) => void controller.openLibraryGeneration(id)}
+          onDelete={(id) => void removeGeneration(id)}
         />}
         {controller.libraryDownloadMessage && <p className={`epm-library-message ${controller.libraryDownloadMessage.includes('失败') ? 'failure' : 'success'}`} role="status">{controller.libraryDownloadMessage}</p>}
       </section>
@@ -737,7 +750,7 @@ function EasyPanelLibraryDialog({ controller, onClose }: {
   )
 }
 
-function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading, loading, error, message, onRefresh, onLoadMore, onLoadThumbnail, onOpen }: {
+function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading, loading, error, message, savedScrollTop = 0, onScrollTopChange, onRefresh, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
   total: number
@@ -746,12 +759,31 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
   loading: boolean
   error: string
   message: string
+  savedScrollTop?: number
+  onScrollTopChange?: (top: number) => void
   onRefresh: () => void
   onLoadMore: () => void
   onLoadThumbnail: (item: EasyPanelGenerationSummary) => void
   onOpen: (id: string) => void
+  onDelete: (id: string) => void
 }) {
   const contentRef = useRef<HTMLDivElement>(null)
+
+  // Restore the previously saved scroll offset when the list is remounted after
+  // viewing a work detail, so going back stays at the original position.
+  useLayoutEffect(() => {
+    const root = contentRef.current
+    if (!root) return
+    const target = Number(savedScrollTop) || 0
+    if (target <= 0) return
+    root.scrollTop = target
+    const raf = requestAnimationFrame(() => {
+      if (contentRef.current) contentRef.current.scrollTop = target
+    })
+    return () => cancelAnimationFrame(raf)
+    // Run once on mount only; later prop changes are handled by onScrollTopChange.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     const root = contentRef.current
@@ -779,7 +811,14 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
   }, [items, onLoadThumbnail])
 
   return (
-    <div ref={contentRef} className="epm-library-content">
+    <div
+      ref={contentRef}
+      className="epm-library-content"
+      onScroll={() => {
+        const root = contentRef.current
+        if (root) onScrollTopChange?.(root.scrollTop)
+      }}
+    >
       <div className="epm-library-toolbar">
         <span>{message}</span>
         <button type="button" className="epm-quiet-button epm-inline-button" onClick={onRefresh} disabled={loading}>
@@ -789,18 +828,23 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
       {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
       {items.length ? <>
         <div className="epm-library-list">
-          {items.map((item) => <button type="button" className="epm-library-item" data-library-thumbnail-id={item.generation_id} key={item.generation_id} onClick={() => onOpen(item.generation_id)}>
-            <div className="epm-library-thumb">
-              {thumbnailSources[item.generation_id]
-                ? <img src={thumbnailSources[item.generation_id]} alt="" />
-                : thumbnailLoading[item.generation_id] ? <LoaderCircle size={22} className="epm-spin" /> : <ImageIcon size={24} />}
-            </div>
-            <div className="epm-library-item-copy">
-              <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
-              <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
-              <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
-            </div>
-          </button>)}
+          {items.map((item) => <div className="epm-library-item-wrap" key={item.generation_id}>
+            <button type="button" className="epm-library-item" data-library-thumbnail-id={item.generation_id} onClick={() => onOpen(item.generation_id)}>
+              <div className="epm-library-thumb">
+                {thumbnailSources[item.generation_id]
+                  ? <img src={thumbnailSources[item.generation_id]} alt="" />
+                  : thumbnailLoading[item.generation_id] ? <LoaderCircle size={22} className="epm-spin" /> : <ImageIcon size={24} />}
+              </div>
+              <div className="epm-library-item-copy">
+                <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
+                <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
+                <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
+              </div>
+            </button>
+            <button type="button" className="epm-library-item-delete" title="删除记录与对应本地图片" aria-label={`删除 ${item.model || '作品'}`} onClick={() => onDelete(item.generation_id)}>
+              <Trash2 size={15} />
+            </button>
+          </div>)}
         </div>
         {hasMore && <button type="button" className="epm-library-load-more" onClick={onLoadMore} disabled={loading}>
           {loading ? <LoaderCircle size={15} className="epm-spin" /> : <ChevronDown size={15} />}
@@ -811,7 +855,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, thumbnailLoading
   )
 }
 
-function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload }: {
+function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, previewLoading, onBack, onRestore, onPreview, onDownload, onDelete }: {
   detail: EasyPanelGenerationDetail
   lineage?: ReturnType<typeof useEasyPanelController>['libraryLineage']
   thumbnailSource?: string
@@ -821,6 +865,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
   onRestore: (mode: 'reproduce' | 'seed-variant' | 'continue-edit') => void
   onPreview: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
   onDownload: (artifact: EasyPanelGenerationDetail['artifacts'][number]) => void
+  onDelete: (id: string) => void
 }) {
   const previewArtifact = detail.artifacts.find((artifact) => artifact.exists !== false && Boolean(artifact.url))
 
@@ -846,6 +891,7 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
         <button type="button" className="epm-secondary-button" onClick={() => onRestore('reproduce')}>复现到当前表单</button>
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('seed-variant')}>换 Seed 到当前表单</button>
         <button type="button" className="epm-quiet-button" onClick={() => onRestore('continue-edit')}>继续编辑</button>
+        <button type="button" className="epm-danger-button" onClick={() => onDelete(detail.generation_id)}><Trash2 size={14} />删除此作品</button>
       </div>
       <p className="epm-library-note">恢复只会填入当前表单，不会自动生成，也不会自动选择某个输出作为图生图 / 重绘输入；下一次生成会记录派生关系，也可在表单中取消关联。</p>
       <section className="epm-library-detail-section">

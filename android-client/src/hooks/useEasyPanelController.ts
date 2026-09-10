@@ -35,6 +35,7 @@ import {
   type VisualJobStatus,
 } from '../services/easyPanelVisual'
 import {
+  deleteEasyPanelGeneration,
   getEasyPanelGeneration,
   getEasyPanelLineage,
   getEasyPanelLibrary,
@@ -121,6 +122,7 @@ export interface EasyPanelController {
   refreshLibrary: () => Promise<void>
   openLibraryGeneration: (id: string) => Promise<boolean>
   clearLibraryDetail: () => void
+  deleteLibraryGeneration: (id: string) => Promise<boolean>
   restoreLibraryGeneration: (mode?: EasyPanelLibraryRestoreMode) => Promise<boolean>
   clearPendingDerivation: () => void
   downloadLibraryArtifact: (artifact: EasyPanelGenerationArtifact) => Promise<void>
@@ -592,8 +594,19 @@ export function useEasyPanelController(): EasyPanelController {
     } catch (caught) {
       setLibraryDetail(undefined)
       setLibraryLineage(undefined)
-      setLibraryMessage('作品详情读取失败')
-      setLibraryError(errorMessage(caught, settings.token, '读取作品详情'))
+      if (caught instanceof EasyPanelHttpError && caught.status === 404) {
+        // The record is gone on the computer side (image was deleted and the
+        // record pruned).  Drop it from the local list so returning to the
+        // records page does not keep showing a work whose image no longer
+        // exists.
+        setLibrary((previous) => previous.filter((item) => item.generation_id !== id))
+        setLibraryTotal((previous) => Math.max(0, previous - 1))
+        setLibraryMessage('该作品在电脑端已不存在（输出图片可能已删除），已从列表移除。')
+        setLibraryError('')
+      } else {
+        setLibraryMessage('作品详情读取失败')
+        setLibraryError(errorMessage(caught, settings.token, '读取作品详情'))
+      }
       return false
     } finally {
       setLibraryLoading(false)
@@ -636,6 +649,45 @@ export function useEasyPanelController(): EasyPanelController {
     setLibraryError('')
     setLibraryDownloadMessage('')
   }, [])
+
+  const deleteLibraryGeneration = useCallback(async (id: string) => {
+    try {
+      normalizeEasyPanelBaseUrl(settings.baseUrl)
+    } catch (caught) {
+      setLibraryError(errorMessage(caught, settings.token, '删除作品'))
+      return false
+    }
+    if (!settings.token.trim()) {
+      setLibraryError('请先填写 RPG Token，再删除作品。')
+      return false
+    }
+    setLibraryLoading(true)
+    setLibraryError('')
+    setLibraryMessage('正在删除作品…')
+    try {
+      const response = await deleteEasyPanelGeneration(config, id)
+      setLibrary((previous) => previous.filter((item) => item.generation_id !== id))
+      if (response.deleted) {
+        setLibraryTotal((previous) => Math.max(0, previous - 1))
+        libraryOffsetRef.current = Math.max(0, libraryOffsetRef.current - 1)
+      }
+      setLibraryDetail(undefined)
+      setLibraryLineage(undefined)
+      const removed = Array.isArray(response.removed_files) ? response.removed_files.length : 0
+      const missing = Array.isArray(response.missing_files) ? response.missing_files.length : 0
+      setLibraryMessage(response.deleted
+        ? `已删除作品${removed ? `，并删除 ${removed} 个本地图片文件` : ''}${missing ? `（另有 ${missing} 个文件已缺失）` : ''}。`
+        : '该作品在电脑端已被其他会话清理，本地列表已同步移除。')
+      setLibraryError('')
+      return true
+    } catch (caught) {
+      setLibraryMessage('作品删除失败')
+      setLibraryError(errorMessage(caught, settings.token, '删除作品'))
+      return false
+    } finally {
+      setLibraryLoading(false)
+    }
+  }, [config, settings.baseUrl, settings.token])
 
   const downloadLibraryArtifact = useCallback(async (artifact: EasyPanelGenerationArtifact) => {
     if (!artifact.url || artifact.exists === false || libraryDownloadLoading) return
@@ -957,6 +1009,7 @@ export function useEasyPanelController(): EasyPanelController {
     refreshLibrary,
     openLibraryGeneration,
     clearLibraryDetail,
+    deleteLibraryGeneration,
     restoreLibraryGeneration,
     clearPendingDerivation,
     downloadLibraryArtifact,

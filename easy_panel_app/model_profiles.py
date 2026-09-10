@@ -12,7 +12,7 @@ DATA_FILE = Path(__file__).resolve().parent / "data" / "model_profiles.json"
 
 DEFAULT_RESOLUTION = {
     "min": 512,
-    "max": 1920,
+    "max": 2560,
     "alignment": 8,
     "recommended": [[1024, 1024], [832, 1216], [1216, 832]],
 }

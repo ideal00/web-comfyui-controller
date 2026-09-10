@@ -84,6 +84,7 @@ from easy_panel_app.metadata import (
 )
 from easy_panel_app.numeric import bounded
 from easy_panel_app.prompt_utils import (
+    merge_hires_prompt,
     normalize_prompt_key,
     normalized_safety_level,
     split_prompt_terms,
@@ -132,6 +133,7 @@ ANIMA_VAE = "qwen_image_vae.safetensors"
 KREA2_TEXT_ENCODER = "qwen3VL4BAbliteratedComfyui_v10.safetensors"
 KREA2_VAE = ANIMA_VAE
 HIRES_UPSCALE_MODEL = "RealESRGAN_x4plus_anime_6B.pth"
+HIRES_PROMPT_MODES = ("inherit", "append", "replace")
 SEEDVR2_MODEL = "seedvr2_3b_int8_convrot.safetensors"
 SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
 FACE_DETECTOR_MODEL = "bbox/face_yolov8m.pt"
@@ -520,6 +522,34 @@ def get_creative_index() -> CreativeIndex:
     """Return a lazy SQLite index handle without touching legacy JSON files."""
 
     return CreativeIndex(CREATIVE_INDEX_FILE)
+
+
+_CREATIVE_PRUNE_LOCK = threading.Lock()
+_CREATIVE_PRUNE_INTERVAL_SECONDS = 15.0
+_LAST_CREATIVE_PRUNE_TS = 0.0
+
+
+def prune_creative_missing_outputs() -> dict:
+    """Throttled cleanup: drop library records whose output image files are gone.
+
+    Runs at most once every ``_CREATIVE_PRUNE_INTERVAL_SECONDS`` and is called
+    before library reads so both the desktop and mobile galleries stop showing
+    records whose images were already deleted from disk.  Never raises: a
+    cleanup failure must not break an otherwise read-only library request.
+    """
+
+    global _LAST_CREATIVE_PRUNE_TS
+    now = time.time()
+    if now - _LAST_CREATIVE_PRUNE_TS < _CREATIVE_PRUNE_INTERVAL_SECONDS:
+        return {"throttled": True}
+    with _CREATIVE_PRUNE_LOCK:
+        if now - _LAST_CREATIVE_PRUNE_TS < _CREATIVE_PRUNE_INTERVAL_SECONDS:
+            return {"throttled": True}
+        _LAST_CREATIVE_PRUNE_TS = now
+    try:
+        return get_creative_index().prune_missing_outputs(OUTPUT)
+    except Exception:
+        return {"error": True}
 
 
 def ensure_creative_index_from_legacy_best_effort(index: CreativeIndex | None = None) -> dict:
@@ -1590,10 +1620,10 @@ def anima_preflight(data: dict) -> dict:
         warnings.append("尚未填写已验证的硬标签；可在“Anima 提示词分层”中校验角色、服装和姿势标签。")
     steps = bounded(data.get("steps"), 30, 8, 60)
     cfg = bounded(data.get("cfg"), 4.0, 1, 15, integer=False)
-    width = bounded(data.get("width"), 832, 512, 1920)
-    height = bounded(data.get("height"), 1216, 512, 1920)
+    width = bounded(data.get("width"), 832, 512, 1536)
+    height = bounded(data.get("height"), 1216, 512, 1536)
     if width * height > 1_250_000:
-        warnings.append(f"Anima 当前尺寸为 {width}×{height}；8GB 显存压力较大，显存不足时请改用 896×1344 或 1024×1024。")
+        warnings.append(f"Anima 当前尺寸为 {width}×{height}；8GB 显存压力较大，显存不足时请改用 864×1152 或 1024×1024。")
     if not 20 <= steps <= 50:
         warnings.append("Anima Base 通常建议 20–50 步；当前步数为 " + str(steps) + "。")
     if not 3.5 <= cfg <= 5.5:
@@ -1615,12 +1645,12 @@ def krea2_preflight(data: dict) -> dict:
         errors.append(f"缺少 Krea 2 文本编码器：请下载 Qwen3-VL-4B 并保存为 models\\text_encoders\\{KREA2_TEXT_ENCODER}。")
     if not (COMFY_MODELS / "vae" / KREA2_VAE).is_file():
         errors.append(f"缺少 VAE：{KREA2_VAE}")
-    width = bounded(data.get("width"), 832, 512, 1920)
-    height = bounded(data.get("height"), 1216, 512, 1920)
+    width = bounded(data.get("width"), 832, 512, 2560)
+    height = bounded(data.get("height"), 1216, 512, 2560)
     if width * height > 1_250_000:
         warnings.append(
             f"Krea 2 当前尺寸 {width}×{height}（{width * height / 1e6:.2f} MP）；8GB 显存建议用 "
-            f"896×1344 或 1024×1024 以内，超出时会走 CPU 卸载（明显变慢）。"
+            f"864×1152 或 1024×1024 以内，超出时会走 CPU 卸载（明显变慢）。"
         )
     return {"isKrea2": True, "errors": errors, "warnings": warnings}
 
@@ -1661,9 +1691,9 @@ def illustrious_preflight(data: dict) -> dict:
         denoise = bounded(repair.get("denoise"), 0.5, 0.2, 1.0, integer=False)
         if denoise >= 0.95:
             warnings.append("重绘幅度接近 1.0 会整图重绘；局部修复建议 0.4–0.7。")
-    scale = bounded(data.get("hiresScale"), 1.25, 1.1, 1.5, integer=False)
-    width = bounded(data.get("width"), 832, 512, 1920)
-    height = bounded(data.get("height"), 1216, 512, 1920)
+    scale = bounded(data.get("hiresScale"), 1.25, 1.0, 8.0, integer=False)
+    width = bounded(data.get("width"), 832, 512, 2560)
+    height = bounded(data.get("height"), 1216, 512, 2560)
     projected_pixels = width * height * (scale ** 2 if mode == "hires" else 1)
     if mode == "hires" and scale > 1.3:
         warnings.append("高清倍率高于 1.30×，8GB 显存更容易溢出；建议先用 1.25×。")
@@ -1671,6 +1701,19 @@ def illustrious_preflight(data: dict) -> dict:
         out_width = round(width * scale / 8) * 8
         out_height = round(height * scale / 8) * 8
         warnings.append(f"预计高清成图为 {out_width}×{out_height}；8GB 显存风险较高，建议改用精准模式或 1.10–1.15×。")
+    hires_mode = normalized_hires_prompt_mode(data)
+    hires_positive = str(data.get("hiresPositive", "") or "").strip()
+    hires_negative = str(data.get("hiresNegative", "") or "").strip()
+    if str(data.get("hiresPromptMode", "") or "").strip().lower() not in HIRES_PROMPT_MODES:
+        if str(data.get("hiresPromptMode", "") or "").strip():
+            warnings.append("二采提示词模式无效，已按“继承首采”处理；可选 inherit / append / replace。")
+    if (hires_positive or hires_negative) and mode != "hires":
+        warnings.append("二采提示词只在高清模式（二次采样）下生效；当前生成模式不是高清模式。")
+    if mode == "hires" and hires_mode != "inherit" and (hires_positive or hires_negative):
+        if len(split_prompt_terms(hires_positive, limit=360)) > 40:
+            warnings.append("二采补充提示词条目偏多；高清阶段建议只保留 10–20 项细节词，避免二采重新抢构图。")
+        if normalized_regions(data):
+            warnings.append("多人区域提示词期间，二采提示词会按“继承首采”处理；如需独立二采提示词请先关闭多人分区。")
     profile = illustrious_sampling_settings(model)
     return {"isIllustrious": True, "errors": errors, "warnings": warnings,
             "profile": profile, "mode": mode,
@@ -1988,6 +2031,12 @@ def regional_mask_layout(regions: list[dict], width: int, height: int) -> list[d
         layouts.append({"x": x, "y": y, "width": box_width, "height": box_height,
                         "feathers": feathers})
     return layouts
+
+
+def normalized_hires_prompt_mode(data: dict) -> str:
+    """Return the hi-res prompt mode, defaulting to inherit for old payloads."""
+    mode = str(data.get("hiresPromptMode", "") or "").strip().lower()
+    return mode if mode in HIRES_PROMPT_MODES else "inherit"
 
 
 def regional_global_prompt(data: dict, compiled: dict, bound_loras: set[str]) -> str:
@@ -3091,13 +3140,11 @@ def build_workflow(data: dict) -> dict:
     if hires_enabled:
         hires_defaults = sampling_profile.get("hires") or {}
         scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25),
-                        hires_defaults.get("min_scale", 1.1),
-                        hires_defaults.get("max_scale", 1.5), integer=False)
+                        1.0, 8.0, integer=False)
         hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.35),
-                                hires_defaults.get("min_denoise", 0.15),
-                                hires_defaults.get("max_denoise", 0.45), integer=False)
-        hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 8, 30)
-        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 1, 15, integer=False)
+                                0.05, 1.0, integer=False)
+        hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 1, 150)
+        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 1, 30, integer=False)
         hires_sampler = str(hires_defaults.get("sampler", "auto") or "auto")
         hires_scheduler = str(hires_defaults.get("scheduler", "auto") or "auto")
         requested_hires_sampler = str(data.get("hiresSampler", "") or "").strip()
@@ -3110,6 +3157,25 @@ def build_workflow(data: dict) -> dict:
             hires_sampler = sampler_name
         if hires_scheduler == "auto":
             hires_scheduler = scheduler
+        # Two-stage prompts: the first pass decides composition, the second pass
+        # only adds detail. Regional conditioning is a masked graph instead of
+        # plain text, so it always keeps the first-stage refs.
+        hires_mode = normalized_hires_prompt_mode(data)
+        if regional_mode:
+            hires_mode = "inherit"
+        hires_positive_text, hires_negative_text = merge_hires_prompt(
+            base_positive, negative,
+            str(data.get("hiresPositive", "") or "")[:4000],
+            str(data.get("hiresNegative", "") or "")[:4000], hires_mode)
+        hires_positive_ref, hires_negative_ref = positive_ref, negative_ref
+        if hires_mode != "inherit":
+            hires_positive_id, hires_negative_id = alloc(), alloc()
+            nodes[hires_positive_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                "text": hires_positive_text, "clip": clip_ref}}
+            nodes[hires_negative_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                "text": hires_negative_text, "clip": clip_ref}}
+            hires_positive_ref = [hires_positive_id, 0]
+            hires_negative_ref = [hires_negative_id, 0]
         # Match JavaScript Math.round used by the size preview. Python round()
         # uses bankers' rounding and disagrees at exact .5 boundaries.
         hires_width = max(8, int(sampling_width * scale / 8 + 0.5) * 8)
@@ -3161,7 +3227,7 @@ def build_workflow(data: dict) -> dict:
             "inputs": {"seed": seed, "steps": hires_steps, "cfg": hires_cfg,
                        "sampler_name": hires_sampler, "scheduler": hires_scheduler,
                        "denoise": hires_denoise, "model": model_ref,
-                       "positive": positive_ref, "negative": negative_ref,
+                       "positive": hires_positive_ref, "negative": hires_negative_ref,
                        "latent_image": [hires_encode_id, 0]},
         }
         sample_ref = [hires_sampler_id, 0]
@@ -4372,6 +4438,7 @@ class Handler(BaseHTTPRequestHandler):
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
                 reconcile_creative_index_jobs()
+                prune_creative_missing_outputs()
                 result = creative_index.list_generations(
                     limit=query.get("limit", [20])[0],
                     offset=query.get("offset", [0])[0],
@@ -4393,6 +4460,7 @@ class Handler(BaseHTTPRequestHandler):
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
                 reconcile_creative_index_jobs()
+                prune_creative_missing_outputs()
                 lineage = creative_index.get_lineage(generation_id)
                 if lineage is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
@@ -4409,6 +4477,7 @@ class Handler(BaseHTTPRequestHandler):
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
                 reconcile_creative_index_jobs()
+                prune_creative_missing_outputs()
                 generation = creative_index.get_generation(generation_id)
                 if generation is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
@@ -4682,7 +4751,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -4722,6 +4791,22 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/rpg/profiles":
                 document = data.get("profiles") if isinstance(data.get("profiles"), dict) else data
                 self.send_json(save_rpg_profiles(document))
+                return
+            if self.path == "/api/rpg/library/delete":
+                generation_id = str(data.get("generation_id") or "").strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{32}", generation_id):
+                    raise ValueError("作品编号无效。")
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                result = creative_index.delete_generation(generation_id, OUTPUT)
+                if result is None:
+                    self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
+                    return
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    **result,
+                })
                 return
             if self.path in {"/api/prompt-instruction", "/api/rpg/prompt-instruction"}:
                 self.send_json(build_prompt_instruction(

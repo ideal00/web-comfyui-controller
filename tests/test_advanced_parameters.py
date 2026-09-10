@@ -175,6 +175,96 @@ class SamplingProfileTests(unittest.TestCase):
         self.assertEqual([next(node_id for node_id, node in nodes.items()
                                if node is encode), 0], second["latent_image"])
 
+    def test_merge_hires_prompt_append_and_replace_order(self):
+        self.assertEqual(
+            ("A, B, C, D, E", "N1, N2"),
+            easy_panel.merge_hires_prompt("A, B, C", "", "D, E", "N1, N2", "append"))
+        self.assertEqual(
+            ("D, E", "N1"),
+            easy_panel.merge_hires_prompt("A, B, C", "N0", "D, E", "N1", "replace"))
+        self.assertEqual(
+            ("A, B, C", "N0"),
+            easy_panel.merge_hires_prompt("A, B, C", "N0", "", "", "inherit"))
+        # An empty replace box must not wipe an already validated prompt.
+        self.assertEqual(
+            ("A, B, C", "N0"),
+            easy_panel.merge_hires_prompt("A, B, C", "N0", "", "", "replace"))
+        self.assertEqual(
+            ("D, E", "N0"),
+            easy_panel.merge_hires_prompt("A, B, C", "N0", "D, E", "", "replace"))
+
+    def test_hires_prompt_append_merges_first_and_second_stage(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                     "hiresPromptMode": "append",
+                     "hiresPositive": "torn clothes, bloodstains",
+                     "hiresNegative": "blurry details"})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        self.assertEqual(2, len(samplers))
+        text_of = lambda ref: nodes[str(ref[0])]["inputs"]["text"]
+        base_positive = text_of(samplers[0]["inputs"]["positive"])
+        hires_positive = text_of(samplers[1]["inputs"]["positive"])
+        self.assertIn("1girl", hires_positive)
+        self.assertTrue(hires_positive.startswith(base_positive))
+        self.assertTrue(hires_positive.endswith("torn clothes, bloodstains"))
+        self.assertTrue(text_of(samplers[1]["inputs"]["negative"]).endswith("blurry details"))
+        # The first pass keeps the original conditioning.
+        self.assertEqual(base_positive, text_of(samplers[0]["inputs"]["positive"]))
+        self.assertNotIn("torn clothes", base_positive)
+
+    def test_hires_prompt_replace_uses_second_stage_text(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                     "hiresPromptMode": "replace",
+                     "hiresPositive": "detailed fabric texture, silk sheen",
+                     "hiresNegative": "blurry details"})
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        text_of = lambda ref: nodes[str(ref[0])]["inputs"]["text"]
+        hires_positive = text_of(samplers[1]["inputs"]["positive"])
+        self.assertEqual("detailed fabric texture, silk sheen", hires_positive)
+        self.assertEqual("blurry details", text_of(samplers[1]["inputs"]["negative"]))
+        self.assertNotIn("1girl", hires_positive)
+
+    def test_hires_prompt_inherit_and_unknown_modes_reuse_first_stage(self):
+        for mode in (None, "banana"):
+            with self.subTest(mode=mode):
+                data = payload("waiIllustriousSDXL_v140.safetensors")
+                data.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                             "hiresPositive": "torn clothes"})
+                if mode:
+                    data["hiresPromptMode"] = mode
+                nodes = self.build(data)
+                samplers = self.nodes_of(nodes, "KSampler")
+                self.assertEqual(samplers[0]["inputs"]["positive"],
+                                 samplers[1]["inputs"]["positive"])
+                self.assertEqual(samplers[0]["inputs"]["negative"],
+                                 samplers[1]["inputs"]["negative"])
+                encoded = [node["inputs"]["text"]
+                           for node in self.nodes_of(nodes, "CLIPTextEncode")]
+                self.assertFalse(any("torn clothes" in text for text in encoded))
+
+    def test_hires_prompt_keeps_regional_conditioning(self):
+        data = payload("waiIllustriousSDXL_v140.safetensors")
+        data.update({
+            "illustriousMode": "hires", "hiresScale": 1.2,
+            "hiresPromptMode": "append", "hiresPositive": "torn clothes",
+            "regions": [
+                {"prompt": "alice, blue hair", "subject": "1girl",
+                 "x": 0, "y": 0, "width": 0.54, "height": 1},
+                {"prompt": "bob, red hair", "subject": "1girl",
+                 "x": 0.46, "y": 0, "width": 0.54, "height": 1},
+            ],
+        })
+        nodes = self.build(data)
+        samplers = self.nodes_of(nodes, "KSampler")
+        self.assertEqual(samplers[0]["inputs"]["positive"],
+                         samplers[1]["inputs"]["positive"])
+        encoded = [node["inputs"]["text"]
+                   for node in self.nodes_of(nodes, "CLIPTextEncode")]
+        self.assertFalse(any("torn clothes" in text for text in encoded))
+
     def test_model_specific_hires_and_generic_sdxl_capability(self):
         data = payload("gockSoAnimeLoveSong_gocksoanimeLoveSong.safetensors")
         data.update({"illustriousMode": "hires", "hiresSampler": "euler",
@@ -617,6 +707,40 @@ class BatchQueueTests(unittest.TestCase):
             easy_panel.expand_generation_jobs([{"batchCount": 16} for _ in range(13)])
         with self.assertRaisesRegex(ValueError, "1-50"):
             easy_panel.expand_generation_jobs([{"batchCount": 1} for _ in range(51)])
+
+
+class HiresPromptWiringTests(unittest.TestCase):
+    """The two-stage prompt fields must reach the snapshot, the UI and mobile."""
+
+    ROOT = Path(__file__).resolve().parents[1]
+    FIELDS = ("hiresPromptMode", "hiresPositive", "hiresNegative", "hiresLockComposition")
+
+    def read(self, *parts: str) -> str:
+        return (self.ROOT.joinpath(*parts)).read_text(encoding="utf-8")
+
+    def test_frontend_payload_snapshot_and_ui_expose_the_fields(self):
+        for root in (self.ROOT, self.ROOT / "installers" / "payload"):
+            with self.subTest(root=root.name):
+                panel = (root / "web/assets/js/panel.js").read_text(encoding="utf-8")
+                advanced = (root / "web/assets/js/model-advanced.js").read_text(encoding="utf-8")
+                snapshot = (root / "web/assets/js/snapshot-flow.js").read_text(encoding="utf-8")
+                for field in self.FIELDS:
+                    self.assertIn(field, panel)
+                    self.assertIn(field, advanced)
+                    self.assertIn(field, snapshot)
+                self.assertIn("insertHiresPromptTemplate", advanced)
+
+    def test_mobile_generation_payload_carries_the_fields(self):
+        for root in (self.ROOT, self.ROOT / "installers" / "payload"):
+            with self.subTest(root=root.name):
+                api = (root / "easy_panel_app/rpg_api.py").read_text(encoding="utf-8")
+                for field in ("hiresPromptMode", "hiresPositive", "hiresNegative"):
+                    self.assertIn(f'"{field}"', api)
+        android = self.ROOT / "android-client/src/services/easyPanelVisual.ts"
+        if android.exists():
+            text = android.read_text(encoding="utf-8")
+            for field in ("hiresPromptMode", "hiresPositive", "hiresNegative"):
+                self.assertIn(field, text)
 
 
 if __name__ == "__main__":

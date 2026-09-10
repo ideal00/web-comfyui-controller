@@ -173,6 +173,28 @@ export async function getEasyPanelLineage(
   return jsonRequest<EasyPanelLibraryLineageResponse>(config, `/api/rpg/library/generations/${id}/lineage`)
 }
 
+export interface EasyPanelLibraryDeleteResponse {
+  api_version: number
+  index_schema_version: number
+  deleted_generation: string
+  deleted: boolean
+  removed_files: string[]
+  missing_files: string[]
+  artifact_count: number
+}
+
+/** Delete a generation record and its local output images on the computer side. */
+export async function deleteEasyPanelGeneration(
+  config: EasyPanelVisualConfig,
+  generationId: string,
+): Promise<EasyPanelLibraryDeleteResponse> {
+  const id = safeGenerationId(generationId)
+  return jsonRequest<EasyPanelLibraryDeleteResponse>(config, '/api/rpg/library/delete', {
+    method: 'POST',
+    body: JSON.stringify({ generation_id: id }),
+  })
+}
+
 export function safeGenerationId(value: string): string {
   const id = value.trim().toLowerCase()
   if (!/^[0-9a-f]{32}$/u.test(id)) throw new Error('作品编号无效。')

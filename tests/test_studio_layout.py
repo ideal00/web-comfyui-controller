@@ -66,9 +66,9 @@ class StudioLayoutTests(unittest.TestCase):
 
     def test_large_portrait_is_the_default_generation_size(self):
         self.assertIn("function loadDefaultGenerationSize", self.javascript)
-        self.assertIn("preferred='896x1344'", self.javascript)
+        self.assertIn("preferred='864x1152'", self.javascript)
         self.assertIn("loadDefaultGenerationSize();", self.javascript)
-        self.assertIn("String($('size')?.value||'896x1344')", self.javascript)
+        self.assertIn("String($('size')?.value||'864x1152')", self.javascript)
 
 
 if __name__ == "__main__":

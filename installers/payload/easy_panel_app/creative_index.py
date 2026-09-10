@@ -1214,20 +1214,25 @@ class CreativeIndex:
         lora_count = connection.execute(
             "SELECT COUNT(*) FROM generation_loras WHERE generation_id = ?", (generation_id,)
         ).fetchone()[0]
-        thumbnail = connection.execute(
-            """SELECT filename, subfolder, image_type, metadata_json FROM artifacts
-               WHERE generation_id = ? ORDER BY created_at ASC LIMIT 1""",
-            (generation_id,),
-        ).fetchone()
         thumbnail_url = None
-        if thumbnail:
+        # Prefer the first output whose file still exists so a deleted leading
+        # image does not leave the record without a usable thumbnail.  The
+        # "exists" flag is refreshed by prune_missing_outputs before listing.
+        thumbnails = connection.execute(
+            """SELECT filename, subfolder, image_type, metadata_json FROM artifacts
+               WHERE generation_id = ? ORDER BY created_at ASC, artifact_id ASC""",
+            (generation_id,),
+        ).fetchall()
+        for thumbnail in thumbnails:
             metadata = _json_value(thumbnail["metadata_json"])
-            if not isinstance(metadata, Mapping) or metadata.get("exists") is not False:
-                thumbnail_url = artifact_url(
-                    str(thumbnail["filename"]),
-                    str(thumbnail["subfolder"]),
-                    str(thumbnail["image_type"]),
-                )
+            if isinstance(metadata, Mapping) and metadata.get("exists") is False:
+                continue
+            thumbnail_url = artifact_url(
+                str(thumbnail["filename"]),
+                str(thumbnail["subfolder"]),
+                str(thumbnail["image_type"]),
+            )
+            break
         return {
             "generation_id": generation_id,
             "snapshot_id": row["snapshot_id"] or None,
@@ -1336,6 +1341,147 @@ class CreativeIndex:
                     "note": "变化版只预览恢复参数；换 Seed 后仍必须由用户显式点击生成。",
                 },
             }
+
+    def prune_missing_outputs(self, output_root: Any, *, limit: int = 400) -> dict[str, int]:
+        """Delete generations whose recorded output images no longer exist on disk.
+
+        Works in place over a bounded number of terminal generations that already
+        have at least one recorded output artifact.  For every scanned generation
+        each output artifact is re-checked against ``output_root``; artifact
+        ``metadata.exists`` is refreshed to the current on-disk state.  A
+        generation is only deleted when none of its output files survive, which
+        removes its artifacts, derivations and LoRA rows through ON DELETE
+        CASCADE.  Queued/running rows (which usually have no artifacts yet) are
+        never touched.  Returns counts of scanned/pruned/refreshed items.
+        """
+
+        root = Path(str(output_root)).resolve()
+        scan_limit = max(1, min(4000, int(limit)))
+        pruned: list[str] = []
+        scanned = 0
+        refreshed = 0
+        with self._write_transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT g.generation_id
+                FROM generations g
+                JOIN artifacts a ON a.generation_id = g.generation_id
+                WHERE g.status IN ('completed', 'error', 'cancelled', 'unknown')
+                  AND a.image_type = 'output'
+                ORDER BY g.updated_at DESC, g.generation_id ASC
+                LIMIT ?
+                """,
+                (scan_limit,),
+            ).fetchall()
+            for row in rows:
+                scanned += 1
+                generation_id = str(row["generation_id"])
+                artifacts = connection.execute(
+                    """SELECT artifact_id, filename, subfolder, image_type, metadata_json
+                       FROM artifacts
+                       WHERE generation_id = ? AND image_type = 'output'
+                       ORDER BY created_at ASC, artifact_id ASC""",
+                    (generation_id,),
+                ).fetchall()
+                exists_any = False
+                for artifact in artifacts:
+                    filename = str(artifact["filename"] or "")
+                    subfolder = str(artifact["subfolder"] or "").replace("\\", "/").strip("/")
+                    candidate = (root / Path(subfolder) / Path(filename).name).resolve()
+                    try:
+                        candidate.relative_to(root)
+                    except ValueError:
+                        candidate = root
+                    exists = candidate.is_file()
+                    exists_any = exists_any or exists
+                    metadata = _json_value(artifact["metadata_json"])
+                    if not isinstance(metadata, Mapping):
+                        metadata = {}
+                    else:
+                        metadata = dict(metadata)
+                    if bool(metadata.get("exists")) != exists:
+                        metadata["exists"] = exists
+                        connection.execute(
+                            "UPDATE artifacts SET metadata_json = ? WHERE artifact_id = ?",
+                            (json.dumps(metadata, ensure_ascii=False), artifact["artifact_id"]),
+                        )
+                        refreshed += 1
+                if not exists_any:
+                    pruned.append(generation_id)
+            for generation_id in pruned:
+                connection.execute("DELETE FROM generations WHERE generation_id = ?", (generation_id,))
+        return {
+            "scanned_generations": scanned,
+            "pruned_generations": len(pruned),
+            "refreshed_artifacts": refreshed,
+        }
+
+    def delete_generation(self, generation_id: Any, output_root: Any = None) -> dict[str, Any] | None:
+        """Delete one generation record together with its recorded output files.
+
+        Returns ``None`` when the generation does not exist.  Only
+        ``image_type == 'output'`` artifacts are unlinked on disk, and only
+        when ``output_root`` is provided.  Every candidate path is resolved and
+        must stay inside ``output_root``; anything that escapes the root is
+        skipped (never followed).  The database row plus its artifacts,
+        derivations and LoRA rows are removed through ON DELETE CASCADE in a
+        second write transaction.  File deletion is best-effort: a file that is
+        already missing is reported in ``missing_files``, never raised.
+        """
+        wanted = _safe_generation_id(generation_id)
+        root = Path(str(output_root)).resolve() if output_root else None
+        targets: list[tuple[str, str, str, str]] = []
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT generation_id FROM generations WHERE generation_id = ?", (wanted,)
+            ).fetchone()
+            if row is None:
+                return None
+            artifacts = connection.execute(
+                "SELECT artifact_id, filename, subfolder, image_type FROM artifacts "
+                "WHERE generation_id = ?",
+                (wanted,),
+            ).fetchall()
+            for artifact in artifacts:
+                targets.append((
+                    str(artifact["artifact_id"]),
+                    str(artifact["image_type"] or "output"),
+                    str(artifact["filename"] or ""),
+                    str(artifact["subfolder"] or "").replace("\\", "/").strip("/"),
+                ))
+        removed_files: list[str] = []
+        missing_files: list[str] = []
+        if root is not None:
+            for _artifact_id, image_type, filename, subfolder in targets:
+                if image_type != "output" or not filename:
+                    continue
+                if filename in (".", ".."):
+                    continue
+                candidate = (root / Path(subfolder) / Path(filename).name).resolve()
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    # Path traversal outside the output root is never followed.
+                    continue
+                try:
+                    candidate.unlink()
+                    removed_files.append(filename)
+                except FileNotFoundError:
+                    missing_files.append(filename)
+                except OSError:
+                    pass
+        with self._write_transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM generations WHERE generation_id = ?", (wanted,)
+            )
+            deleted_rows = max(0, cursor.rowcount)
+        return {
+            "deleted_generation": wanted,
+            "deleted": deleted_rows > 0,
+            "removed_files": removed_files,
+            "missing_files": missing_files,
+            "artifact_count": len(targets),
+        }
 
     def list_generations(
         self,

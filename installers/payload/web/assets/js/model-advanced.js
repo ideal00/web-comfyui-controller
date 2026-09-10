@@ -39,6 +39,95 @@
     ultimate: { scale: 1.5, note: "推荐：1.5×、20 步、重绘 0.20、Tile 512。细节最完整，但耗时和显存占用最高。" },
   };
 
+  const HIRES_PROMPT_TEMPLATES = {
+    detail: "fine details, detailed hair strands, detailed fabric texture",
+    clothing: "clothing details, fabric folds, damaged clothing details",
+    expression: "subtle facial expression, detailed eyes, natural expression",
+  };
+
+  const HIRES_COMPOSITION_TERMS = [
+    "close-up", "close up", "extreme close-up", "medium shot", "full body",
+    "upper body", "lower body", "cowboy shot", "wide shot", "portrait",
+    "zoomed in", "headshot", "from above", "from below", "from side",
+    "front view", "back view", "side view", "perspective", "panorama", "vertical", "horizontal",
+  ];
+
+  function hiresPromptMode() {
+    return byId("hiresPromptMode")?.value || "inherit";
+  }
+
+  window.hiresPromptModeChanged = function (silent) {
+    const mode = hiresPromptMode();
+    const editing = mode !== "inherit";
+    for (const id of ["hiresPositive", "hiresNegative"]) {
+      const field = byId(id);
+      if (field) field.disabled = !editing;
+    }
+    window.hiresPromptInputChanged();
+    if (!silent && byId("status")) {
+      byId("status").textContent = mode === "inherit"
+        ? "二采提示词：继承首采（二采不改变提示词）。"
+        : mode === "append"
+          ? "二采提示词：追加补充（首采构图 + 下方补充词）。"
+          : "二采提示词：完全独立（仅使用下方两框；留空的一项沿用首采）。";
+    }
+  };
+
+  window.hiresPromptInputChanged = function () {
+    const hint = byId("hiresPromptHint");
+    if (!hint) return;
+    const mode = hiresPromptMode();
+    if (mode === "inherit") {
+      hint.textContent = "继承首采：二采沿用首采正向与负面提示词，仅做放大与轻量重绘。";
+      return;
+    }
+    const text = String(byId("hiresPositive")?.value || "").toLowerCase();
+    const locked = byId("hiresLockComposition")?.checked === true;
+    const notes = [mode === "append"
+      ? "追加补充 = 首采提示词 + 补充词；建议写局部细节、材质、表情、服装破损、发丝、皮肤细节，不建议重复构图、镜头、人物位置。"
+      : "完全独立 = 只用下方两框；某一框留空时该项沿用首采内容。"];
+    const hits = HIRES_COMPOSITION_TERMS.filter((term) => text.includes(term));
+    if (hits.length) {
+      notes.push(`⚠ 检测到 ${hits.slice(0, 4).join("、")}：${locked ? "锁定构图时这些镜头/构图词可能让二采重新构图，建议删除。" : "这些镜头/构图词可能改变二采构图。"}`);
+    }
+    notes.push(locked
+      ? "锁定首采构图：重绘幅度已限制在 0.35 以内，二采只做细节增强。"
+      : "重绘幅度参考：0.20–0.30 优先保留构图；0.30–0.40 强化细节但可能改动构图；超过 0.40 更接近重新生成。");
+    hint.textContent = notes.join(" ");
+  };
+
+  window.hiresLockCompositionChanged = function (silent) {
+    const locked = byId("hiresLockComposition")?.checked === true;
+    const denoise = byId("hiresDenoise");
+    if (denoise) {
+      denoise.max = locked ? "0.35" : "1";
+      let value = Number(denoise.value);
+      if (!Number.isFinite(value)) value = locked ? 0.25 : 0.35;
+      if (locked && value > 0.35) value = 0.35;
+      denoise.value = String(Math.round(value * 100) / 100);
+    }
+    window.hiresPromptInputChanged();
+    if (typeof window.updateSizeInfo === "function") window.updateSizeInfo();
+    if (!silent && byId("status")) {
+      byId("status").textContent = locked
+        ? "已锁定首采构图：二采重绘幅度上限 0.35，只做细节增强。"
+        : "已解除构图锁定：请自行控制重绘幅度，避免二采改掉构图。";
+    }
+  };
+
+  window.insertHiresPromptTemplate = function (kind) {
+    const field = byId("hiresPositive");
+    const template = HIRES_PROMPT_TEMPLATES[kind];
+    if (!field || !template) return;
+    if (hiresPromptMode() === "inherit") {
+      if (byId("hiresPromptMode")) byId("hiresPromptMode").value = "append";
+      window.hiresPromptModeChanged(true);
+    }
+    field.value = [String(field.value || "").trim(), template].filter(Boolean).join(", ");
+    window.hiresPromptInputChanged();
+    if (byId("status")) byId("status").textContent = `已插入二采补充模板：${template}`;
+  };
+
   function advancedPanelHtml() {
     return `
       <summary>模型增强与低显存 VAE</summary>
@@ -139,6 +228,27 @@
       hiresControls.appendChild(row);
       if (byId("sampler")) byId("hiresSampler").innerHTML = byId("sampler").innerHTML;
       if (byId("scheduler")) byId("hiresScheduler").innerHTML = byId("scheduler").innerHTML;
+    }
+    if (hiresControls && !byId("hiresPromptMode")) {
+      const promptBlock = document.createElement("div");
+      promptBlock.id = "hiresPromptPanel";
+      promptBlock.style.marginTop = "8px";
+      promptBlock.innerHTML = `
+        <div class="field-title"><span>二采提示词模式</span>${help("首采决定构图，二采只补细节。继承首采＝二采沿用首采提示词；追加补充＝在首采基础上追加下方补充词；完全独立＝二采只用下方两框（留空的一项沿用首采）。")}</div>
+        <select id="hiresPromptMode" onchange="hiresPromptModeChanged()">
+          <option value="inherit">继承首采（只做放大）</option>
+          <option value="append" selected>追加补充（推荐）</option>
+          <option value="replace">完全独立（高级）</option>
+        </select>
+        <div class="field-title" style="margin-top:8px"><span>二采补充 Prompt</span><span class="small">只写高清阶段要强化的细节，不必重复首采构图</span></div>
+        <textarea id="hiresPositive" rows="2" placeholder="例如：torn clothes, bloodstains, finer fabric texture, detailed hair strands" oninput="hiresPromptInputChanged()"></textarea>
+        <div class="field-title"><span>二采负面 Prompt</span><span class="small">留空时沿用首采负面词</span></div>
+        <textarea id="hiresNegative" rows="2" placeholder="例如：blurry details, smeared fabric texture, plastic skin" oninput="hiresPromptInputChanged()"></textarea>
+        <div class="actions"><button class="secondary" type="button" onclick="insertHiresPromptTemplate('detail')">＋ 细节强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('clothing')">＋ 服装强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('expression')">＋ 表情强化</button></div>
+        <div class="switch" style="margin-top:6px"><input id="hiresLockComposition" type="checkbox" onchange="hiresLockCompositionChanged()"><div><b>锁定首采构图</b><div class="small">勾选后二采重绘幅度上限锁到 0.35，只做细节增强；不建议再写镜头、景别、构图类提示词。</div></div></div>
+        <div id="hiresPromptHint" class="small" style="margin-top:6px"></div>`;
+      hiresControls.appendChild(promptBlock);
+      window.hiresPromptModeChanged(true);
     }
 
     const size = byId("size");
@@ -486,6 +596,25 @@
     window.applyIllustriousMode = wrapped;
   }
 
+  function wrapHiresLockClamp() {
+    const original = window.applyIllustriousMode;
+    if (typeof original !== "function" || original.__hiresLockWrapped) return;
+    const wrapped = function (...args) {
+      const result = original.apply(this, args);
+      if (byId("hiresLockComposition")?.checked) {
+        const denoise = byId("hiresDenoise");
+        if (denoise) {
+          denoise.max = "0.35";
+          const value = Number(denoise.value);
+          if (Number.isFinite(value) && value > 0.35) denoise.value = "0.35";
+        }
+      }
+      return result;
+    };
+    wrapped.__hiresLockWrapped = true;
+    window.applyIllustriousMode = wrapped;
+  }
+
   function wrapTransparentRestore() {
     const original = window.restorePayloadToPanel;
     if (typeof original !== "function" || original.__transparentWrapped) return;
@@ -512,6 +641,7 @@
   wrapProfileRefresh("modelChanged");
   wrapProfileRefresh("toggleRegions");
   wrapHiresConflict();
+  wrapHiresLockClamp();
   wrapTransparentRestore();
   syncCapabilities();
 })();

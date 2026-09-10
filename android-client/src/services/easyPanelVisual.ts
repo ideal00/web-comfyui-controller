@@ -57,6 +57,11 @@ export interface VisualGenerationSettings {
   hiresCfg?: number
   hiresSampler?: string
   hiresScheduler?: string
+  /** Two-stage prompts: "inherit" (default), "append" or "replace". */
+  hiresPromptMode?: string
+  /** Extra detail terms for the hi-res pass (append) or the full prompt (replace). */
+  hiresPositive?: string
+  hiresNegative?: string
   loras?: Array<{ name: string; weight?: number | string }>
   characterLoras?: Array<{ name: string; weight?: number | string }>
   styleLoras?: Array<{ name: string; weight?: number | string }>

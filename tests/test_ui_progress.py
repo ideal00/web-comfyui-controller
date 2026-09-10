@@ -81,7 +81,7 @@ class GenerationProgressUiTests(unittest.TestCase):
             encoding="utf-8")
         for marker in (
             "DEFAULT_HIRES_GENERATION_CONFIG",
-            "scale:'1.3'", "denoise:'0.35'", "steps:'20'", "cfg:'6'",
+            "scale:'1.3'", "denoise:'0.25'", "steps:'16'", "cfg:'4'",
             "sampler:'euler_ancestral'", "scheduler:'normal'",
             "function applyDefaultHiresGenerationConfig",
             "$('illustriousMode').value='hires'",

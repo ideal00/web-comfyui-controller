@@ -96,6 +96,14 @@
     if (!data) return;
     setValue('illustriousMode', data.illustriousMode);
     ['hiresScale', 'hiresDenoise', 'hiresSteps', 'hiresCfg', 'hiresSampler', 'hiresScheduler'].forEach(id => setValue(id, data[id]));
+    ['hiresPositive', 'hiresNegative'].forEach(id => {
+      const element = document.getElementById(id);
+      if (element && data[id] != null) element.value = String(data[id]);
+    });
+    setValue('hiresPromptMode', data.hiresPromptMode);
+    setChecked('hiresLockComposition', data.hiresLockComposition);
+    if (typeof hiresPromptModeChanged === 'function') hiresPromptModeChanged(true);
+    if (typeof hiresLockCompositionChanged === 'function') hiresLockCompositionChanged(true);
     if (data.guidance) {
       setValue('guidanceMode', data.guidance.mode);
       setValue('sagScale', data.guidance.sagScale);

@@ -322,7 +322,8 @@ function snapshotGeneration(
   const result: NonNullable<VisualGenerateRequest['generation']> = {}
   const scalarKeys = [
     'steps', 'cfg', 'sampler', 'scheduler', 'hiresScale', 'hiresDenoise', 'hiresSteps',
-    'hiresCfg', 'hiresSampler', 'hiresScheduler', 'styleFamily', 'illustriousMode',
+    'hiresCfg', 'hiresSampler', 'hiresScheduler', 'hiresPromptMode', 'hiresPositive',
+    'hiresNegative', 'styleFamily', 'illustriousMode',
   ] as const
   for (const key of scalarKeys) {
     const value = payload[key] ?? sourceGeneration[key] ?? enhancements[key]
