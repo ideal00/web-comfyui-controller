@@ -33,6 +33,8 @@ IGNORED_KEYS = {
     "allowDuplicate", "queueMode", "createdAt", "created_at", "updatedAt", "updated_at",
     "source", "origin", "logicalTaskIndex", "generatedAt", "generated_at", "createdTime",
     "timestamp", "queuedAt", "startedAt", "finishedAt",
+    # 移动端把本次请求编号放在 client.sceneId 里，它也每次不同
+    "sceneId", "scene_id",
 }
 
 # 值是临时文件/上传物的字段（每次上传换名字，不代表配方变化）
@@ -96,7 +98,7 @@ def _normalize_regions(value) -> list:
 def _normalize_nested(value):
     if isinstance(value, dict):
         return {str(key): _normalize_nested(item) for key, item in sorted(value.items())
-                if key not in VOLATILE_NESTED_KEYS}
+                if key not in VOLATILE_NESTED_KEYS and key not in IGNORED_KEYS}
     if isinstance(value, (list, tuple)):
         return [_normalize_nested(item) for item in value]
     return _normalize_scalar(value)

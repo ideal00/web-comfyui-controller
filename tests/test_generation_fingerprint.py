@@ -85,6 +85,19 @@ class GenerationFingerprintTests(unittest.TestCase):
             {"prompt": "girl B", "x": 0, "y": 0, "width": 0.5, "height": 1}]))
         self.assertNotEqual(first, second)
 
+    def test_mobile_client_block_does_not_change_fingerprint(self):
+        """移动端把本次请求编号放在 client.requestId / client.sceneId 里，不能影响指纹。"""
+
+        first = generation_fingerprint(recipe(client={
+            "gameId": "easy-panel-mobile", "sceneId": "prompt_1_abc", "requestId": "prompt_1_abc",
+        }))
+        second = generation_fingerprint(recipe(client={
+            "gameId": "easy-panel-mobile", "sceneId": "prompt_2_xyz", "requestId": "prompt_2_xyz",
+        }))
+        self.assertEqual(first, second)
+        # gameId 是固定值（区分手机 / 电脑来源），仍然保留在指纹里。
+        self.assertNotEqual(first, generation_fingerprint(recipe()))
+
     def test_empty_payload_has_no_fingerprint(self):
         self.assertEqual("", generation_fingerprint({}))
         self.assertEqual({}, fingerprint_parts(None))
