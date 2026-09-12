@@ -73,6 +73,8 @@ from easy_panel_app.media_storage import (
     prepare_generation_image,
     save_inpaint_upload,
     save_pose_upload,
+    save_reference_upload,
+    copy_output_to_input,
     validate_input_image,
 )
 from easy_panel_app.metadata import (
@@ -703,6 +705,92 @@ def _comfy_error_text(status: dict) -> str:
             if text:
                 return text[:400]
     return "ComfyUI 执行失败。"
+
+
+TRANSPARENT_DETAIL_METHODS = ("GuidedFilter", "PyMatting", "VITMatte", "VITMatte(local)",
+                              "vitmatte-base-composition-1k")
+
+
+def build_transparent_extract_workflow(image_name: str, settings: dict | None = None) -> dict:
+    """LoadImage → RmBgUltra（可选精细边缘）→ SaveImage：只做抠图，不重绘画面。"""
+
+    source = str(image_name or "").strip()
+    if not source:
+        raise ValueError("请先上传图片或选择一张最近输出。")
+    values = settings if isinstance(settings, dict) else {}
+    mode = str(values.get("mode") or "auto").strip().casefold()
+    if mode not in {"auto", "complex"}:
+        raise ValueError("未知的抠图模式。")
+    detail_method = str(values.get("detailMethod") or "GuidedFilter")
+    if detail_method not in TRANSPARENT_DETAIL_METHODS:
+        detail_method = "GuidedFilter"
+    prefix = f"EasyPanel_Transparent_{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(2).hex()}"
+    nodes = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": source}},
+        "2": {"class_type": "LayerMask: RmBgUltra V2", "inputs": {
+            "image": ["1", 0],
+            "detail_method": detail_method,
+            "detail_erode": bounded(values.get("detailErode"), 6, 1, 255),
+            "detail_dilate": bounded(values.get("detailDilate"), 6, 1, 255),
+            "black_point": bounded(values.get("blackPoint"), 0.01, 0.01, 0.98, integer=False),
+            "white_point": bounded(values.get("whitePoint"), 0.99, 0.02, 0.99, integer=False),
+            "process_detail": mode == "complex",
+            "device": "cuda",
+            "max_megapixels": bounded(values.get("maxMegapixels"), 2.0, 1.0, 16.0, integer=False),
+        }},
+        "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
+                                                     "images": ["2", 0]}},
+    }
+    return {"prompt": nodes, "client_id": "easy-panel"}
+
+
+def resolve_transparent_source(value) -> str:
+    """定位参考图：带 output: 前缀或能在 output 目录找到的走复制，其余当成 input 文件名。"""
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("请先上传图片或选择一张最近输出。")
+    if raw.startswith("output:"):
+        return copy_output_to_input(raw[len("output:"):])
+    candidate = OUTPUT / Path(raw.replace("\\", "/")).name
+    if candidate.is_file():
+        return copy_output_to_input(raw)
+    return raw
+
+
+def run_transparent_extract(data: dict, *, timeout: float = 180.0) -> dict:
+    """上传或选中的图片只做算法抠图，等 ComfyUI 出结果后直接返回透明 PNG。"""
+
+    if not isinstance(data, dict):
+        raise ValueError("抠图请求格式无效。")
+    source = resolve_transparent_source(data.get("image"))
+    workflow = build_transparent_extract_workflow(source, data)
+    submitted = comfy_json("/prompt", "POST", workflow)
+    prompt_id = str(submitted.get("prompt_id") or "")
+    if not prompt_id:
+        raise ValueError("ComfyUI 没有返回任务编号。")
+    deadline = time.time() + max(10.0, float(timeout))
+    while time.time() < deadline:
+        history = comfy_json("/history/" + prompt_id) or {}
+        entry = history.get(prompt_id)
+        if isinstance(entry, dict):
+            status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+            state = str(status.get("status_str") or "").casefold()
+            if state == "error":
+                raise ValueError("抠图失败：" + _comfy_error_text(status))
+            if state in {"success", "completed"}:
+                images = _comfy_history_images(entry)
+                transparent = next((item for item in images
+                                    if "EasyPanel_Transparent" in item["filename"]),
+                                   images[-1] if images else None)
+                if not transparent:
+                    raise ValueError("抠图完成，但没有找到输出图片。")
+                return {"prompt_id": prompt_id, "filename": transparent["filename"],
+                        "subfolder": transparent["subfolder"],
+                        "url": "/output?name=" + urllib.parse.quote(transparent["filename"]),
+                        "source": source, "mode": str(data.get("mode") or "auto")}
+        time.sleep(0.8)
+    raise ValueError("抠图超时：ComfyUI 还在处理这张图。")
 
 
 def task_comfy_probe(prompt_id: str) -> tuple[str, dict]:
@@ -5223,7 +5311,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -5245,13 +5333,16 @@ class Handler(BaseHTTPRequestHandler):
                 payload = data.get("state") if isinstance(data.get("state"), dict) else data
                 self.send_json(SHARED_STATE_STORE.merge(payload, data.get("baseRevision")))
                 return
-            if self.path in {"/api/upload-pose", "/api/read-image", "/api/upload-inpaint"}:
+            if self.path in {"/api/upload-pose", "/api/read-image", "/api/upload-inpaint",
+                             "/api/upload-transparent-source"}:
                 size = bounded(self.headers.get("Content-Length"), 0, 0, 30_000_000)
                 if not size:
                     raise ValueError("图片上传为空。")
                 body = self.rfile.read(size)
                 if self.path == "/api/upload-pose":
                     self.send_json({"name": save_pose_upload(self.headers.get("Content-Type", ""), body)})
+                elif self.path == "/api/upload-transparent-source":
+                    self.send_json(save_reference_upload(self.headers.get("Content-Type", ""), body))
                 elif self.path == "/api/upload-inpaint":
                     self.send_json(save_inpaint_upload(self.headers.get("Content-Type", ""), body))
                 else:
@@ -5260,6 +5351,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             size = bounded(self.headers.get("Content-Length"), 0, 0, 50_000_000)
             data = json.loads(self.rfile.read(size).decode("utf-8"))
+            if self.path == "/api/transparent-extract":
+                self.send_json(run_transparent_extract(data))
+                return
             if self.path == "/api/rpg/profiles":
                 document = data.get("profiles") if isinstance(data.get("profiles"), dict) else data
                 self.send_json(save_rpg_profiles(document))

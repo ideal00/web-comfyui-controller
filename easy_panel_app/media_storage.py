@@ -48,6 +48,52 @@ def extract_image_upload(content_type: str, body: bytes, field: str = "image") -
     return _multipart_image(content_type, body, field)[0]
 
 
+def save_reference_upload(content_type: str, body: bytes, field: str = "image") -> dict:
+    """保存“上传图片提取透明 PNG”用的参考图，统一转成 PNG 放进 ComfyUI input。"""
+
+    content, filename = _multipart_image(content_type, body, field)
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise ValueError("参考图仅支持 PNG、JPG 或 WEBP。")
+    target_dir = COMFY_INPUT / "easy_panel"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"easy_panel/reference_{uuid.uuid4().hex[:12]}.png"
+    size: tuple[int, int] | None = None
+    try:
+        import io
+
+        from PIL import Image, ImageOps
+
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(content))).convert("RGB")
+        image.save(COMFY_INPUT / stored_name, format="PNG")
+        size = image.size
+    except Exception:
+        # 模型只认像素，就算 Pillow 不认这种编码也照原字节存下来交给 ComfyUI。
+        (COMFY_INPUT / stored_name).write_bytes(content)
+    return {"image": stored_name, "name": filename, "size": size}
+
+
+def copy_output_to_input(name: str) -> str:
+    """把作品库/最近输出里的图片复制进 ComfyUI input，供 LoadImage 读取。"""
+
+    relative = Path(str(name or "").replace("\\", "/"))
+    if not relative.name or relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("参考图路径无效。")
+    source = (OUTPUT / relative).resolve()
+    try:
+        source.relative_to(OUTPUT.resolve())
+    except ValueError as exc:
+        raise ValueError("参考图路径无效。") from exc
+    if not source.is_file():
+        raise ValueError(f"找不到输出图片：{relative.name}")
+    suffix = source.suffix.lower() or ".png"
+    target_dir = COMFY_INPUT / "easy_panel"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"easy_panel/reference_{uuid.uuid4().hex[:12]}{suffix}"
+    (COMFY_INPUT / stored_name).write_bytes(source.read_bytes())
+    return stored_name
+
+
 def save_inpaint_upload(content_type: str, body: bytes) -> dict:
     image_bytes = extract_image_upload(content_type, body, "image")
     mask_bytes = extract_image_upload(content_type, body, "mask")

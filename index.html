@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=41">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=42">
 
 </head>
 <body>
@@ -23,6 +23,7 @@
       <button id="creativeLibraryOpen" type="button">作品库</button>
       <button id="projectWorkspaceOpen" type="button" title="把作品整理成角色/场景项目（分区、精选、关联资源）">作品项目</button>
       <button type="button" onclick="openHandWorkbench()">手部修复</button>
+      <button id="transparentExtractOpen" type="button" title="上传图片，用算法提取透明 PNG（只去背景，不重绘画面）">透明抠图</button>
       <button type="button" onclick="jumpToPanelSection('loraSection')">LoRA 与模型</button>
     </nav>
     <div class="studio-header-actions">
@@ -371,6 +372,7 @@
 <script src="/assets/js/model-advanced.js?v=4"></script>
 <script src="/assets/js/hand-workbench.js?v=6"></script>
 <script src="/assets/js/transparent-background.js?v=1"></script>
+<script src="/assets/js/transparent-extract.js?v=1"></script>
 <script src="/assets/js/snapshot-flow.js?v=2"></script>
 <script src="/assets/js/result-workbench.js?v=1"></script>
 <script src="/assets/js/creative-library.js?v=6"></script>
