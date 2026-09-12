@@ -117,6 +117,39 @@
     }
   };
 
+  window.clearHiresPromptField = function (id) {
+    const field = byId(id);
+    if (!field) return;
+    const label = id === "hiresNegative" ? "二采负面" : "二采补充";
+    field.value = "";
+    window.hiresPromptInputChanged();
+    if (byId("status")) byId("status").textContent = `已清空${label} Prompt。`;
+  };
+
+  window.pasteHiresPromptField = async function (id) {
+    const field = byId(id);
+    if (!field) return;
+    const label = id === "hiresNegative" ? "二采负面" : "二采补充";
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        throw new Error("当前浏览器不支持读取剪贴板");
+      }
+      const text = String(await navigator.clipboard.readText()).trim();
+      if (!text) {
+        if (byId("status")) byId("status").textContent = "剪贴板中没有可粘贴的文字。";
+        return;
+      }
+      field.value = text;
+      window.hiresPromptInputChanged();
+      field.focus();
+      if (byId("status")) byId("status").textContent = `已从剪贴板填入${label} Prompt（可在框内继续编辑）。`;
+    } catch (error) {
+      if (byId("status")) {
+        byId("status").textContent = "无法读取剪贴板：请允许此页面访问剪贴板，或在输入框中按 Ctrl+V。";
+      }
+    }
+  };
+
   window.insertHiresPromptTemplate = function (kind) {
     const field = byId("hiresPositive");
     const template = HIRES_PROMPT_TEMPLATES[kind];
@@ -244,8 +277,10 @@
         </select>
         <div class="field-title" style="margin-top:8px"><span>二采补充 Prompt</span><span class="small">只写高清阶段要强化的细节，不必重复首采构图</span></div>
         <textarea id="hiresPositive" rows="2" placeholder="例如：torn clothes, bloodstains, finer fabric texture, detailed hair strands" oninput="hiresPromptInputChanged()"></textarea>
+        <div class="actions"><button class="secondary" type="button" onclick="pasteHiresPromptField('hiresPositive')">从剪贴板粘贴</button><button class="secondary" type="button" onclick="clearHiresPromptField('hiresPositive')">清空</button></div>
         <div class="field-title"><span>二采负面 Prompt</span><span class="small">留空时沿用首采负面词</span></div>
         <textarea id="hiresNegative" rows="2" placeholder="例如：blurry details, smeared fabric texture, plastic skin" oninput="hiresPromptInputChanged()"></textarea>
+        <div class="actions"><button class="secondary" type="button" onclick="pasteHiresPromptField('hiresNegative')">从剪贴板粘贴</button><button class="secondary" type="button" onclick="clearHiresPromptField('hiresNegative')">清空</button></div>
         <div class="actions"><button class="secondary" type="button" onclick="insertHiresPromptTemplate('detail')">＋ 细节强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('hair')">＋ 发丝强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('clothing')">＋ 服装强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('expression')">＋ 表情强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('lighting')">＋ 光影强化</button></div>
         <div class="switch" style="margin-top:6px"><input id="hiresCompositionLock" type="checkbox" checked onchange="hiresCompositionLockChanged()"><div><b>优先保持首采构图</b><div class="small">勾选后二采重绘幅度上限锁到 0.35（前端与后端都会限制），只做细节增强；不建议再写镜头、景别、构图类提示词。</div></div></div>
         <div id="hiresPromptHint" class="small" style="margin-top:6px"></div>`;
