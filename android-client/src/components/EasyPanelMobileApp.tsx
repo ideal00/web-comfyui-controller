@@ -12,6 +12,22 @@ import { openAdvancedPanel } from '../services/easyPanelAdvanced'
 import { getEasyPanelPromptInstruction } from '../services/easyPanelVisual'
 import type { EasyPanelGenerationArtifact, EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
 
+/** 常用长宽比预设（与电脑端尺寸下拉保持一致）。 */
+const SIZE_PRESETS: Array<{ label: string; width: number; height: number }> = [
+  { label: '1:1', width: 1024, height: 1024 },
+  { label: '1:1 大', width: 1216, height: 1216 },
+  { label: '3:4', width: 864, height: 1152 },
+  { label: '2:3', width: 832, height: 1216 },
+  { label: '9:16', width: 720, height: 1280 },
+  { label: '1:2 长竖', width: 768, height: 1536 },
+  { label: '9:21 超长', width: 720, height: 1680 },
+  { label: '4:3', width: 1152, height: 864 },
+  { label: '3:2', width: 1216, height: 832 },
+  { label: '16:9', width: 1280, height: 720 },
+  { label: '2:1 超宽', width: 1536, height: 768 },
+  { label: '21:9 宽银幕', width: 1680, height: 720 },
+]
+
 export default function EasyPanelMobileApp() {
   const controller = useEasyPanelController()
   const workspace = useEasyPanelWorkspace({
@@ -471,6 +487,22 @@ export default function EasyPanelMobileApp() {
                 <span>高度</span>
                 <input type="number" min={512} max={1920} step={64} value={controller.settings.height} onChange={(event) => patchSettings({ height: Number(event.target.value) })} />
               </label>
+            </div>
+            <div className="epm-size-presets" role="group" aria-label="常用长宽比">
+              {SIZE_PRESETS.map((preset) => {
+                const active = controller.settings.width === preset.width && controller.settings.height === preset.height
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    className={`epm-chip${active ? ' is-on' : ''}`}
+                    onClick={() => patchSettings({ width: preset.width, height: preset.height })}
+                  >
+                    {preset.label}
+                    <small>{preset.width}×{preset.height}</small>
+                  </button>
+                )
+              })}
             </div>
             <label className="epm-field">
               <span>Seed <small>留空则随机</small></span>
