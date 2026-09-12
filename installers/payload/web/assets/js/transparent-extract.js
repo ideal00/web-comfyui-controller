@@ -135,20 +135,24 @@
     try {
       var source = state.file ? await uploadSource() : 'output:' + outputName;
       if (!source) throw new Error('图片上传失败，请重试。');
-      var mode = ($('transparentExtractMode') || {}).value || 'auto';
-      message(mode === 'complex' ? '正在做精细边缘抠图（发丝 / 飘带）…' : '正在做自动抠图…');
+      var preset = ($('transparentExtractMode') || {}).value || 'detail';
+      message(preset === 'hair' ? '正在做发丝增强抠图（边缘细化 + 补断裂发丝，第一次会慢一些）…'
+        : preset === 'detail' ? '正在做精细边缘抠图（发丝 / 飘带）…' : '正在做自动抠图…');
       var response = await fetch('/api/transparent-extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           image: source,
-          mode: mode,
-          detailMethod: ($('transparentExtractMethod') || {}).value || 'GuidedFilter',
+          preset: preset,
+          detailMethod: ($('transparentExtractMethod') || {}).value || 'PyMatting',
           detailErode: Number(($('transparentExtractErode') || {}).value || 6),
           detailDilate: Number(($('transparentExtractDilate') || {}).value || 6),
+          maskGrow: Number(($('transparentExtractGrow') || {}).value || 12),
+          fixGap: Number(($('transparentExtractFixGap') || {}).value || 16),
+          fixThreshold: Number(($('transparentExtractFixThreshold') || {}).value || 0.75),
           blackPoint: Number(($('transparentExtractBlack') || {}).value || 0.01),
           whitePoint: Number(($('transparentExtractWhite') || {}).value || 0.99),
-          maxMegapixels: Number(($('transparentExtractMegapixels') || {}).value || 2),
+          maxMegapixels: Number(($('transparentExtractMegapixels') || {}).value || 4),
         }),
       });
       var data = await response.json().catch(function () { return {}; });
@@ -190,10 +194,14 @@
     global.openTransparentMaskEditor();
   }
 
-  function toggleDetail() {
-    var mode = ($('transparentExtractMode') || {}).value || 'auto';
-    var box = $('transparentExtractDetail');
-    if (box) box.style.display = mode === 'complex' ? 'block' : 'none';
+  function togglePreset() {
+    var preset = ($('transparentExtractMode') || {}).value || 'detail';
+    var detail = $('transparentExtractDetail');
+    if (detail) detail.style.display = preset === 'detail' ? 'block' : 'none';
+    var hair = $('transparentExtractHair');
+    if (hair) hair.style.display = preset === 'hair' ? 'block' : 'none';
+    var method = $('transparentExtractMethod');
+    if (method && preset === 'hair' && !method.value) method.value = 'PyMatting';
   }
 
   function dialog() {
@@ -218,25 +226,32 @@
       + '  <div>'
       + '    <div class="field-title"><span>抠图模式</span></div>'
       + '    <select id="transparentExtractMode">'
-      + '      <option value="auto">普通角色自动（快）</option>'
-      + '      <option value="complex">复杂角色精细边缘（发丝 / 飘带）</option></select>'
+      + '      <option value="fast">通用自动（快，硬边）</option>'
+      + '      <option value="detail" selected>精细边缘（真实 alpha，推荐）</option>'
+      + '      <option value="hair">发丝增强（补断裂发丝，最慢）</option></select>'
+      + '    <div class="field-title"><span>边缘算法</span><span class="small">发丝偏假就换 PyMatting</span></div>'
+      + '    <select id="transparentExtractMethod">'
+      + '      <option value="PyMatting">PyMatting（推荐：真实 alpha，首次较慢）</option>'
+      + '      <option value="GuidedFilter">GuidedFilter（快，边缘偏柔）</option></select>'
       + '    <div id="transparentExtractDetail" style="display:none">'
-      + '      <div class="field-title"><span>边缘算法</span></div>'
-      + '      <select id="transparentExtractMethod">'
-      + '        <option value="GuidedFilter">GuidedFilter（默认，稳）</option>'
-      + '        <option value="PyMatting">PyMatting（细节多）</option>'
-      + '        <option value="VITMatte">VITMatte（最细，慢）</option>'
-      + '        <option value="VITMatte(local)">VITMatte(local)</option></select>'
       + '      <div class="two">'
       + '        <label>腐蚀<input id="transparentExtractErode" type="number" min="1" max="255" step="1" value="6"></label>'
       + '        <label>膨胀<input id="transparentExtractDilate" type="number" min="1" max="255" step="1" value="6"></label>'
       + '      </div>'
-      + '      <div class="two">'
-      + '        <label>黑点<input id="transparentExtractBlack" type="number" min="0.01" max="0.98" step="0.01" value="0.01"></label>'
-      + '        <label>白点<input id="transparentExtractWhite" type="number" min="0.02" max="0.99" step="0.01" value="0.99"></label>'
-      + '      </div>'
-      + '      <label>最大像素（MP）<input id="transparentExtractMegapixels" type="number" min="1" max="16" step="0.5" value="2"></label>'
       + '    </div>'
+      + '    <div id="transparentExtractHair" style="display:none">'
+      + '      <div class="two">'
+      + '        <label>边缘扩张<input id="transparentExtractGrow" type="number" min="0" max="256" step="1" value="12"></label>'
+      + '        <label>断裂修补<input id="transparentExtractFixGap" type="number" min="0" max="32" step="1" value="16"></label>'
+      + '      </div>'
+      + '      <label>修补阈值<input id="transparentExtractFixThreshold" type="number" min="0.01" max="0.99" step="0.01" value="0.75"></label>'
+      + '      <div class="small">发丝被吃掉：把白点降到 0.92~0.96 或加大断裂修补；背景雾多：把黑点提到 0.05~0.15。</div>'
+      + '    </div>'
+      + '    <div class="two">'
+      + '      <label>黑点<input id="transparentExtractBlack" type="number" min="0.01" max="0.98" step="0.01" value="0.01"></label>'
+      + '      <label>白点<input id="transparentExtractWhite" type="number" min="0.02" max="0.99" step="0.01" value="0.99"></label>'
+      + '    </div>'
+      + '    <label>最大像素（MP，越大越保细节、越吃显存）<input id="transparentExtractMegapixels" type="number" min="1" max="16" step="0.5" value="4"></label>'
       + '  </div>'
       + '</div>'
       + '<div class="transparent-extract-preview">'
@@ -259,7 +274,7 @@
     element.querySelector('#transparentExtractOutput')?.addEventListener('change', function (event) {
       pickOutput(event.target.value);
     });
-    element.querySelector('#transparentExtractMode')?.addEventListener('change', toggleDetail);
+    element.querySelector('#transparentExtractMode')?.addEventListener('change', togglePreset);
     element.querySelector('#transparentExtractRunBtn')?.addEventListener('click', function () {
       void runExtract();
     });
@@ -273,6 +288,7 @@
   function openDialog() {
     var element = dialog();
     if (!element.open) element.showModal();
+    togglePreset();
     void refreshOutputs();
     if (!state.file && !state.result) {
       message('选择一张图片（或最近输出），再点“提取透明 PNG”。');

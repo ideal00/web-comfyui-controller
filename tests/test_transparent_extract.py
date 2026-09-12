@@ -30,7 +30,7 @@ class TransparentExtractWorkflowTest(unittest.TestCase):
         self.assertEqual(rmbg["inputs"]["detail_dilate"], 6)
         self.assertEqual(rmbg["inputs"]["black_point"], 0.01)
         self.assertEqual(rmbg["inputs"]["white_point"], 0.99)
-        self.assertEqual(rmbg["inputs"]["max_megapixels"], 2.0)
+        self.assertEqual(rmbg["inputs"]["max_megapixels"], 4.0)
         self.assertEqual(rmbg["inputs"]["device"], "cuda")
         save = nodes["3"]
         self.assertEqual(save["class_type"], "SaveImage")
@@ -54,16 +54,51 @@ class TransparentExtractWorkflowTest(unittest.TestCase):
         self.assertEqual(rmbg["detail_dilate"], 255)
         self.assertEqual(rmbg["black_point"], 0.98)
         self.assertEqual(rmbg["white_point"], 0.02)
-        self.assertEqual(rmbg["max_megapixels"], 16.0)
+        self.assertEqual(rmbg["max_megapixels"], 64.0)
 
     def test_unknown_method_and_mode_are_rejected(self):
         workflow = easy_panel.build_transparent_extract_workflow("upload.png", {
             "detailMethod": "bogus", "mode": "complex"})
-        self.assertEqual(workflow["prompt"]["2"]["inputs"]["detail_method"], "GuidedFilter")
+        self.assertEqual(workflow["prompt"]["2"]["inputs"]["detail_method"], "PyMatting")
         with self.assertRaises(ValueError):
             easy_panel.build_transparent_extract_workflow("upload.png", {"mode": "hack"})
         with self.assertRaises(ValueError):
             easy_panel.build_transparent_extract_workflow("", {})
+
+    def test_hair_preset_chains_edge_refine_and_alpha_join(self):
+        workflow = easy_panel.build_transparent_extract_workflow("upload.png", {
+            "preset": "hair", "maskGrow": 999, "fixGap": -3, "fixThreshold": 5})
+        nodes = workflow["prompt"]
+        self.assertIs(nodes["2"]["inputs"]["process_detail"], False)
+        self.assertEqual(nodes["2"]["inputs"]["detail_method"], "PyMatting")
+        refine = nodes["3"]
+        self.assertEqual(refine["class_type"], "LayerMask: MaskEdgeUltraDetail V2")
+        self.assertEqual(refine["inputs"]["image"], ["1", 0])
+        self.assertEqual(refine["inputs"]["mask"], ["2", 1])
+        self.assertEqual(refine["inputs"]["mask_grow"], 256)
+        self.assertEqual(refine["inputs"]["fix_gap"], 0)
+        self.assertEqual(refine["inputs"]["fix_threshold"], 0.99)
+        join = nodes["4"]
+        self.assertEqual(join["class_type"], "JoinImageWithAlpha")
+        self.assertEqual(join["inputs"]["image"], ["1", 0])
+        self.assertEqual(join["inputs"]["alpha"], ["3", 1])
+        self.assertEqual(nodes["5"]["class_type"], "SaveImage")
+        self.assertEqual(nodes["5"]["inputs"]["images"], ["4", 0])
+        self.assertTrue(nodes["5"]["inputs"]["filename_prefix"].startswith("EasyPanel_Transparent_"))
+
+    def test_preset_takes_priority_over_legacy_mode(self):
+        workflow = easy_panel.build_transparent_extract_workflow("upload.png", {
+            "preset": "fast", "mode": "complex", "detailMethod": "PyMatting"})
+        self.assertIs(workflow["prompt"]["2"]["inputs"]["process_detail"], False)
+        self.assertEqual(workflow["prompt"]["2"]["inputs"]["detail_method"], "GuidedFilter")
+        self.assertNotIn("3", [key for key, value in workflow["prompt"].items()
+                               if value.get("class_type") == "LayerMask: MaskEdgeUltraDetail V2"])
+
+    def test_megapixels_allows_original_resolution(self):
+        workflow = easy_panel.build_transparent_extract_workflow("upload.png", {"maxMegapixels": 32})
+        self.assertEqual(workflow["prompt"]["2"]["inputs"]["max_megapixels"], 32.0)
+        default = easy_panel.build_transparent_extract_workflow("upload.png", {})
+        self.assertEqual(default["prompt"]["2"]["inputs"]["max_megapixels"], 4.0)
 
 
 class ResolveTransparentSourceTest(unittest.TestCase):

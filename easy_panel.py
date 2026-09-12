@@ -709,38 +709,79 @@ def _comfy_error_text(status: dict) -> str:
 
 TRANSPARENT_DETAIL_METHODS = ("GuidedFilter", "PyMatting", "VITMatte", "VITMatte(local)",
                               "vitmatte-base-composition-1k")
+TRANSPARENT_PRESETS = ("fast", "detail", "hair")
+
+
+def transparent_preset(values: dict) -> str:
+    """三种预设：fast 通用硬边 / detail 精细边缘 / hair 发丝增强（边缘细化 + 补断裂发丝）。"""
+
+    raw = str(values.get("preset") or "").strip().casefold()
+    if raw in TRANSPARENT_PRESETS:
+        return raw
+    mode = str(values.get("mode") or "auto").strip().casefold()
+    if mode == "complex":
+        return "detail"
+    if mode == "auto":
+        return "fast"
+    raise ValueError("未知的抠图模式。")
 
 
 def build_transparent_extract_workflow(image_name: str, settings: dict | None = None) -> dict:
-    """LoadImage → RmBgUltra（可选精细边缘）→ SaveImage：只做抠图，不重绘画面。"""
+    """LoadImage → RmBgUltra（可选二次边缘细化）→ SaveImage：只做抠图，不重绘画面。"""
 
     source = str(image_name or "").strip()
     if not source:
         raise ValueError("请先上传图片或选择一张最近输出。")
     values = settings if isinstance(settings, dict) else {}
-    mode = str(values.get("mode") or "auto").strip().casefold()
-    if mode not in {"auto", "complex"}:
-        raise ValueError("未知的抠图模式。")
-    detail_method = str(values.get("detailMethod") or "GuidedFilter")
-    if detail_method not in TRANSPARENT_DETAIL_METHODS:
-        detail_method = "GuidedFilter"
+    preset = transparent_preset(values)
+    method = str(values.get("detailMethod") or "PyMatting")
+    if method not in TRANSPARENT_DETAIL_METHODS:
+        method = "PyMatting"
+    if preset == "fast":
+        method = "GuidedFilter"
+    erode = bounded(values.get("detailErode"), 6, 1, 255)
+    dilate = bounded(values.get("detailDilate"), 6, 1, 255)
+    black = bounded(values.get("blackPoint"), 0.01, 0.01, 0.98, integer=False)
+    white = bounded(values.get("whitePoint"), 0.99, 0.02, 0.99, integer=False)
+    megapixels = bounded(values.get("maxMegapixels"), 4.0, 1.0, 64.0, integer=False)
     prefix = f"EasyPanel_Transparent_{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(2).hex()}"
     nodes = {
         "1": {"class_type": "LoadImage", "inputs": {"image": source}},
         "2": {"class_type": "LayerMask: RmBgUltra V2", "inputs": {
             "image": ["1", 0],
-            "detail_method": detail_method,
-            "detail_erode": bounded(values.get("detailErode"), 6, 1, 255),
-            "detail_dilate": bounded(values.get("detailDilate"), 6, 1, 255),
-            "black_point": bounded(values.get("blackPoint"), 0.01, 0.01, 0.98, integer=False),
-            "white_point": bounded(values.get("whitePoint"), 0.99, 0.02, 0.99, integer=False),
-            "process_detail": mode == "complex",
+            "detail_method": method,
+            "detail_erode": erode,
+            "detail_dilate": dilate,
+            "black_point": black,
+            "white_point": white,
+            "process_detail": preset == "detail",
             "device": "cuda",
-            "max_megapixels": bounded(values.get("maxMegapixels"), 2.0, 1.0, 16.0, integer=False),
+            "max_megapixels": megapixels,
         }},
-        "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
-                                                     "images": ["2", 0]}},
     }
+    if preset == "hair":
+        # 先用硬蒙版定位主体，再让 matting 在边缘带里找回细发丝并修补断裂。
+        nodes["3"] = {"class_type": "LayerMask: MaskEdgeUltraDetail V2", "inputs": {
+            "image": ["1", 0],
+            "mask": ["2", 1],
+            "method": method,
+            "mask_grow": bounded(values.get("maskGrow"), 12, 0, 256),
+            "fix_gap": bounded(values.get("fixGap"), 16, 0, 32),
+            "fix_threshold": bounded(values.get("fixThreshold"), 0.75, 0.01, 0.99, integer=False),
+            "edge_erode": erode,
+            "edte_dilate": dilate,
+            "black_point": black,
+            "white_point": bounded(values.get("hairWhitePoint"), white, 0.02, 0.99, integer=False),
+            "device": "cuda",
+            "max_megapixels": megapixels,
+        }}
+        nodes["4"] = {"class_type": "JoinImageWithAlpha", "inputs": {"image": ["1", 0],
+                                                                    "alpha": ["3", 1]}}
+        nodes["5"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
+                                                            "images": ["4", 0]}}
+    else:
+        nodes["3"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
+                                                            "images": ["2", 0]}}
     return {"prompt": nodes, "client_id": "easy-panel"}
 
 
