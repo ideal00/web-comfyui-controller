@@ -97,7 +97,7 @@
       "label": "Spectacular Anime ILXL",
       "source": "模型作者 CivitAI 页面",
       "source_url": "https://civitai.com/models/1696158",
-      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 7.0, "sampler": "euler_ancestral", "scheduler": "beta"},
+      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "beta"},
       "combos": [
         {"key": "recommended", "label": "作者推荐", "steps": 24, "cfg": 7.0, "sampler": "euler_ancestral", "scheduler": "beta", "guidance": "off", "note": "作者明确要求 Simple 或 Beta，禁止 Normal。"},
         {"key": "fast", "label": "内置低步", "steps": 8, "cfg": 2.0, "sampler": "euler_ancestral", "scheduler": "beta", "guidance": "off", "note": "作者提供的低步组合；先用固定种子对比画风。"},
@@ -113,7 +113,7 @@
       "zsnr": true,
       "source": "模型作者 CivitAI 页面",
       "source_url": "https://civitai.com/models/1077987",
-      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 2.0, "denoise": 0.37, "min_denoise": 0.15, "max_denoise": 0.7, "steps": 20, "cfg": 4.5, "sampler": "euler", "scheduler": "normal"},
+      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 2.0, "denoise": 0.37, "min_denoise": 0.15, "max_denoise": 0.7, "steps": 20, "cfg": 5.0, "sampler": "euler", "scheduler": "normal"},
       "combos": [
         {"key": "recommended", "label": "作者推荐", "steps": 30, "cfg": 6.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "作者推荐 30 步、CFG 5–7、Euler；保留 v-pred 模型采样。"},
         {"key": "fast", "label": "快速", "steps": 24, "cfg": 5.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "低 CFG 快速构图。"},
@@ -142,7 +142,7 @@
       "label": "WAI Illustrious SDXL v14",
       "source": "模型作者 CivitAI 页面",
       "source_url": "https://civitai.com/models/827184",
-      "hires": {"scale": 1.25, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal"},
+      "hires": {"scale": 1.25, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal"},
       "combos": [
         {"key": "recommended", "label": "作者范围均衡", "steps": 28, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "v14 作者范围：25–40 步、CFG 5–7、Euler a。"},
         {"key": "fast", "label": "快速", "steps": 25, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围下限。"},
@@ -156,7 +156,7 @@
       "label": "WAI Illustrious SDXL（版本自适应）",
       "source": "模型作者 CivitAI 页面",
       "source_url": "https://civitai.com/models/827184",
-      "hires": {"scale": 1.25, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal"},
+      "hires": {"scale": 1.25, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal"},
       "combos": [
         {"key": "recommended", "label": "作者范围均衡", "steps": 28, "cfg": 6.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "当前 WAI 通用范围：15–30 步、CFG 5–7、Euler a。"},
         {"key": "fast", "label": "快速", "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "快速预览。"},
@@ -170,7 +170,7 @@
       "label": "REED XXX Illustrious v15",
       "source": "模型作者 CivitAI 页面",
       "source_url": "https://civitai.com/models/1717562",
-      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 7.0, "sampler": "euler_ancestral", "scheduler": "normal"},
+      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 1.5, "denoise": 0.35, "min_denoise": 0.15, "max_denoise": 0.5, "steps": 20, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal"},
       "combos": [
         {"key": "recommended", "label": "作者推荐", "steps": 30, "cfg": 7.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者最佳点约 30 步、CFG 7、Euler a。"},
         {"key": "fast", "label": "快速", "steps": 20, "cfg": 5.5, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者范围内快速预览。"},
@@ -184,7 +184,7 @@
       "label": "PlantMilk Walnut (Illustrious)",
       "source": "模型作者 CivitAI 页面",
       "source_url": "https://civitai.com/models/1162518",
-      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 1.7, "denoise": 0.2, "min_denoise": 0.15, "max_denoise": 0.35, "steps": 15, "cfg": 3.0, "sampler": "euler", "scheduler": "normal"},
+      "hires": {"scale": 1.5, "min_scale": 1.1, "max_scale": 1.7, "denoise": 0.2, "min_denoise": 0.15, "max_denoise": 0.35, "steps": 20, "cfg": 5.0, "sampler": "euler", "scheduler": "normal"},
       "combos": [
         {"key": "recommended", "label": "作者推荐", "steps": 28, "cfg": 3.0, "sampler": "euler", "scheduler": "normal", "guidance": "off", "note": "Walnut 作者推荐 Euler、CFG 3 起步、约 28 步。"},
         {"key": "creative", "label": "变化", "steps": 28, "cfg": 4.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "作者允许 Euler a 与 CFG 3–6。"},

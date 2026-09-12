@@ -24,7 +24,7 @@ DEFAULT_HIRES = {
     "min_denoise": 0.15,
     "max_denoise": 0.45,
     "steps": 20,
-    "cfg": 4.5,
+    "cfg": 5.0,
     "sampler": "auto",
     "scheduler": "auto",
 }

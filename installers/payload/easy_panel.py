@@ -3745,7 +3745,7 @@ def build_workflow(data: dict) -> dict:
             # pass that redraws the composition.
             hires_denoise = 0.35
         hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 1, 150)
-        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 4.5), 1, 30, integer=False)
+        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 5.0), 1, 30, integer=False)
         hires_sampler = str(hires_defaults.get("sampler", "auto") or "auto")
         hires_scheduler = str(hires_defaults.get("scheduler", "auto") or "auto")
         requested_hires_sampler = str(data.get("hiresSampler", "") or "").strip()
