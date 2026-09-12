@@ -78,13 +78,16 @@ class TransparentExtractWorkflowTest(unittest.TestCase):
         self.assertEqual(refine["inputs"]["mask_grow"], 256)
         self.assertEqual(refine["inputs"]["fix_gap"], 0)
         self.assertEqual(refine["inputs"]["fix_threshold"], 0.99)
-        join = nodes["4"]
+        invert = nodes["4"]
+        self.assertEqual(invert["class_type"], "InvertMask")
+        self.assertEqual(invert["inputs"]["mask"], ["3", 1])
+        join = nodes["5"]
         self.assertEqual(join["class_type"], "JoinImageWithAlpha")
         self.assertEqual(join["inputs"]["image"], ["1", 0])
-        self.assertEqual(join["inputs"]["alpha"], ["3", 1])
-        self.assertEqual(nodes["5"]["class_type"], "SaveImage")
-        self.assertEqual(nodes["5"]["inputs"]["images"], ["4", 0])
-        self.assertTrue(nodes["5"]["inputs"]["filename_prefix"].startswith("EasyPanel_Transparent_"))
+        self.assertEqual(join["inputs"]["alpha"], ["4", 0])
+        self.assertEqual(nodes["6"]["class_type"], "SaveImage")
+        self.assertEqual(nodes["6"]["inputs"]["images"], ["5", 0])
+        self.assertTrue(nodes["6"]["inputs"]["filename_prefix"].startswith("EasyPanel_Transparent_"))
 
     def test_preset_takes_priority_over_legacy_mode(self):
         workflow = easy_panel.build_transparent_extract_workflow("upload.png", {

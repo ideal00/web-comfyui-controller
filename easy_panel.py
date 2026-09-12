@@ -775,10 +775,13 @@ def build_transparent_extract_workflow(image_name: str, settings: dict | None = 
             "device": "cuda",
             "max_megapixels": megapixels,
         }}
-        nodes["4"] = {"class_type": "JoinImageWithAlpha", "inputs": {"image": ["1", 0],
-                                                                    "alpha": ["3", 1]}}
-        nodes["5"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
-                                                            "images": ["4", 0]}}
+        nodes["4"] = {"class_type": "InvertMask", "inputs": {"mask": ["3", 1]}}
+        # JoinImageWithAlpha 把 alpha 当作“透明区”（内部 1-mask），而 LayerMask 输出的是
+        # “保留区”，所以必须先反转，否则会抠掉角色、留下背景。
+        nodes["5"] = {"class_type": "JoinImageWithAlpha", "inputs": {"image": ["1", 0],
+                                                                    "alpha": ["4", 0]}}
+        nodes["6"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
+                                                            "images": ["5", 0]}}
     else:
         nodes["3"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": prefix,
                                                             "images": ["2", 0]}}
