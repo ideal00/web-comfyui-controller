@@ -136,8 +136,9 @@
       var source = state.file ? await uploadSource() : 'output:' + outputName;
       if (!source) throw new Error('图片上传失败，请重试。');
       var preset = ($('transparentExtractMode') || {}).value || 'detail';
-      message(preset === 'hair' ? '正在做发丝增强抠图（边缘细化 + 补断裂发丝，第一次会慢一些）…'
-        : preset === 'detail' ? '正在做精细边缘抠图（发丝 / 飘带）…' : '正在做自动抠图…');
+      message(preset === 'fast' ? '正在做自动抠图…'
+        : preset === 'tight' ? '正在做紧边抠图（去掉轮廓外残留的背景）…'
+          : '正在做精细边缘抠图（发丝 / 飘带）…');
       var response = await fetch('/api/transparent-extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,12 +146,9 @@
           image: source,
           preset: preset,
           detailMethod: ($('transparentExtractMethod') || {}).value || 'PyMatting',
-          detailErode: Number(($('transparentExtractErode') || {}).value || 6),
+          detailErode: Number(($('transparentExtractErode') || {}).value || 12),
           detailDilate: Number(($('transparentExtractDilate') || {}).value || 6),
-          maskGrow: Number(($('transparentExtractGrow') || {}).value || 12),
-          fixGap: Number(($('transparentExtractFixGap') || {}).value || 16),
-          fixThreshold: Number(($('transparentExtractFixThreshold') || {}).value || 0.75),
-          blackPoint: Number(($('transparentExtractBlack') || {}).value || 0.01),
+          blackPoint: Number(($('transparentExtractBlack') || {}).value || 0.1),
           whitePoint: Number(($('transparentExtractWhite') || {}).value || 0.99),
           maxMegapixels: Number(($('transparentExtractMegapixels') || {}).value || 4),
         }),
@@ -194,14 +192,22 @@
     global.openTransparentMaskEditor();
   }
 
+  var PRESET_EDGE = {
+    fast: { erode: 6, black: 0.01 },
+    detail: { erode: 12, black: 0.10 },
+    tight: { erode: 18, black: 0.20 },
+  };
+
   function togglePreset() {
     var preset = ($('transparentExtractMode') || {}).value || 'detail';
     var detail = $('transparentExtractDetail');
-    if (detail) detail.style.display = preset === 'detail' ? 'block' : 'none';
-    var hair = $('transparentExtractHair');
-    if (hair) hair.style.display = preset === 'hair' ? 'block' : 'none';
-    var method = $('transparentExtractMethod');
-    if (method && preset === 'hair' && !method.value) method.value = 'PyMatting';
+    if (detail) detail.style.display = preset === 'fast' ? 'none' : 'block';
+    var edge = PRESET_EDGE[preset];
+    if (!edge) return;
+    var erode = $('transparentExtractErode');
+    var black = $('transparentExtractBlack');
+    if (erode) erode.value = String(edge.erode);
+    if (black) black.value = edge.black.toFixed(2);
   }
 
   function dialog() {
@@ -228,30 +234,23 @@
       + '    <select id="transparentExtractMode">'
       + '      <option value="fast">通用自动（快，硬边）</option>'
       + '      <option value="detail" selected>精细边缘（真实 alpha，推荐）</option>'
-      + '      <option value="hair">发丝增强（补断裂发丝，最慢）</option></select>'
+      + '      <option value="tight">紧边去雾（边缘残留一圈背景时用）</option></select>'
       + '    <div class="field-title"><span>边缘算法</span><span class="small">发丝偏假就换 PyMatting</span></div>'
       + '    <select id="transparentExtractMethod">'
       + '      <option value="PyMatting">PyMatting（推荐：真实 alpha，首次较慢）</option>'
       + '      <option value="GuidedFilter">GuidedFilter（快，边缘偏柔）</option></select>'
       + '    <div id="transparentExtractDetail" style="display:none">'
       + '      <div class="two">'
-      + '        <label>腐蚀<input id="transparentExtractErode" type="number" min="1" max="255" step="1" value="6"></label>'
+      + '        <label>腐蚀（加大＝边缘更紧）<input id="transparentExtractErode" type="number" min="1" max="255" step="1" value="12"></label>'
       + '        <label>膨胀<input id="transparentExtractDilate" type="number" min="1" max="255" step="1" value="6"></label>'
       + '      </div>'
       + '    </div>'
-      + '    <div id="transparentExtractHair" style="display:none">'
-      + '      <div class="two">'
-      + '        <label>边缘扩张<input id="transparentExtractGrow" type="number" min="0" max="256" step="1" value="12"></label>'
-      + '        <label>断裂修补<input id="transparentExtractFixGap" type="number" min="0" max="32" step="1" value="16"></label>'
-      + '      </div>'
-      + '      <label>修补阈值<input id="transparentExtractFixThreshold" type="number" min="0.01" max="0.99" step="0.01" value="0.75"></label>'
-      + '      <div class="small">发丝被吃掉：把白点降到 0.92~0.96 或加大断裂修补；背景雾多：把黑点提到 0.05~0.15。</div>'
-      + '    </div>'
       + '    <div class="two">'
-      + '      <label>黑点<input id="transparentExtractBlack" type="number" min="0.01" max="0.98" step="0.01" value="0.01"></label>'
+      + '      <label>黑点（加大＝去雾边）<input id="transparentExtractBlack" type="number" min="0.01" max="0.98" step="0.01" value="0.10"></label>'
       + '      <label>白点<input id="transparentExtractWhite" type="number" min="0.02" max="0.99" step="0.01" value="0.99"></label>'
       + '    </div>'
       + '    <label>最大像素（MP，越大越保细节、越吃显存）<input id="transparentExtractMegapixels" type="number" min="1" max="16" step="0.5" value="4"></label>'
+      + '    <div class="small">轮廓外还残留一圈背景：选“紧边去雾”或把腐蚀/黑点调大；发丝被吃掉就反过来调小。</div>'
       + '  </div>'
       + '</div>'
       + '<div class="transparent-extract-preview">'
