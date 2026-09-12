@@ -1493,6 +1493,28 @@ PROMPT_FAMILY_RULES = {
     "krea2": "使用自然流畅的英文视觉描述，明确主体、动作、镜头、场景、光影和材质，避免标签堆砌。",
 }
 PROMPT_INSTRUCTION_SAFETY_LEVELS = {"safe", "sensitive", "nsfw", "explicit"}
+PROMPT_INSTRUCTION_MODES = ("standard", "advanced")
+# 通用的“状态覆写”规范：任何需要改变既有状态的场景（破损战损 / 换装 / 附着物 /
+# 多层穿透 / 解体变形 / 材质与环境重构）都按这套规则重写提示词。
+PROMPT_INSTRUCTION_ADVANCED_RULES = (
+    "当前为“状态覆写”任务：角色或画面的既有状态需要被改变（破损战损、换装、附着物、多层穿透、"
+    "解体变形、材质或环境重构等）。必须严格按以下规范执行：\n"
+    "1) 冲突排查与特征解耦：先找出与目标状态冲突的既有属性原词（要露肤就清除 covered navel、"
+    "full bodysuit；要换装就清除原服装词；要破损就清除 intact、pristine 类词），一律清除；"
+    "把整体概念拆成独立部件逐个改写（torn bodysuit、shredded capelet、frayed gloves），"
+    "禁止只给整体概念追加权重；被清除的属性必须成对转移进负面提示词。\n"
+    "2) 三维层叠法，正面提示词按三层堆叠：结构层（目标状态的结构形变与微观细节，如 shredded、"
+    "tattered、frayed fabric、ragged edges、hanging cloth strips、dangling threads，按目标状态换成同类高阶动态词）；"
+    "展现层（形变后露出的解剖结构或底层材质，如 exposed skin、midriff、navel、skin through clothes、"
+    "torn revealing X）；痕迹层（伴随该状态产生的液体、微粒与创伤或环境痕迹，如 bleeding、"
+    "blood splatter、grime、soot、ash on skin、scratches on body、bruises；非破坏类覆写则换成该状态应有的材质与痕迹）。\n"
+    "3) 负向截断：动漫与通用底模带有强烈的“光滑、洁净、无瑕、对称”审美先验，负面提示词必须压制"
+    "与目标状态冲突的既有先验（smooth skin、porcelain skin、spotless、clean、pristine、flawless skin、"
+    "polished、clean clothes、undamaged clothes、intact clothing、fully clothed 等）。\n"
+    "4) 两阶段采样拆分：一阶段（denoise 1.0）只锁定构图、透视骨架、姿态与角色基调，仅保留轻度倾向，"
+    "禁止高频噪点词；二阶段（denoise 0.45~0.60）剔除一阶段被替换掉的旧属性词，全量注入三维层叠的"
+    "新状态细节与高频物理细节。\n"
+)
 
 
 def resolve_prompt_instruction_model(requested: str = "") -> str:
@@ -1506,8 +1528,12 @@ def resolve_prompt_instruction_model(requested: str = "") -> str:
     return choose_rpg_model("", defaults, rpg_model_catalog())
 
 
-def build_prompt_instruction(text: str, model: str = "", safety_level: str = "safe") -> dict:
-    """Build the model-aware DeepSeek instruction shared by desktop and mobile."""
+def build_prompt_instruction(text: str, model: str = "", safety_level: str = "safe",
+                             mode: str = "standard") -> dict:
+    """Build the model-aware DeepSeek instruction shared by desktop and mobile.
+
+    mode="advanced" 注入通用的“状态覆写”规范（解耦 + 三维层叠 + 负向截断 + 两阶段拆分）。
+    """
 
     source = str(text or "").strip()
     if not source:
@@ -1519,20 +1545,43 @@ def build_prompt_instruction(text: str, model: str = "", safety_level: str = "sa
     safety = str(safety_level or "safe").strip().lower()
     if safety not in PROMPT_INSTRUCTION_SAFETY_LEVELS:
         safety = "safe"
+    resolve_mode = str(mode or "standard").strip().lower()
+    if resolve_mode == "damage":  # 旧值兼容：战损模式已泛化为通用覆写模式
+        resolve_mode = "advanced"
+    if resolve_mode not in PROMPT_INSTRUCTION_MODES:
+        resolve_mode = "standard"
     label = PROMPT_FAMILY_LABELS.get(family, PROMPT_FAMILY_LABELS["sdxl"])
     rule = PROMPT_FAMILY_RULES.get(family, PROMPT_FAMILY_RULES["sdxl"])
+    if resolve_mode == "advanced":
+        tail = (
+            PROMPT_INSTRUCTION_ADVANCED_RULES
+            + "保留用户明确要求，不扩写敏感程度，不解释思路，不使用 Markdown 代码块。"
+            "只按以下字段回答，每行一个字段，字段名保持大写英文：\n"
+            "ANALYSIS: 中文一句话，说明清除了哪些冲突词、覆写了哪几层\n"
+            "POSITIVE: 一阶段英文正向提示词（构图 / 姿态 / 角色基调 + 轻度改态倾向）\n"
+            "NEGATIVE: 一阶段英文负面提示词（含被剔除的旧属性）\n"
+            "STAGE2_POSITIVE: 二阶段英文正向提示词（全量三维层叠的新状态细节与材质重塑）\n"
+            "STAGE2_NEGATIVE: 二阶段英文负面提示词\n"
+            "PARAMS: 中文一行，给出建议 denoise 区间、CFG 倾向与 LoRA 双通道权重\n\n"
+            "用户中文构想：\n"
+            f"{source}"
+        )
+    else:
+        tail = (
+            "保留用户明确要求，不扩写敏感程度，不解释思路，不使用 Markdown 代码块。"
+            "只按以下两行格式回答：\n"
+            "POSITIVE: 英文正向提示词\n"
+            "NEGATIVE: 仅列出针对本画面需要额外避免的问题；没有则留空\n\n"
+            "用户中文构想：\n"
+            f"{source}"
+        )
     instruction = (
         "你是 ComfyUI 提示词转换助手。请把下面的中文构想转换成适合当前模型的英文提示词。\n"
         f"当前模型族：{label}\n"
         f"当前检查点：{resolved_model}\n"
         f"安全级别：{safety}\n"
         f"规则：{rule}\n"
-        "保留用户明确要求，不扩写敏感程度，不解释思路，不使用 Markdown 代码块。"
-        "只按以下两行格式回答：\n"
-        "POSITIVE: 英文正向提示词\n"
-        "NEGATIVE: 仅列出针对本画面需要额外避免的问题；没有则留空\n\n"
-        "用户中文构想：\n"
-        f"{source}"
+        + tail
     )
     return {
         "api_version": RPG_API_VERSION,
@@ -1540,6 +1589,7 @@ def build_prompt_instruction(text: str, model: str = "", safety_level: str = "sa
         "family": family,
         "family_label": label,
         "safety_level": safety,
+        "mode": resolve_mode,
         "instruction": instruction,
     }
 
@@ -5488,6 +5538,7 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("text", ""),
                     data.get("model", ""),
                     data.get("safetyLevel", "safe"),
+                    data.get("mode", "standard"),
                 ))
                 return
             # 移动端（仅持有 RPG Token）用的任务队列与重复检测入口，逻辑与桌面端完全一致。

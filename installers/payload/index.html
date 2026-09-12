@@ -55,6 +55,7 @@
 
   <section class="card prompt-card">
     <div class="field-title"><b>中文描述转换</b><span class="small">常用词会转成英文标签 · <span id="translationFamilyMode">检测模型中…</span></span></div>
+    <div class="two"><div><div class="field-title"><span>转换模式</span><span class="small" id="instructionModeHint">常规：按模型族把中文转成英文标签</span></div><select id="promptInstructionMode"><option value="standard">常规转换</option><option value="advanced">高级覆写（状态变化：破损 / 换装 / 附着物 / 材质重构）</option></select></div><div class="small" style="align-self:end">覆写模式会先清除与目标状态冲突的旧属性词，再按结构 / 展现 / 痕迹三层重写，并额外给出一阶段与二阶段（denoise 0.45~0.60）两套提示词。</div></div>
     <textarea id="zhPrompt" placeholder="例如：蓝发成年女性，白衬衫、轻薄尼龙丝袜，在窗边的全身像"></textarea>
     <div class="field-title"><span>DeepSeek 网页版</span><span class="small">不用 API / 不保存密钥 · 自动复制适配当前模型的转换指令</span></div>
     <div class="small">点击后会打开 DeepSeek。请在网页中粘贴并发送；复制回答后回到这里读取结果。浏览器跨站限制下无法自动替你发送消息。</div>
@@ -62,7 +63,7 @@
     <div id="translationResult" class="small"></div>
     <div id="deepSeekManualHelp" class="small deepseek-manual-help" style="display:none">自动复制失败，下面是完整转换指令；请长按文本区域，全选后复制。文本区只包含模型、规则和当前中文描述，不包含 Token 或 API 密钥。</div>
     <textarea id="deepSeekManualInstruction" class="deepseek-manual-instruction" readonly rows="10" spellcheck="false" aria-label="DeepSeek 完整转换指令" style="display:none"></textarea>
-    <div id="translationPreview" class="small" style="display:none;margin-top:8px"><b>英文结果：</b><span id="translatedPositive"></span><br><b>建议负面词：</b><span id="translatedNegative"></span><div class="actions"><button class="secondary" onclick="applyTranslated('positive')">加入正向提示词</button><button class="secondary" onclick="applyTranslated('negative')">加入负面提示词</button></div></div>
+    <div id="translationPreview" class="small" style="display:none;margin-top:8px"><b>英文结果：</b><span id="translatedPositive"></span><br><b>建议负面词：</b><span id="translatedNegative"></span><div id="translationExtras" style="display:none;margin-top:10px"><div id="translatedAnalysis" class="small"></div><div id="translatedParams" class="small"></div><div class="field-title"><span>二阶段提示词（二次采样 / 高清修复用）</span><span class="small">denoise 0.45~0.60</span></div><textarea id="translatedStage2Positive" rows="3" spellcheck="false" placeholder="二阶段正向"></textarea><textarea id="translatedStage2Negative" rows="2" spellcheck="false" placeholder="二阶段负面"></textarea><div class="actions"><button class="secondary" onclick="copyStage2Prompt()">复制二阶段提示词</button></div></div><div class="actions"><button class="secondary" onclick="applyTranslated('positive')">加入正向提示词</button><button class="secondary" onclick="applyTranslated('negative')">加入负面提示词</button></div></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <details class="token-library-shell" open>
       <summary><b>提示词快捷库</b><span id="tokenHint" class="counter">光辉优先 · 点击词条添加英文标签</span></summary>
@@ -366,6 +367,7 @@
 </dialog>
 <script src="/assets/js/prompt-library.js?v=5"></script>
 <script src="/assets/js/panel.js?v=63"></script>
+<script src="/assets/js/prompt-mode.js?v=1"></script>
 <script src="/assets/js/shared-state.js?v=1"></script>
 <script src="/assets/js/clarity-analysis.js?v=2"></script>
 <script src="/assets/js/feature-editor.js?v=1"></script>
