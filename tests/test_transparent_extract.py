@@ -241,6 +241,33 @@ class CleanResidueTest(unittest.TestCase):
         self.assertTrue(np.all(alpha[22:26, 22:26] == 255))        # 发丝本体保留
         self.assertEqual(list(cleaned.getpixel((40, 40)))[3], 0)
 
+    def test_connected_light_area_is_not_cleared(self):
+        """白色礼服颜色也接近背景，但它与图像外部连通，不能被当成缝隙清掉。"""
+        import importlib
+        import tempfile
+
+        media_storage = importlib.import_module("easy_panel_app.media_storage")
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pixels = np.zeros((96, 96, 4), dtype=np.uint8)
+            pixels[..., :3] = (240, 238, 236)
+            pixels[20:70, 16:56, :3] = (60, 45, 40)      # 深色发丝块
+            pixels[20:70, 16:56, 3] = 255
+            pixels[38:44, 38:44, :3] = (240, 238, 236)   # 发丝之间封闭的缝隙
+            pixels[20:70, 56:96, :3] = (240, 238, 236)   # 贴着右边界的“衣服”
+            pixels[20:70, 56:96, 3] = 255
+            Image.fromarray(pixels, "RGBA").save(root / "cut.png")
+
+            with patch.object(media_storage, "OUTPUT", root):
+                result = media_storage.clean_transparent_residue("cut.png")
+                cleaned = np.asarray(Image.open(root / result["name"]).convert("RGBA"))
+
+        self.assertTrue(np.all(cleaned[38:44, 38:44, 3] == 0))     # 封闭缝隙被清掉
+        self.assertTrue(np.all(cleaned[30:60, 70:90, 3] == 255))   # 与外部连通的衣服保留
+        self.assertTrue(np.all(cleaned[30:60, 25:35, 3] == 255))   # 发丝本体保留
+
     def test_missing_file_is_rejected(self):
         import importlib
 

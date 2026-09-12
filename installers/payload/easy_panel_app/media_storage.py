@@ -154,12 +154,54 @@ def _component_size(mask, area_limit: int):
     return sizes
 
 
-def clean_transparent_residue(name: str, *, tolerance: float = 26, area_limit: int = 1200,
+def _component_size(mask, area_limit: int):
+    """4 邻域连通域面积（只遍历候选像素，超过上限的块提前止损）。"""
+
+    import numpy as np
+
+    sizes = np.zeros(mask.shape, dtype=np.int32)
+    visited = np.zeros(mask.shape, dtype=bool)
+    height, width = mask.shape
+    for start_y, start_x in zip(*np.nonzero(mask)):
+        if visited[start_y, start_x]:
+            continue
+        stack = [(int(start_y), int(start_x))]
+        visited[start_y, start_x] = True
+        component: list[tuple[int, int]] = []
+        overflow = False
+        while stack:
+            y, x = stack.pop()
+            component.append((y, x))
+            if len(component) > area_limit:
+                overflow = True
+                break
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not visited[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((ny, nx))
+        size = area_limit + 1 if overflow else len(component)
+        for y, x in component:
+            sizes[y, x] = size
+    return sizes
+
+
+def clean_transparent_residue(name: str, *, tolerance: float = 20, area_limit: int = 800,
                               dark_ratio: float = 0.25, window: int = 31) -> dict:
-    """发丝之间的缝隙常被当成前景保留：把“颜色仍是背景色、四周被深色发丝包围”的小块改成透明。"""
+    """清掉发丝之间的缝隙背景。
+
+    四个条件同时成立才算缝隙：颜色接近背景色、当前是不透明前景、把该像素当成背景后会成为
+    **封闭孔洞**（不与图像外部连通）、四周被深色发丝包围、且连通块面积很小。白色礼服虽然
+    颜色也接近背景，但与外部背景连通，因此不会被误删。
+    """
 
     import numpy as np
     from PIL import Image
+
+    try:
+        from scipy import ndimage
+    except ImportError:
+        return {"name": str(name), "removed": 0, "skipped": "缺少 scipy，跳过缝隙清理"}
 
     path = _output_path(name)
     with Image.open(path) as handle:
@@ -171,10 +213,28 @@ def clean_transparent_residue(name: str, *, tolerance: float = 26, area_limit: i
         return {"name": path.name, "removed": 0, "skipped": "透明区太少，无法估计背景色"}
     background = np.median(rgb[transparent], axis=0)
     color_close = np.abs(rgb - background).max(axis=2) < tolerance
+    solid = alpha > 0.7
     luminance = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
     dark_ratio_map = _box_mean((luminance < 130).astype(np.float32), window // 2)
-    candidate = color_close & (alpha > 0.7) & (dark_ratio_map > dark_ratio)
-    residue = candidate & (_component_size(candidate, area_limit) <= area_limit)
+
+    # 把候选像素当作背景后，从图像外部洪水填充：填得到的就是“跟外面连通”的区域（衣服/背景）。
+    bg_like = np.pad((alpha <= 0.5) | (color_close & solid), 1, constant_values=True)
+    seed = np.zeros_like(bg_like)
+    seed[0, :] = bg_like[0, :]
+    seed[-1, :] = bg_like[-1, :]
+    seed[:, 0] = bg_like[:, 0]
+    seed[:, -1] = bg_like[:, -1]
+    external = ndimage.binary_propagation(seed, mask=bg_like)[1:-1, 1:-1]
+
+    candidate = color_close & solid & ~external & (dark_ratio_map > dark_ratio)
+    if not candidate.any():
+        return {"name": path.name, "removed": 0}
+    labels, count = ndimage.label(candidate)
+    sizes = np.zeros(count + 1, dtype=np.int32)
+    if count:
+        sizes[1:] = ndimage.sum(candidate, labels, range(1, count + 1))
+    sizes_map = sizes[labels] if count else candidate.astype(np.int32)
+    residue = candidate & (sizes_map <= area_limit)
     removed = int(residue.sum())
     if not removed:
         return {"name": path.name, "removed": 0}
