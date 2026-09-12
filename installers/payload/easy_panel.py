@@ -607,7 +607,7 @@ def add_tasks(data: dict) -> dict:
                                    "created_at": found["items"][0]["created_at"]})
     rows: list[dict] = []
     for item in expanded:
-        payload = item["payload"]
+        payload = payload_with_unique_prefix(item["payload"])
         if generation_fingerprint(payload) in skip_fingerprints:
             continue
         experiment = payload.get("experiment") if isinstance(payload.get("experiment"), dict) else {}
@@ -866,7 +866,13 @@ def prune_creative_missing_outputs() -> dict:
             return {"throttled": True}
         _LAST_CREATIVE_PRUNE_TS = now
     try:
-        return get_creative_index().prune_missing_outputs(OUTPUT)
+        index = get_creative_index()
+        # 先处理同名覆盖（旧记录指向已被覆盖的文件），再例行清理缺失输出。
+        duplicates = index.mark_duplicate_artifacts_missing()
+        pruned = index.prune_missing_outputs(OUTPUT)
+        if duplicates.get("marked"):
+            pruned = {**pruned, **duplicates}
+        return pruned
     except Exception:
         return {"error": True}
 
@@ -2706,6 +2712,26 @@ def generation_filename_prefix(data: dict, suffix: str = "") -> str:
     if transparent_mode != "off" and data.get("filenamePrefix"):
         prefix += "_Transparent"
     return prefix + suffix
+
+
+def unique_generation_prefix(data: dict) -> str:
+    """每个提交唯一的前缀：时间戳 + 随机段。
+
+    ComfyUI 的 SaveImage 计数器会扫描输出目录取最大值 +1；只要目录里出现过一次
+    回退（重启、清理、换目录），它就会重新使用旧编号并**直接覆盖旧图**，作品库
+    里旧记录于是显示成新图（看起来像“读到了二采原图”）。加上唯一段后，每个任务
+    的输出文件名天生不重复，永远不会互相覆盖。
+    """
+    base = safe_generation_filename_prefix(data, "EasyPanel")[:72]
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return f"{base}_{stamp}-{os.urandom(2).hex()}"
+
+
+def payload_with_unique_prefix(data: dict) -> dict:
+    """返回带唯一 filenamePrefix 的 payload 副本（外部显式指定的前缀也会加唯一段）。"""
+    payload = dict(data) if isinstance(data, dict) else {}
+    payload["filenamePrefix"] = unique_generation_prefix(payload)
+    return payload
 
 
 def build_workflow(data: dict) -> dict:
@@ -5348,6 +5374,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(duplicate_check({"payload": checked}))
                 return
             if self.path == "/api/rpg/generate":
+                data = payload_with_unique_prefix(data)
                 client = data.get("client") if isinstance(data.get("client"), dict) else {}
                 request_id = str(client.get("requestId") or data.get("requestId") or "").strip()
                 if request_id:
@@ -5469,6 +5496,8 @@ class Handler(BaseHTTPRequestHandler):
                 jobs = data.get("jobs")
                 policy = str(data.get("duplicatePolicy") or "ask").strip().casefold()
                 expanded = expand_generation_jobs(jobs)
+                for item in expanded:
+                    item["payload"] = payload_with_unique_prefix(item["payload"])
                 duplicate_skipped: list[dict] = []
                 if policy == "skip":
                     duplicated: set[str] = set()
@@ -5517,6 +5546,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "total_images": len(submitted),
                                 "skipped_duplicates": duplicate_skipped})
             else:
+                data = payload_with_unique_prefix(data)
                 policy = str(data.get("duplicatePolicy") or "ask").strip().casefold()
                 if policy == "skip":
                     found = _duplicate_lookup(data, limit=1)

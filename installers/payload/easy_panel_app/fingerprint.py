@@ -29,6 +29,7 @@ IGNORED_KEYS = {
     "experiment", "experimentLabel", "experimentVariable", "experimentValue",
     "label", "note", "notes", "title", "favorite", "rating", "selected",
     "presetName", "savePresetName", "promptPresetName", "snapshotId", "snapshot_id",
+    "filenamePrefix", "filename_prefix",
     "promptId", "prompt_id", "generationId", "generation_id", "duplicatePolicy",
     "allowDuplicate", "queueMode", "createdAt", "created_at", "updatedAt", "updated_at",
     "source", "origin", "logicalTaskIndex", "generatedAt", "generated_at", "createdTime",

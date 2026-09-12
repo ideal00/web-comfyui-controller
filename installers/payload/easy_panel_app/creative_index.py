@@ -418,7 +418,8 @@ def _preview_artifact_row(connection: sqlite3.Connection, generation_id: str) ->
             return row
     if usable:
         return usable[0]
-    return rows[0] if rows else None
+    # 所有输出都已损坏/被覆盖：宁可不给缩略图，也不能指向别人的图。
+    return None
 
 
 def _row_flag(row: sqlite3.Row, name: str) -> bool:
@@ -1623,6 +1624,48 @@ class CreativeIndex:
                     "note": "变化版只预览恢复参数；换 Seed 后仍必须由用户显式点击生成。",
                 },
             }
+
+    def mark_duplicate_artifacts_missing(self, *, limit: int = 200) -> dict[str, int]:
+        """同名图片被多条作品引用时，只保留最新那条，其余标记缺失。
+
+        ComfyUI 的 SaveImage 计数器一旦回退（重启、清理、换目录）就会重新使用旧
+        编号并覆盖旧图，旧记录于是指向别人的图。图片本体已无法找回，与其显示错图，
+        不如标记 exists=false 让作品库换成占位。新生成已使用唯一前缀，不会再发生。
+        """
+
+        bounded = max(1, min(1000, _safe_int(limit, 200) or 200))
+        marked = 0
+        groups = 0
+        with self._write_transaction() as connection:
+            rows = connection.execute(
+                "SELECT filename, subfolder, image_type FROM artifacts "
+                "GROUP BY filename, subfolder, image_type HAVING COUNT(DISTINCT generation_id) > 1 "
+                "LIMIT ?",
+                (bounded,),
+            ).fetchall()
+            for group in rows:
+                groups += 1
+                owners = connection.execute(
+                    "SELECT a.artifact_id, a.metadata_json FROM artifacts a "
+                    "JOIN generations g ON g.generation_id = a.generation_id "
+                    "WHERE a.filename = ? AND a.subfolder = ? AND a.image_type = ? "
+                    "ORDER BY g.created_at DESC, a.created_at DESC",
+                    (str(group["filename"]), str(group["subfolder"]), str(group["image_type"])),
+                ).fetchall()
+                for owner in owners[1:]:
+                    metadata = _json_value(owner["metadata_json"])
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    if metadata.get("exists") is False:
+                        continue
+                    metadata["exists"] = False
+                    metadata["reason"] = "同名图片已被后续任务覆盖（ComfyUI 文件名编号回退）。"
+                    connection.execute(
+                        "UPDATE artifacts SET metadata_json = ? WHERE artifact_id = ?",
+                        (_json_text(metadata), str(owner["artifact_id"])),
+                    )
+                    marked += 1
+        return {"marked": marked, "groups": groups}
 
     def prune_missing_outputs(self, output_root: Any, *, limit: int = 400) -> dict[str, int]:
         """Delete generations whose recorded output images no longer exist on disk.
