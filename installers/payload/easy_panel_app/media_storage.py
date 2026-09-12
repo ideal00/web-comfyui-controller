@@ -94,6 +94,99 @@ def copy_output_to_input(name: str) -> str:
     return stored_name
 
 
+def _output_path(name: str) -> Path:
+    relative = Path(str(name or "").replace("\\", "/"))
+    if not relative.name or relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("抠图结果路径无效。")
+    path = (OUTPUT / relative).resolve()
+    try:
+        path.relative_to(OUTPUT.resolve())
+    except ValueError as exc:
+        raise ValueError("抠图结果路径无效。") from exc
+    if not path.is_file():
+        raise ValueError(f"找不到抠图结果：{relative.name}")
+    return path
+
+
+def _box_mean(values, radius: int):
+    import numpy as np
+
+    pad = np.pad(values, radius + 1, mode="edge")
+    integral = pad.cumsum(0).cumsum(1)
+    size = 2 * radius + 1
+    height, width = values.shape
+    total = (integral[size:size + height, size:size + width]
+             - integral[:height, size:size + width]
+             - integral[size:size + height, :width]
+             + integral[:height, :width])
+    return total / (size * size)
+
+
+def _component_size(mask, area_limit: int):
+    """4 邻域连通域面积（只遍历候选像素，超过上限的块提前止损）。"""
+
+    import numpy as np
+
+    sizes = np.zeros(mask.shape, dtype=np.int32)
+    visited = np.zeros(mask.shape, dtype=bool)
+    height, width = mask.shape
+    for start_y, start_x in zip(*np.nonzero(mask)):
+        if visited[start_y, start_x]:
+            continue
+        stack = [(int(start_y), int(start_x))]
+        visited[start_y, start_x] = True
+        component: list[tuple[int, int]] = []
+        overflow = False
+        while stack:
+            y, x = stack.pop()
+            component.append((y, x))
+            if len(component) > area_limit:
+                overflow = True
+                break
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not visited[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((ny, nx))
+        size = area_limit + 1 if overflow else len(component)
+        for y, x in component:
+            sizes[y, x] = size
+    return sizes
+
+
+def clean_transparent_residue(name: str, *, tolerance: float = 26, area_limit: int = 1200,
+                              dark_ratio: float = 0.25, window: int = 31) -> dict:
+    """发丝之间的缝隙常被当成前景保留：把“颜色仍是背景色、四周被深色发丝包围”的小块改成透明。"""
+
+    import numpy as np
+    from PIL import Image
+
+    path = _output_path(name)
+    with Image.open(path) as handle:
+        image = handle.convert("RGBA")
+    rgba = np.asarray(image).astype(np.float32)
+    rgb, alpha = rgba[..., :3], rgba[..., 3] / 255.0
+    transparent = alpha < 0.05
+    if int(transparent.sum()) < 500:
+        return {"name": path.name, "removed": 0, "skipped": "透明区太少，无法估计背景色"}
+    background = np.median(rgb[transparent], axis=0)
+    color_close = np.abs(rgb - background).max(axis=2) < tolerance
+    luminance = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    dark_ratio_map = _box_mean((luminance < 130).astype(np.float32), window // 2)
+    candidate = color_close & (alpha > 0.7) & (dark_ratio_map > dark_ratio)
+    residue = candidate & (_component_size(candidate, area_limit) <= area_limit)
+    removed = int(residue.sum())
+    if not removed:
+        return {"name": path.name, "removed": 0}
+    alpha[residue] = 0.0
+    cleaned = image.copy()
+    cleaned.putalpha(Image.fromarray((alpha * 255).round().astype("uint8")))
+    target = path.with_name(path.stem + "_clean.png")
+    cleaned.save(target, format="PNG")
+    return {"name": target.name, "removed": removed, "source": path.name,
+            "background": [int(value) for value in background]}
+
+
 def save_inpaint_upload(content_type: str, body: bytes) -> dict:
     image_bytes = extract_image_upload(content_type, body, "image")
     mask_bytes = extract_image_upload(content_type, body, "mask")

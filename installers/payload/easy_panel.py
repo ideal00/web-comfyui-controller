@@ -74,6 +74,7 @@ from easy_panel_app.media_storage import (
     save_inpaint_upload,
     save_pose_upload,
     save_reference_upload,
+    clean_transparent_residue,
     copy_output_to_input,
     validate_input_image,
 )
@@ -814,10 +815,19 @@ def run_transparent_extract(data: dict, *, timeout: float = 180.0) -> dict:
                                    images[-1] if images else None)
                 if not transparent:
                     raise ValueError("抠图完成，但没有找到输出图片。")
-                return {"prompt_id": prompt_id, "filename": transparent["filename"],
-                        "subfolder": transparent["subfolder"],
-                        "url": "/output?name=" + urllib.parse.quote(transparent["filename"]),
-                        "source": source, "mode": str(data.get("mode") or "auto")}
+                result = {"prompt_id": prompt_id, "filename": transparent["filename"],
+                          "subfolder": transparent["subfolder"], "source": source,
+                          "preset": transparent_preset(data)}
+                if data.get("cleanGaps", True) is not False:
+                    try:
+                        cleaned = clean_transparent_residue(transparent["filename"])
+                    except Exception as error:  # 清理失败不影响抠图结果
+                        cleaned = {"removed": 0, "error": str(error)}
+                    result["gap_cleanup"] = cleaned
+                    if cleaned.get("removed") and cleaned.get("name"):
+                        result["filename"] = cleaned["name"]
+                result["url"] = "/output?name=" + urllib.parse.quote(result["filename"])
+                return result
         time.sleep(0.8)
     raise ValueError("抠图超时：ComfyUI 还在处理这张图。")
 

@@ -151,12 +151,15 @@
           blackPoint: Number(($('transparentExtractBlack') || {}).value || 0.1),
           whitePoint: Number(($('transparentExtractWhite') || {}).value || 0.99),
           maxMegapixels: Number(($('transparentExtractMegapixels') || {}).value || 4),
+          cleanGaps: !!($('transparentExtractCleanGaps') || {}).checked,
         }),
       });
       var data = await response.json().catch(function () { return {}; });
       if (!response.ok || data.error) throw new Error(data.error || ('抠图失败：' + response.status));
       showResult(data);
-      message('已生成透明 PNG：' + data.filename + '（棋盘格区域为透明）');
+      var cleaned = data.gap_cleanup && data.gap_cleanup.removed
+        ? '，已清掉 ' + data.gap_cleanup.removed + ' 像素的缝隙背景' : '';
+      message('已生成透明 PNG：' + data.filename + '（棋盘格区域为透明）' + cleaned);
     } catch (error) {
       message(error.message);
     } finally {
@@ -250,7 +253,8 @@
       + '      <label>白点<input id="transparentExtractWhite" type="number" min="0.02" max="0.99" step="0.01" value="0.99"></label>'
       + '    </div>'
       + '    <label>最大像素（MP，越大越保细节、越吃显存）<input id="transparentExtractMegapixels" type="number" min="1" max="16" step="0.5" value="4"></label>'
-      + '    <div class="small">轮廓外还残留一圈背景：选“紧边去雾”或把腐蚀/黑点调大；发丝被吃掉就反过来调小。</div>'
+      + '    <label class="small"><input id="transparentExtractCleanGaps" type="checkbox" checked> 清理发丝缝隙里的背景（推荐）</label>'
+      + '    <div class="small">轮廓外还残留一圈背景：选“紧边去雾”或把腐蚀/黑点调大；发丝之间透出的背景：打开上面的缝隙清理。</div>'
       + '  </div>'
       + '</div>'
       + '<div class="transparent-extract-preview">'

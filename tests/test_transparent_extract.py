@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 
 PANEL_ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("easy_panel_transparent_extract_test", PANEL_ROOT / "easy_panel.py")
@@ -140,7 +142,41 @@ class RunTransparentExtractTest(unittest.TestCase):
         self.assertEqual(calls[0], ("/prompt", "POST"))
         self.assertEqual(result["filename"], "EasyPanel_Transparent_20260901-120000-ab12_00001_.png")
         self.assertEqual(result["url"], "/output?name=EasyPanel_Transparent_20260901-120000-ab12_00001_.png")
-        self.assertEqual(result["mode"], "auto")
+        self.assertEqual(result["preset"], "fast")
+        # 测试环境里没有真实输出文件，清理会安全降级。
+        self.assertEqual(result["gap_cleanup"]["removed"], 0)
+
+    def test_clean_gaps_can_be_disabled(self):
+        def fake_comfy(path, method="GET", payload=None):
+            if path == "/prompt":
+                return {"prompt_id": "abc123"}
+            return {"abc123": {"status": {"status_str": "success"}, "outputs": {"3": {"images": [
+                {"filename": "EasyPanel_Transparent_x_00001_.png", "subfolder": ""}]}}}}
+
+        with patch.object(easy_panel, "comfy_json", side_effect=fake_comfy), \
+                patch.object(easy_panel, "clean_transparent_residue") as cleanup, \
+                patch.object(easy_panel, "resolve_transparent_source",
+                             return_value="easy_panel/reference_abc.png"):
+            result = easy_panel.run_transparent_extract({"image": "x", "cleanGaps": False})
+        cleanup.assert_not_called()
+        self.assertNotIn("gap_cleanup", result)
+
+    def test_clean_gaps_swaps_in_cleaned_file(self):
+        def fake_comfy(path, method="GET", payload=None):
+            if path == "/prompt":
+                return {"prompt_id": "abc123"}
+            return {"abc123": {"status": {"status_str": "success"}, "outputs": {"3": {"images": [
+                {"filename": "EasyPanel_Transparent_x_00001_.png", "subfolder": ""}]}}}}
+
+        cleaned = {"name": "EasyPanel_Transparent_x_00001__clean.png", "removed": 512}
+        with patch.object(easy_panel, "comfy_json", side_effect=fake_comfy), \
+                patch.object(easy_panel, "clean_transparent_residue", return_value=cleaned), \
+                patch.object(easy_panel, "resolve_transparent_source",
+                             return_value="easy_panel/reference_abc.png"):
+            result = easy_panel.run_transparent_extract({"image": "x"})
+        self.assertEqual(result["filename"], cleaned["name"])
+        self.assertIn("EasyPanel_Transparent_x_00001__clean.png", result["url"])
+        self.assertEqual(result["gap_cleanup"]["removed"], 512)
 
     def test_error_state_surfaces_chinese_message(self):
         def fake_comfy(path, method="GET", payload=None):
@@ -175,6 +211,42 @@ class RunTransparentExtractTest(unittest.TestCase):
             with self.assertRaises(ValueError) as error:
                 easy_panel.run_transparent_extract({"image": "x"})
         self.assertIn("超时", str(error.exception))
+
+
+class CleanResidueTest(unittest.TestCase):
+    def test_background_gap_between_hair_is_removed(self):
+        import importlib
+        import tempfile
+
+        media_storage = importlib.import_module("easy_panel_app.media_storage")
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pixels = np.zeros((80, 80, 4), dtype=np.uint8)
+            pixels[..., :3] = (240, 238, 236)      # 背景色
+            pixels[..., 3] = 0                     # 默认全透明
+            pixels[20:60, 20:60, :3] = (60, 45, 40)  # 深色发丝块
+            pixels[20:60, 20:60, 3] = 255
+            pixels[38:44, 38:44, :3] = (240, 238, 236)  # 发丝之间的缝隙仍是背景色
+            Image.fromarray(pixels, "RGBA").save(root / "cut.png")
+
+            with patch.object(media_storage, "OUTPUT", root):
+                result = media_storage.clean_transparent_residue("cut.png")
+                cleaned = Image.open(root / result["name"]).convert("RGBA")
+
+        self.assertGreaterEqual(result["removed"], 30)
+        alpha = np.asarray(cleaned.getchannel("A"))
+        self.assertTrue(np.all(alpha[38:44, 38:44] == 0))          # 缝隙被清掉
+        self.assertTrue(np.all(alpha[22:26, 22:26] == 255))        # 发丝本体保留
+        self.assertEqual(list(cleaned.getpixel((40, 40)))[3], 0)
+
+    def test_missing_file_is_rejected(self):
+        import importlib
+
+        media_storage = importlib.import_module("easy_panel_app.media_storage")
+        with self.assertRaises(ValueError):
+            media_storage.clean_transparent_residue("../secret.png")
 
 
 class TransparentExtractWiringTest(unittest.TestCase):
