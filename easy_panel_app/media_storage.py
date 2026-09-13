@@ -301,6 +301,30 @@ def list_output_images(limit: int = 80) -> list[dict]:
     return entries
 
 
+#: 首采对照图的统一标记：文件名里带它就属于「对照图」，不是成品。
+HIRES_BASE_MARKER = "_base_"
+
+
+def is_hires_base_filename(value) -> bool:
+    """全项目唯一的首采对照图判断（接受文件名或 {filename: ...} 字典）。"""
+
+    name = value.get("filename") if isinstance(value, dict) else value
+    return HIRES_BASE_MARKER in Path(str(name or "")).name
+
+
+def split_hires_outputs(images) -> dict:
+    """把一次任务的输出拆成成品与首采对照图。
+
+    结果列表、作品库、手机端、下载、删除与 A/B 对照都应该用这个函数，而不要
+    各自去判断文件名里有没有 _base_；这样就不会出现“桌面过滤了、手机没过滤”。
+    """
+
+    items = [item for item in (images if isinstance(images, list) else []) if item is not None]
+    base = [item for item in items if is_hires_base_filename(item)]
+    final = [item for item in items if not is_hires_base_filename(item)]
+    return {"all": items, "final": final, "base": base}
+
+
 def validate_input_image(name: str) -> str:
     relative = Path(str(name or "").replace("\\", "/"))
     if not relative.name or relative.is_absolute() or ".." in relative.parts:
@@ -337,10 +361,16 @@ def prepare_generation_image(name: str) -> str:
 
 
 __all__ = [
+    "HIRES_BASE_MARKER",
+    "clean_transparent_residue",
+    "copy_output_to_input",
     "extract_image_upload",
+    "is_hires_base_filename",
     "list_output_images",
     "prepare_generation_image",
     "save_inpaint_upload",
     "save_pose_upload",
+    "save_reference_upload",
+    "split_hires_outputs",
     "validate_input_image",
 ]

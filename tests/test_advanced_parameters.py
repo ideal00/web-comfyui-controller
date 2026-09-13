@@ -274,18 +274,17 @@ class SamplingProfileTests(unittest.TestCase):
         self.assertEqual(samplers[0]["inputs"]["negative"],
                          samplers[1]["inputs"]["negative"])
 
-    def test_hires_prompt_composition_lock_clamps_second_stage_denoise(self):
+    def test_hires_denoise_is_capped_by_purpose_not_composition_lock(self):
+        """上限只由二采目的决定：默认「增强细节」钳到 0.26，构图锁不再把 0.35 当上限。"""
         locked = payload("waiIllustriousSDXL_v140.safetensors")
         locked.update({"illustriousMode": "hires", "hiresScale": 1.2,
                        "hiresDenoise": 0.6, "hiresCompositionLock": True})
-        nodes = self.build(locked)
-        self.assertEqual(0.35, self.nodes_of(nodes, "KSampler")[1]["inputs"]["denoise"])
+        self.assertEqual(0.26, self.nodes_of(self.build(locked), "KSampler")[1]["inputs"]["denoise"])
 
-        unlocked = payload("waiIllustriousSDXL_v140.safetensors")
-        unlocked.update({"illustriousMode": "hires", "hiresScale": 1.2,
-                         "hiresDenoise": 0.6})
-        nodes = self.build(unlocked)
-        self.assertEqual(0.6, self.nodes_of(nodes, "KSampler")[1]["inputs"]["denoise"])
+        redraw = payload("waiIllustriousSDXL_v140.safetensors")
+        redraw.update({"illustriousMode": "hires", "hiresScale": 1.2,
+                       "hiresPurpose": "redraw", "hiresDenoise": 0.6})
+        self.assertEqual(0.35, self.nodes_of(self.build(redraw), "KSampler")[1]["inputs"]["denoise"])
 
     def test_hires_prompt_keeps_regional_conditioning(self):
         data = payload("waiIllustriousSDXL_v140.safetensors")
@@ -663,7 +662,7 @@ class SamplingProfileTests(unittest.TestCase):
         data = payload("waiIllustriousSDXL_v140.safetensors")
         data.update({
             "illustriousMode": "hires", "hiresScale": 1.3,
-            "hiresDenoise": 0.35, "hiresSteps": 20, "hiresCfg": 6,
+            "hiresPurpose": "redraw", "hiresDenoise": 0.35, "hiresSteps": 20, "hiresCfg": 6,
             "depth": {
                 "enabled": True, "image": "easy_panel/background.png",
                 "controlnet": "xinsir_depth_sdxl_1.0.safetensors",
@@ -745,7 +744,8 @@ class HiresTierPanelTests(unittest.TestCase):
         for marker in (
             "hiresStrengthPanel", "hiresTierOf", "renderHiresStrength", "applyHiresPurpose",
             "保留首采", "增强细节", "局部重绘",
-            "denoise 0.15–0.20", "denoise 0.20–0.26", "denoise 0.27–0.35",
+            "denoise 0.15–0.23", "denoise 0.20–0.26", "denoise 0.24–0.35",
+            "hiresPurpose", "updateHiresDenoiseConstraints",
         ):
             self.assertIn(marker, self.script)
 
@@ -758,13 +758,15 @@ class HiresTierPanelTests(unittest.TestCase):
             self.assertIn(marker, self.script)
 
     def test_purpose_presets_sit_inside_their_ranges(self):
-        self.assertIn("keep: 0.18", self.script)
-        self.assertIn("detail: 0.23", self.script)
-        self.assertIn("redraw: 0.30", self.script)
+        for marker in ("preserve: { label: \"保留首采\", denoise: 0.20", "cap: 0.23",
+                       "enhance: { label: \"增强细节\", denoise: 0.25", "cap: 0.26",
+                       "redraw: { label: \"局部重绘\", denoise: 0.30", "cap: 0.35"):
+            self.assertIn(marker, self.script)
 
-    def test_composition_lock_points_at_the_retouch_ceiling(self):
-        """构图锁的说明必须讲清 0.35 是重绘上限，只补细节应该更低。"""
-        for marker in ("0.35 已经是「局部重绘」上限", "保持在 0.15–0.26"):
+    def test_composition_lock_points_at_the_purpose_cap(self):
+        """构图锁不再自己决定 0.35，而是把上限交给二采目的。"""
+        for marker in ("允许局部结构重绘，但限制大幅度构图变化", "上限仍由二采目的决定",
+                       "锁定首采构图 ≠ 禁止重绘"):
             self.assertIn(marker, self.script)
 
     def test_defaults_are_consistent_across_the_stack(self):

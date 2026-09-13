@@ -356,7 +356,7 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     return {
       size: `${text(data.width, "?")} × ${text(data.height, "?")} → ${expected}`,
       seed: String(data.seed == null ? "随机" : data.seed),
-      hires: `${text(data.hiresScale, "1.25")}× · denoise ${text(data.hiresDenoise, "0.25")} · ${text(data.hiresSteps, "20")} 步 · CFG ${text(data.hiresCfg, "5")}`,
+      hires: `${text(data.hiresScale, "1.25")}× · denoise ${text(data.hiresDenoise, "0.25")} · ${text(data.hiresSteps, "20")} 步 · CFG ${text(data.hiresCfg, "5")}${hiresPurposeLabel(data)}`,
     };
   }
 
@@ -460,10 +460,44 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
       `${COMPARE_SPOT_NAMES[item.index] || "局部"} 锐度 ×${item.gain.toFixed(2)}</button>`).join("");
   }
 
+  function hiresPurposeLabel(data) {
+    const labels = { preserve: "保留首采", enhance: "增强细节", redraw: "局部重绘" };
+    return " · " + (labels[text(data.hiresPurpose, "enhance")] || "增强细节");
+  }
+
+  // 首采图与成品图按 ComfyUI 的批次序号（_00001_）配对，不依赖数组位置，
+  // 这样批量生成或输出顺序变化时也不会把 A 图的首采配到 B 图的成品上。
+  function outputBatchIndex(filename) {
+    const match = String(filename || "").match(/_(\d{5})_/);
+    return match ? Number(match[1]) : null;
+  }
+
+  function pairHiresOutputs(bases, finals) {
+    const byIndex = new Map();
+    (bases || []).forEach((item) => {
+      const index = outputBatchIndex(item.filename);
+      if (index !== null && !byIndex.has(index)) byIndex.set(index, item);
+    });
+    return (finals || []).map((item) => {
+      const index = outputBatchIndex(item.filename);
+      return { final: item, base: index !== null ? (byIndex.get(index) || null) : null };
+    });
+  }
+
   function openCompare() {
-    if (!lastBaseImages.length || !lastImages.length) return;
-    const base = lastBaseImages[0];
-    const final = lastImages[0];
+    const pairs = pairHiresOutputs(lastBaseImages, lastImages);
+    const pair = pairs[0];
+    if (!pair || !pair.final) return;
+    if (!pair.base) {
+      const empty = ensureCompareDialog();
+      empty.innerHTML = `<div class="hc-head"><b>首采 / 二采对照</b>`
+        + `<button class="secondary" type="button" data-compare-close>关闭</button></div>`
+        + `<div class="hc-block small">没有找到与这张成品对应的首采对照图：可能它已被删除，或这次生成用的是旧版本工作流。</div>`;
+      empty.showModal();
+      return;
+    }
+    const base = pair.base;
+    const final = pair.final;
     const outlook = compositionOutlook();
     const promptDiff = hiresPromptDiff();
     const parameters = hiresParameterDiff();

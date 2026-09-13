@@ -69,6 +69,7 @@ from easy_panel_app.image_ops import apply_color_correction
 from easy_panel_app.lora_sidecars import atomic_write_notes, classify_lora_note_outfits, merge_note, parse_lora_sidecar, read_text_smart
 from easy_panel_app.media_storage import (
     extract_image_upload,
+    is_hires_base_filename,
     list_output_images,
     prepare_generation_image,
     save_inpaint_upload,
@@ -76,6 +77,7 @@ from easy_panel_app.media_storage import (
     save_reference_upload,
     clean_transparent_residue,
     copy_output_to_input,
+    split_hires_outputs,
     validate_input_image,
 )
 from easy_panel_app.metadata import (
@@ -139,6 +141,25 @@ ANIMA_VAE = "qwen_image_vae.safetensors"
 KREA2_TEXT_ENCODER = "qwen3VL4BAbliteratedComfyui_v10.safetensors"
 KREA2_VAE = ANIMA_VAE
 HIRES_UPSCALE_MODEL = "RealESRGAN_x4plus_anime_6B.pth"
+
+#: 二采目的：preserve=保留首采，enhance=增强细节（默认），redraw=局部重绘。
+HIRES_PURPOSES = ("preserve", "enhance", "redraw")
+#: 每个目的允许的最大重绘幅度；超过 0.23 就不算“只补细节”了。
+HIRES_PURPOSE_CAPS = {"preserve": 0.23, "enhance": 0.26, "redraw": 0.35}
+HIRES_PURPOSE_LABELS = {"preserve": "保留首采", "enhance": "增强细节", "redraw": "局部重绘"}
+
+
+def normalized_hires_purpose(data: dict) -> str:
+    """请求里的二采目的；未知或缺省时按“增强细节”处理。"""
+
+    wanted = str((data or {}).get("hiresPurpose", "") or "").strip().lower()
+    return wanted if wanted in HIRES_PURPOSES else "enhance"
+
+
+def hires_purpose_cap(data: dict) -> float:
+    """二采目的对应的重绘幅度上限（网页、API 与手机端共用同一套约束）。"""
+
+    return HIRES_PURPOSE_CAPS[normalized_hires_purpose(data)]
 HIRES_PROMPT_MODES = ("inherit", "append", "replace")
 SEEDVR2_MODEL = "seedvr2_3b_int8_convrot.safetensors"
 SEEDVR2_VAE = "seedvr2_ema_vae_fp16.safetensors"
@@ -906,10 +927,15 @@ def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
     if not snapshot_id:
         return
     images = (payload or {}).get("images") if isinstance((payload or {}).get("images"), list) else []
-    if status == "completed" and images:
+    split = split_hires_outputs(images)
+    if status == "completed" and split["final"]:
         try:
-            attach_snapshot_outputs(snapshot_id, [image.get("filename") if isinstance(image, dict) else image
-                                                  for image in images])
+            attach_snapshot_outputs(
+                snapshot_id,
+                [image.get("filename") if isinstance(image, dict) else image for image in split["final"]],
+                base_outputs=[image.get("filename") if isinstance(image, dict) else image
+                              for image in split["base"]],
+            )
             return
         except Exception:
             pass
@@ -1388,7 +1414,9 @@ def reconcile_creative_index_jobs(limit: int = CREATIVE_INDEX_RECONCILE_LIMIT) -
             ]
             if snapshot_id and image_names:
                 try:
-                    attach_snapshot_outputs(snapshot_id, image_names)
+                    split = split_hires_outputs(image_names)
+                    if split["final"]:
+                        attach_snapshot_outputs(snapshot_id, split["final"], base_outputs=split["base"])
                 except Exception:
                     pass
     return reconciled
@@ -2295,9 +2323,12 @@ def illustrious_preflight(data: dict) -> dict:
             warnings.append("二采提示词模式无效，已按“追加补充”处理；可选 inherit / append / replace。")
     if (hires_positive or hires_negative) and mode != "hires":
         warnings.append("二采提示词只在高清模式（二次采样）下生效；当前生成模式不是高清模式。")
-    if mode == "hires" and bool(data.get("hiresCompositionLock", False)):
-        if bounded(data.get("hiresDenoise"), 0.25, 0.05, 1.0, integer=False) > 0.35:
-            warnings.append("已开启“优先保持首采构图”：二采重绘幅度会自动限制到 0.35。")
+    if mode == "hires" and str(data.get("hiresDenoise", "") or "").strip():
+        purpose = normalized_hires_purpose(data)
+        cap = HIRES_PURPOSE_CAPS[purpose]
+        if bounded(data.get("hiresDenoise"), 0.25, 0.05, 1.0, integer=False) > cap:
+            warnings.append(f"二采目的为「{HIRES_PURPOSE_LABELS[purpose]}」：重绘幅度会限制到 {cap}；"
+                            "要更大幅度的结构重绘请把二采目的改成「局部重绘」。")
     if mode == "hires" and hires_mode != "inherit" and (hires_positive or hires_negative):
         if len(split_prompt_terms(hires_positive, limit=360)) > 40:
             warnings.append("二采补充提示词条目偏多；高清阶段建议只保留 10–20 项细节词，避免二采重新抢构图。")
@@ -3771,13 +3802,13 @@ def build_workflow(data: dict) -> dict:
         hires_defaults = sampling_profile.get("hires") or {}
         scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25),
                         1.0, 8.0, integer=False)
-        hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.35),
+        hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.25),
                                 0.05, 1.0, integer=False)
-        if bool(data.get("hiresCompositionLock", False)) and hires_denoise > 0.35:
-            # "Keep the first-stage framing" is a real guard, not just a UI hint:
-            # API and mobile callers get the same protection against a second
-            # pass that redraws the composition.
-            hires_denoise = 0.35
+        # 二采目的本身就是约束：保留首采 ≤0.23 / 增强细节 ≤0.26 / 局部重绘 ≤0.35。
+        # 构图锁只是提示“优先保持首采构图”，上限仍然由目的决定；API 与手机端同样受限。
+        purpose_cap = hires_purpose_cap(data)
+        if hires_denoise > purpose_cap:
+            hires_denoise = purpose_cap
         hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 1, 150)
         hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 5.0), 1, 30, integer=False)
         hires_sampler = str(hires_defaults.get("sampler", "auto") or "auto")
@@ -4886,17 +4917,22 @@ def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: 
     return snapshot
 
 
-def attach_snapshot_outputs(snapshot_id: str, outputs) -> dict:
+def attach_snapshot_outputs(snapshot_id: str, outputs, base_outputs=None) -> dict:
+    """写入成品输出；首采对照图单独放进 comparisonOutputs，不和成品混在一起。"""
+
     names = [Path(str(name)).name for name in (outputs or []) if Path(str(name)).name]
+    comparison = [Path(str(name)).name for name in (base_outputs or []) if Path(str(name)).name]
     items = load_snapshots()
     target = next((item for item in items if item.get("id") == snapshot_id), None)
     if target is None:
         raise ValueError("找不到生成快照。")
     target["outputs"] = list(dict.fromkeys(names))[:16]
+    target["comparisonOutputs"] = list(dict.fromkeys(comparison))[:16]
     write_snapshots(items)
     update_creative_index_status_best_effort(snapshot_id, {
         "status": "completed",
         "images": outputs if isinstance(outputs, list) else [],
+        "comparisonImages": base_outputs if isinstance(base_outputs, list) else [],
     })
     return normalize_generation_snapshot(target)
 

@@ -93,27 +93,20 @@
       notes.push(`⚠ 检测到 ${hits.slice(0, 4).join("、")}：${locked ? "锁定构图时这些镜头/构图词可能让二采重新构图，建议删除。" : "这些镜头/构图词可能改变二采构图。"}`);
     }
     notes.push(locked
-      ? "锁定首采构图：重绘幅度已限制在 0.35 以内，二采只做细节增强。"
+      ? "锁定首采构图 ≠ 禁止重绘：它只限制大幅度构图变化，0.24 以上仍可能改变角色细节；上限由二采目的决定。"
       : "重绘幅度参考：0.15–0.23 高清保真（只补细节）；0.24–0.35 结构 / 细节重绘；超过 0.35 更接近重新生成。");
     hint.textContent = notes.join(" ");
   };
 
   window.hiresCompositionLockChanged = function (silent) {
     const locked = byId("hiresCompositionLock")?.checked === true;
-    const denoise = byId("hiresDenoise");
-    if (denoise) {
-      denoise.max = locked ? "0.35" : "1";
-      let value = Number(denoise.value);
-      if (!Number.isFinite(value)) value = locked ? 0.25 : 0.35;
-      if (locked && value > 0.35) value = 0.35;
-      denoise.value = String(Math.round(value * 100) / 100);
-    }
+    window.updateHiresDenoiseConstraints();
     window.hiresPromptInputChanged();
     if (typeof window.updateSizeInfo === "function") window.updateSizeInfo();
     if (!silent && byId("status")) {
       byId("status").textContent = locked
-        ? "已锁定首采构图：二采重绘幅度上限 0.35，只做细节增强。"
-        : "已解除构图锁定：请自行控制重绘幅度，避免二采改掉构图。";
+        ? "已锁定首采构图：允许局部结构重绘，但限制大幅度构图变化；上限仍由二采目的决定（保留首采 0.23 / 增强细节 0.26 / 局部重绘 0.35）。"
+        : "已解除构图锁定：上限仍由二采目的决定，请自行确认重绘幅度是否符合预期。";
     }
   };
 
@@ -261,10 +254,11 @@
       block.className = "hires-strength-panel";
       block.innerHTML = `
         <div class="field-title"><span>二采目的</span>${help("先想清楚“我要它干什么”，再微调数值。二采会重新采样，它能改善结构与生成细节；只提高清晰度/尺寸请用左侧「同图清晰版」。")}</div>
+        <input id="hiresPurpose" type="hidden" value="enhance">
         <div class="hires-purpose-row">
-          <button type="button" data-purpose="keep" onclick="applyHiresPurpose('keep')"><b>保留首采</b><span>尽量不改脸、姿势、服装和构图</span><em>denoise 0.15–0.20</em></button>
-          <button type="button" data-purpose="detail" onclick="applyHiresPurpose('detail')"><b>增强细节</b><span>补发丝、衣服褶皱、眼睛、饰品</span><em>denoise 0.20–0.26</em></button>
-          <button type="button" data-purpose="redraw" onclick="applyHiresPurpose('redraw')"><b>局部重绘</b><span>允许重新塑造结构</span><em>denoise 0.27–0.35</em></button>
+          <button type="button" data-purpose="preserve" onclick="applyHiresPurpose('preserve')"><b>保留首采</b><span>尽量不改脸、姿势、服装和构图</span><em>denoise 0.15–0.23</em></button>
+          <button type="button" data-purpose="enhance" onclick="applyHiresPurpose('enhance')"><b>增强细节</b><span>补发丝、衣服褶皱、眼睛、饰品</span><em>denoise 0.20–0.26</em></button>
+          <button type="button" data-purpose="redraw" onclick="applyHiresPurpose('redraw')"><b>局部重绘</b><span>允许重新塑造结构</span><em>denoise 0.24–0.35</em></button>
         </div>
         <div class="hires-strength">
           <div class="hires-strength-head"><b id="hiresStrengthValue">0.25</b><span id="hiresStrengthTier" class="small">增强细节</span></div>
@@ -349,35 +343,79 @@
     const input = byId("hiresDenoise");
     if (!byId("hiresStrengthPanel")) return;
     const value = Math.max(0, Math.min(1, Number(input?.value || 0.25)));
+    const purpose = window.hiresPurpose();
+    const preset = HIRES_PURPOSE_PRESETS[purpose] || HIRES_PURPOSE_PRESETS.enhance;
     const tier = window.hiresTierOf(value);
     const percent = Math.max(0, Math.min(100, ((value - 0.10) / 0.30) * 100));
     if (byId("hiresStrengthValue")) byId("hiresStrengthValue").textContent = value.toFixed(2);
-    if (byId("hiresStrengthTier")) byId("hiresStrengthTier").textContent = tier.label;
-    if (byId("hiresStrengthNote")) byId("hiresStrengthNote").textContent = tier.note;
+    if (byId("hiresStrengthTier")) byId("hiresStrengthTier").textContent = preset.label;
+    const note = byId("hiresStrengthNote");
+    if (note) {
+      let text = preset.note;
+      if (value > preset.cap) {
+        text += `（当前 ${value.toFixed(2)} 超过该目的上限 ${preset.cap}，生成时会自动限制）`;
+      } else if (tier.id !== HIRES_PURPOSE_TIER[purpose] && tier.id !== "below" && tier.id !== "over") {
+        text += `　• 当前数值落在「${tier.label}」区间。`;
+      }
+      note.textContent = text;
+    }
     const panel = byId("hiresStrengthPanel");
     if (panel) {
       panel.dataset.tier = tier.id;
       panel.querySelectorAll("button[data-purpose]").forEach((button) => {
-        button.classList.toggle("active", button.dataset.purpose === tier.id);
+        button.classList.toggle("active", button.dataset.purpose === purpose);
       });
     }
     const fill = byId("hiresStrengthFill");
     if (fill) fill.style.width = percent.toFixed(1) + "%";
   };
 
-  window.applyHiresPurpose = function (purpose) {
-    const presets = { keep: 0.18, detail: 0.23, redraw: 0.30 };
-    const value = presets[purpose];
-    const input = byId("hiresDenoise");
-    if (value === undefined || !input) return;
-    input.value = String(value);
-    window.renderHiresStrength();
-    input.dispatchEvent(new Event("change", { bubbles: true }));
+  const HIRES_PURPOSE_PRESETS = {
+    preserve: { label: "保留首采", denoise: 0.20, cap: 0.23, lock: true,
+                note: "保留首采：优先维持人物、姿势、构图与服装结构。建议 denoise 0.15–0.23。" },
+    enhance: { label: "增强细节", denoise: 0.25, cap: 0.26, lock: true,
+               note: "增强细节：优先补发丝、材质、眼睛、服装褶皱等细节。建议 denoise 0.20–0.26。" },
+    redraw: { label: "局部重绘", denoise: 0.30, cap: 0.35, lock: false,
+              note: "局部重绘：允许重新塑造局部结构，可能改变脸、手、服装或局部比例。建议 denoise 0.24–0.35。" },
+  };
+  const HIRES_PURPOSE_TIER = { preserve: "keep", enhance: "detail", redraw: "redraw" };
+
+  window.hiresPurpose = function () {
+    return byId("hiresPurpose")?.value || "enhance";
   };
 
-  // 旧名字保留，避免其它脚本/习惯调用失效。
+  // 上限由二采目的决定，与后端 HIRES_PURPOSE_CAPS 完全一致：
+  // 保留首采 0.23 / 增强细节 0.26 / 局部重绘 0.35。构图锁只是附加提示。
+  window.updateHiresDenoiseConstraints = function () {
+    const preset = HIRES_PURPOSE_PRESETS[window.hiresPurpose()] || HIRES_PURPOSE_PRESETS.enhance;
+    const input = byId("hiresDenoise");
+    if (!input) return;
+    input.max = String(preset.cap);
+    const value = Number(input.value);
+    if (Number.isFinite(value) && value > preset.cap) input.value = String(preset.cap);
+  };
+
+  window.applyHiresPurpose = function (purpose) {
+    const preset = HIRES_PURPOSE_PRESETS[purpose];
+    const input = byId("hiresDenoise");
+    if (!preset || !input) return;
+    if (byId("hiresPurpose")) byId("hiresPurpose").value = purpose;
+    input.value = String(preset.denoise);
+    const lock = byId("hiresCompositionLock");
+    if (lock) lock.checked = preset.lock;
+    window.updateHiresDenoiseConstraints();
+    window.renderHiresStrength();
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    window.hiresPromptInputChanged();
+    if (byId("status")) {
+      byId("status").textContent = `二采目的：${preset.label}（denoise 上限 ${preset.cap}）。${preset.note}`;
+    }
+  };
+
+  // 旧名字保留为别名，避免其它脚本失效。
   window.applyHiresTier = function (tier) {
-    const legacy = { faithful: "keep", balanced: "detail", redraw: "redraw" };
+    const legacy = { faithful: "preserve", balanced: "enhance", redraw: "redraw",
+                     keep: "preserve", detail: "enhance" };
     window.applyHiresPurpose(legacy[tier] || tier);
   };
 
@@ -725,14 +763,9 @@
     if (typeof original !== "function" || original.__hiresLockWrapped) return;
     const wrapped = function (...args) {
       const result = original.apply(this, args);
-      if (byId("hiresCompositionLock")?.checked) {
-        const denoise = byId("hiresDenoise");
-        if (denoise) {
-          denoise.max = "0.35";
-          const value = Number(denoise.value);
-          if (Number.isFinite(value) && value > 0.35) denoise.value = "0.35";
-        }
-      }
+      // 换模型时预设会改写 denoise，这里重新按二采目的收紧上限。
+      window.updateHiresDenoiseConstraints();
+      window.renderHiresStrength();
       return result;
     };
     wrapped.__hiresLockWrapped = true;

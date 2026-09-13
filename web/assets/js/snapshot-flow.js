@@ -95,7 +95,7 @@
   function restoreAdvancedPayload(data) {
     if (!data) return;
     setValue('illustriousMode', data.illustriousMode);
-    ['hiresScale', 'hiresDenoise', 'hiresSteps', 'hiresCfg', 'hiresSampler', 'hiresScheduler'].forEach(id => setValue(id, data[id]));
+    ['hiresScale', 'hiresDenoise', 'hiresPurpose', 'hiresSteps', 'hiresCfg', 'hiresSampler', 'hiresScheduler'].forEach(id => setValue(id, data[id]));
     ['hiresPositive', 'hiresNegative'].forEach(id => {
       const element = document.getElementById(id);
       if (element && data[id] != null) element.value = String(data[id]);

@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 from easy_panel_app.config import ROOT
+from easy_panel_app.media_storage import is_hires_base_filename, split_hires_outputs
 from easy_panel_app.prompt_utils import unique_prompt_terms
 
 RPG_API_VERSION = 2
 RPG_PROFILE_FILE = ROOT / "rpg_visual_profiles.json"
 RPG_JOB_FILE = ROOT / "rpg_jobs.json"
+# 首采对照图的标记（唯一实现见 media_storage.is_hires_base_filename）。
 # Easy Panel writes the hi-res first pass as "<prefix>_base_00001_.png" so the
 # desktop panel can pair 首采 / 二采; mobile results list only finished images.
 HIRES_BASE_MARKER = "_base_"
@@ -605,7 +607,7 @@ def history_to_rpg_status(prompt_id: str, history: Mapping[str, Any]) -> Dict[st
             }
             # The hi-res first pass is written for the desktop 首采 / 二采
             # comparison; the mobile result list only shows finished images.
-            if HIRES_BASE_MARKER in name:
+            if is_hires_base_filename(name):
                 hi_res_base.append(entry)
             else:
                 images.append(entry)
