@@ -582,6 +582,15 @@ def artifact_url(filename: str, subfolder: str = "", image_type: str = "output")
     return "/api/rpg/image?" + urlencode(query)
 
 
+# 受保护的作品：手动收藏、加入收藏组、或被作品项目引用
+_PROTECTED_SELECT = """
+    SELECT g.generation_id FROM generations g
+    WHERE g.favorite = 1
+       OR EXISTS (SELECT 1 FROM generation_favorite_groups fg WHERE fg.generation_id = g.generation_id)
+       OR EXISTS (SELECT 1 FROM project_items pi WHERE pi.generation_id = g.generation_id)
+"""
+
+
 def _comfy_record_from_png(path: Path) -> dict[str, Any] | None:
     """从 ComfyUI 写入 PNG 的 prompt 元数据里还原生成参数（快照 JSON 上线前的作品只能这么补）。"""
 
@@ -662,6 +671,28 @@ class CreativeIndex:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
+
+    def _purged_ids(self, connection: sqlite3.Connection, generation_ids: Any) -> set[str]:
+        wanted = [str(item) for item in (generation_ids or ()) if item]
+        if not wanted:
+            return set()
+        found: set[str] = set()
+        for start in range(0, len(wanted), 400):
+            piece = wanted[start:start + 400]
+            marks = ",".join("?" for _ in piece)
+            found.update(str(row[0]) for row in connection.execute(
+                f"SELECT generation_id FROM purged_generations WHERE generation_id IN ({marks})", piece))
+        return found
+
+    def _mark_purged(self, connection: sqlite3.Connection, generation_ids: Any, reason: str = "") -> None:
+        """记下被删除的作品编号，避免 legacy JSON 重新导入时“复活”。"""
+
+        stamp = now_ms()
+        rows = [(str(item), stamp, str(reason)[:80]) for item in (generation_ids or ()) if item]
+        if rows:
+            connection.executemany(
+                "INSERT OR REPLACE INTO purged_generations(generation_id, purged_at, reason) "
+                "VALUES(?, ?, ?)", rows)
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
         connection.execute("BEGIN IMMEDIATE")
@@ -937,6 +968,15 @@ class CreativeIndex:
 
     @staticmethod
     def _create_schema_v1_indexes(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS purged_generations (
+                generation_id TEXT PRIMARY KEY,
+                purged_at INTEGER NOT NULL,
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_created ON generations(created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_updated ON generations(updated_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_prompt ON generations(prompt_id)")
@@ -1327,6 +1367,8 @@ class CreativeIndex:
                 (str(row["filename"]), str(row["subfolder"] or ""))
                 for row in connection.execute("SELECT filename, subfolder FROM artifacts")
             }
+            purged = {str(row[0]) for row in connection.execute(
+                "SELECT generation_id FROM purged_generations")}
         finally:
             connection.close()
 
@@ -1352,6 +1394,9 @@ class CreativeIndex:
                 continue
             generation_id = hashlib.sha256(
                 f"import:{subfolder}/{path.name}".encode("utf-8")).hexdigest()[:32]
+            if generation_id in purged:
+                skipped += 1
+                continue
             artifact_id = hashlib.sha256(
                 f"artifact:{generation_id}:{path.name}".encode("utf-8")).hexdigest()[:32]
             created_at = int(path.stat().st_mtime * 1000)
@@ -1444,6 +1489,10 @@ class CreativeIndex:
                 prompt_id=values["prompt_id"],
                 request_id=values["request_id"],
             )
+            if created and self._purged_ids(connection, [generation_id]):
+                # 用户删掉过的作品不再从 legacy JSON 里被重新导入。
+                return {"created": False, "updated": False, "purged": True,
+                        "generation_id": generation_id}
             merged_status = _merged_status(existing["status"], values["status"]) if existing else values["status"]
             created_at = int(existing["created_at"]) if existing else values["created_at"]
             row_values = {**values, "status": merged_status, "created_at": created_at, "updated_at": now_ms(),
@@ -1968,6 +2017,7 @@ class CreativeIndex:
                 except OSError:
                     pass
         with self._write_transaction() as connection:
+            self._mark_purged(connection, [wanted], "delete")
             cursor = connection.execute(
                 "DELETE FROM generations WHERE generation_id = ?", (wanted,)
             )
@@ -1979,6 +2029,120 @@ class CreativeIndex:
             "missing_files": missing_files,
             "artifact_count": len(targets),
         }
+
+    def purge_failed_generations(
+        self,
+        statuses: Any = ("error",),
+        *,
+        output_root: Any = None,
+        protect_favorite: bool = True,
+        dry_run: bool = False,
+        unfavorited_only: bool = False,
+    ) -> dict[str, Any]:
+        """一键清理生成失败的作品（默认 status='error'）。
+
+        ``unfavorited_only=True`` 时忽略 statuses，改为删除所有不在收藏 / 收藏组 / 项目里的作品
+        （即“只保留收藏”）。被收藏记录引用的同名文件一律不删。``dry_run=True`` 只统计不落地。
+        """
+
+        wanted = tuple(str(item).strip().lower() for item in (statuses or ()) if str(item).strip())
+        if not wanted and not unfavorited_only:
+            raise CreativeIndexError("需要指定要清理的状态。")
+        root = Path(str(output_root)).resolve() if output_root else None
+        placeholders = ",".join("?" for _ in wanted)
+        with self._connection() as connection:
+            if unfavorited_only:
+                targets = [str(row["generation_id"]) for row in connection.execute(
+                    f"SELECT generation_id FROM generations "
+                    f"WHERE generation_id NOT IN ({_PROTECTED_SELECT})")]
+            else:
+                targets = [str(row["generation_id"]) for row in connection.execute(
+                    f"SELECT generation_id FROM generations WHERE LOWER(status) IN ({placeholders})",
+                    wanted,
+                )]
+            if not targets:
+                return {"deleted": 0, "removed_files": 0, "missing_files": 0,
+                        "protected_files": 0, "statuses": list(wanted), "generations": [],
+                        "dry_run": bool(dry_run)}
+            protected_files: set[tuple[str, str]] = set()
+            if protect_favorite and root is not None:
+                protected_files = {
+                    (str(row["filename"]),
+                     str(row["subfolder"] or "").replace("\\", "/").strip("/"))
+                    for row in connection.execute(
+                        f"""SELECT a.filename, a.subfolder FROM artifacts a
+                            WHERE a.generation_id IN ({_PROTECTED_SELECT})""")
+                }
+            chunk = ",".join("?" for _ in targets)
+            artifacts = [
+                (str(row["filename"] or ""), str(row["subfolder"] or "").replace("\\", "/").strip("/"),
+                 str(row["image_type"] or "output"))
+                for row in connection.execute(
+                    f"SELECT filename, subfolder, image_type FROM artifacts "
+                    f"WHERE generation_id IN ({chunk})", targets)
+            ]
+
+        removable: list[tuple[str, str]] = []
+        skipped_protected = 0
+        seen: set[tuple[str, str]] = set()
+        for filename, subfolder, image_type in artifacts:
+            if image_type != "output" or not filename or filename in (".", ".."):
+                continue
+            key = (filename, subfolder)
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in protected_files:
+                skipped_protected += 1
+                continue
+            removable.append(key)
+
+        if dry_run:
+            return {"deleted": len(targets), "removed_files": len(removable), "missing_files": 0,
+                    "protected_files": skipped_protected, "statuses": list(wanted),
+                    "generations": targets[:200], "dry_run": True}
+
+        removed_files = 0
+        missing_files = 0
+        if root is not None:
+            for filename, subfolder in removable:
+                candidate = (root / Path(subfolder) / Path(filename).name).resolve()
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    continue
+                try:
+                    candidate.unlink()
+                    removed_files += 1
+                except FileNotFoundError:
+                    missing_files += 1
+                except OSError:
+                    pass
+
+        deleted = 0
+        with self._write_transaction() as connection:
+            self._mark_purged(connection, targets, "purge:" + ",".join(wanted))
+            for start in range(0, len(targets), 400):
+                piece = targets[start:start + 400]
+                marks = ",".join("?" for _ in piece)
+                cursor = connection.execute(
+                    f"DELETE FROM generations WHERE generation_id IN ({marks})", piece)
+                deleted += max(0, cursor.rowcount)
+        return {
+            "deleted": deleted,
+            "removed_files": removed_files,
+            "missing_files": missing_files,
+            "protected_files": skipped_protected,
+            "statuses": list(wanted),
+            "generations": targets[:200],
+            "dry_run": False,
+        }
+
+    def purge_unfavorited(self, *, output_root: Any = None, dry_run: bool = False) -> dict[str, Any]:
+        """只保留收藏（手动收藏 / 收藏组 / 项目引用）的作品，其余记录连同文件一并清理。"""
+
+        return self.purge_failed_generations((), output_root=output_root, protect_favorite=False,
+                                             dry_run=dry_run, unfavorited_only=True)
 
     def set_generation_flags(
         self,
@@ -2775,6 +2939,9 @@ class CreativeIndex:
                     status=infer_legacy_status(item),
                     output_root=output_root,
                 )
+                if result.get("purged"):
+                    report["skipped"] += 1
+                    continue
                 report["inserted" if result["created"] else "updated"] += 1
                 report["warnings"].extend(result.get("warnings") or [])
             except Exception as exc:
@@ -2832,6 +2999,9 @@ class CreativeIndex:
                     request_id=request_id,
                     output_root=output_root,
                 )
+                if result.get("purged"):
+                    report["skipped"] += 1
+                    continue
                 report["inserted" if result["created"] else "updated"] += 1
                 report["warnings"].extend(result.get("warnings") or [])
             except Exception as exc:

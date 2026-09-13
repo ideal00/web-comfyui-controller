@@ -5400,7 +5400,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -5457,6 +5457,27 @@ class Handler(BaseHTTPRequestHandler):
                 if result is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
                     return
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    **result,
+                })
+                return
+            if self.path == "/api/rpg/library/purge":
+                # 清理生成失败 / 被取消的作品；scope='unfavorited' 时改为只保留收藏的作品。
+                # 删除会写墓碑，legacy JSON 重新导入时不会把作品复活。
+                scope = str(data.get("scope") or "").strip().lower()
+                statuses = data.get("statuses")
+                if not isinstance(statuses, list) or not statuses:
+                    statuses = ["error", "cancelled"]
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                if scope == "unfavorited":
+                    result = creative_index.purge_unfavorited(
+                        output_root=OUTPUT, dry_run=bool(data.get("dryRun")))
+                else:
+                    result = creative_index.purge_failed_generations(
+                        statuses, output_root=OUTPUT, dry_run=bool(data.get("dryRun")))
                 self.send_json({
                     "api_version": RPG_API_VERSION,
                     "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,

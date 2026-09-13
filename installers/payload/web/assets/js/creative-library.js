@@ -1281,8 +1281,35 @@
   function init() {
     if (!byId('creativeLibraryDialog')) return;
     byId('creativeLibraryOpen')?.addEventListener('click', openDialog);
-    byId('creativeLibraryClose')?.addEventListener('click', closeDialog);
+    async function purgeFailedLibrary() {
+    const statuses = ['error', 'cancelled'];
+    try {
+      const preview = await postJson('/api/rpg/library/purge', state.token, { statuses, dryRun: true });
+      const count = Number(preview.deleted || 0);
+      if (!count) {
+        showNotice('没有生成失败或被取消的作品需要清理。');
+        return;
+      }
+      const files = Number(preview.removed_files || 0);
+      const confirmed = global.confirm(
+        `将清理 ${count} 条失败 / 已取消的作品记录，并删除 ${files} 个对应图片文件。\n`
+        + '收藏、收藏组与作品项目里引用的作品不会被删除。确定继续吗？');
+      if (!confirmed) return;
+      const result = await postJson('/api/rpg/library/purge', state.token, { statuses });
+      const protectedNote = Number(result.protected_files || 0)
+        ? `，${result.protected_files} 个文件因被收藏作品引用而保留` : '';
+      showNotice(`已清理 ${result.deleted} 条作品，删除文件 ${result.removed_files} 个`
+        + `，另有 ${result.missing_files || 0} 个文件本就缺失${protectedNote}。`);
+      state.offset = 0;
+      void loadList();
+    } catch (error) {
+      showNotice('清理失败：' + asText(error && error.message), 'error');
+    }
+  }
+
+  byId('creativeLibraryClose')?.addEventListener('click', closeDialog);
     byId('creativeLibraryRefresh')?.addEventListener('click', () => { state.offset = 0; void loadList(); });
+    byId('creativeLibraryPurgeFailed')?.addEventListener('click', () => { void purgeFailedLibrary(); });
     byId('creativeLibraryAuth')?.addEventListener('submit', submitAuth);
     byId('creativeLibraryFilters')?.addEventListener('submit', applyFilters);
     byId('creativeLibraryPrevious')?.addEventListener('click', goPrevious);
