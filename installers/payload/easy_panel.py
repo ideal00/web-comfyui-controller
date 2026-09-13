@@ -832,25 +832,59 @@ def run_transparent_extract(data: dict, *, timeout: float = 180.0) -> dict:
     raise ValueError("抠图超时：ComfyUI 还在处理这张图。")
 
 
+def comfy_queue_prompt_ids() -> set[str]:
+    """读取 ComfyUI 当前队列（执行中 + 排队中）里的 prompt_id 集合。"""
+
+    payload = comfy_json("/queue") or {}
+    if not isinstance(payload, dict):
+        return set()
+    ids: set[str] = set()
+    for key in ("queue_running", "queue_pending"):
+        entries = payload.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                candidate = str(entry.get("prompt_id") or "")
+            elif isinstance(entry, (list, tuple)) and len(entry) > 1:
+                candidate = str(entry[1] or "")
+            else:
+                candidate = ""
+            if candidate:
+                ids.add(candidate)
+    return ids
+
+
 def task_comfy_probe(prompt_id: str) -> tuple[str, dict]:
-    """查询一个已提交任务的执行状态。"""
+    """查询一个已提交任务的执行状态。
+
+    注意：ComfyUI 的 /history 里**只有已经执行完**的任务，正在排队或正在执行的
+    任务只出现在 /queue 里。所以 history 查不到时必须再问一次 /queue，否则出图慢
+    的任务（二采可能要一两分钟）会在宽限时间过后被误判成"找不到记录"——图片明明
+    生成了，面板却显示失败。查询本身出错时返回 unknown，交给队列去决定怎么处理。
+    """
 
     if not prompt_id:
         return "missing", {}
     try:
         history = comfy_json("/history/" + str(prompt_id)) or {}
     except Exception:
-        return "missing", {}
-    entry = history.get(str(prompt_id))
-    if not isinstance(entry, dict):
-        return "missing", {}
-    status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
-    state = str(status.get("status_str") or "").casefold()
-    if state == "error":
-        return "error", {"error": _comfy_error_text(status)}
-    if state in {"success", "completed"}:
-        return "completed", {"images": _comfy_history_images(entry)}
-    return "running", {}
+        history = {}
+    entry = history.get(str(prompt_id)) if isinstance(history, dict) else None
+    if isinstance(entry, dict):
+        status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+        state = str(status.get("status_str") or "").casefold()
+        if state == "error":
+            return "error", {"error": _comfy_error_text(status)}
+        if state in {"success", "completed"}:
+            return "completed", {"images": _comfy_history_images(entry)}
+        return "running", {}
+    try:
+        if str(prompt_id) in comfy_queue_prompt_ids():
+            return "running", {}
+    except Exception:
+        return "unknown", {}
+    return "missing", {}
 
 
 def task_comfy_submit(item: dict) -> dict:

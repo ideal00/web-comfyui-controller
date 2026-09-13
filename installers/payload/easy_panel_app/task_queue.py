@@ -439,8 +439,9 @@ class TaskQueueRunner:
             if self._missing >= self.missing_grace:
                 self._fail(running, "任务在 ComfyUI 里已找不到记录，按失败处理。")
                 return "error"
-        else:
+        elif status in {"running", "queued", "pending", "waiting"}:
             self._missing = 0
+        # 其它状态（例如探测本身报错返回的 unknown）不计数，避免网络抖动误判。
         return "waiting"
 
     def _fail(self, item: dict, message: str) -> None:
