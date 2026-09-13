@@ -582,6 +582,73 @@ def artifact_url(filename: str, subfolder: str = "", image_type: str = "output")
     return "/api/rpg/image?" + urlencode(query)
 
 
+def _comfy_record_from_png(path: Path) -> dict[str, Any] | None:
+    """从 ComfyUI 写入 PNG 的 prompt 元数据里还原生成参数（快照 JSON 上线前的作品只能这么补）。"""
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as image:
+            raw = image.info.get("prompt")
+            size = image.size
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        graph = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(graph, Mapping):
+        return None
+
+    model = ""
+    seed: Any = None
+    positive = ""
+    negative = ""
+    loras: list[dict[str, Any]] = []
+    for node in graph.values():
+        if not isinstance(node, Mapping):
+            continue
+        class_type = str(node.get("class_type") or "")
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), Mapping) else {}
+        meta = node.get("_meta") if isinstance(node.get("_meta"), Mapping) else {}
+        title = str(meta.get("title") or "").lower()
+        if class_type == "CheckpointLoaderSimple":
+            model = model or str(inputs.get("ckpt_name") or "")
+        elif class_type in {"UNETLoader", "DiffusionModelLoader"}:
+            model = model or str(inputs.get("unet_name") or "")
+        elif class_type.startswith("KSampler"):
+            seed = seed if seed is not None else inputs.get("seed")
+        elif class_type.startswith("LoraLoader"):
+            name = str(inputs.get("lora_name") or "")
+            if name:
+                try:
+                    weight = float(inputs.get("strength_model"))
+                except (TypeError, ValueError):
+                    weight = 1.0
+                loras.append({"name": name, "weight": weight})
+        elif class_type == "CLIPTextEncode" and isinstance(inputs.get("text"), str):
+            text = str(inputs["text"])
+            if not text.strip():
+                continue
+            if "negative" in title and not negative:
+                negative = text
+            elif not positive:
+                positive = text
+    return {
+        "model": model,
+        "seed": seed,
+        "width": int(size[0]),
+        "height": int(size[1]),
+        "positive": positive,
+        "negative": negative,
+        "loras": loras,
+    }
+
+
 class CreativeIndex:
     """Transactional SQLite index with safe legacy import helpers."""
 
@@ -1234,6 +1301,111 @@ class CreativeIndex:
                 operation=operation,
                 metadata=metadata,
             )
+
+    def import_output_images(
+        self,
+        output_root: str | Path,
+        *,
+        prefix: str = "EasyPanel_",
+        limit: int = 0,
+    ) -> dict[str, Any]:
+        """扫描输出目录，把没有记录的成品图按 PNG 元数据补进作品库（只新增，不改已有记录）。
+
+        快照 JSON 上线之前的作品没有任何 JSON 记录，只能靠 ComfyUI 写进 PNG 的
+        ``prompt`` 元数据还原模型、seed、尺寸与提示词。
+        """
+
+        import hashlib
+
+        root = Path(output_root).expanduser()
+        if not root.is_dir():
+            raise CreativeIndexError(f"输出目录不存在：{root}")
+        connection = self._connect()
+        try:
+            self._ensure_schema(connection)
+            known = {
+                (str(row["filename"]), str(row["subfolder"] or ""))
+                for row in connection.execute("SELECT filename, subfolder FROM artifacts")
+            }
+        finally:
+            connection.close()
+
+        candidates: list[tuple[Path, str]] = []
+        for path in sorted(root.rglob("*.png")):
+            if not path.name.startswith(prefix):
+                continue
+            relative = path.relative_to(root)
+            subfolder = "" if str(relative.parent) == "." else relative.parent.as_posix()
+            if (path.name, subfolder) in known:
+                continue
+            candidates.append((path, subfolder))
+        if limit > 0:
+            candidates = candidates[:limit]
+
+        imported = 0
+        skipped = 0
+        failed: list[str] = []
+        for path, subfolder in candidates:
+            record = _comfy_record_from_png(path)
+            if record is None:
+                skipped += 1
+                continue
+            generation_id = hashlib.sha256(
+                f"import:{subfolder}/{path.name}".encode("utf-8")).hexdigest()[:32]
+            artifact_id = hashlib.sha256(
+                f"artifact:{generation_id}:{path.name}".encode("utf-8")).hexdigest()[:32]
+            created_at = int(path.stat().st_mtime * 1000)
+            payload = {
+                "positivePrompt": record["positive"],
+                "negativePrompt": record["negative"],
+                "loras": record["loras"],
+                "importedFrom": "output-scan",
+            }
+            try:
+                with self._write_transaction() as conn:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO generations(
+                               generation_id, prompt_id, request_id, operation, status,
+                               created_at, updated_at, model, seed, width, height,
+                               input_json, compiled_json, fingerprint)
+                           VALUES(?, '', '', 'imported', 'success', ?, ?, ?, ?, ?, ?, ?, ?, '')""",
+                        (
+                            generation_id,
+                            created_at,
+                            created_at,
+                            record["model"],
+                            None if record["seed"] is None else str(record["seed"]),
+                            record["width"],
+                            record["height"],
+                            _json_text(payload),
+                            _json_text(payload),
+                        ),
+                    )
+                    conn.execute(
+                        """INSERT OR IGNORE INTO artifacts(
+                               artifact_id, generation_id, filename, subfolder,
+                               image_type, artifact_kind, metadata_json, created_at)
+                           VALUES(?, ?, ?, ?, 'output', 'output', '{}', ?)""",
+                        (artifact_id, generation_id, path.name, subfolder, created_at),
+                    )
+                    for position, lora in enumerate(record["loras"]):
+                        conn.execute(
+                            """INSERT INTO generation_loras(
+                                   generation_id, position, name, weight, trigger, role, source, metadata_json
+                               ) VALUES(?, ?, ?, ?, '', '', 'import', '{}')""",
+                            (generation_id, position, lora["name"], lora["weight"]),
+                        )
+            except Exception as error:  # noqa: BLE001
+                failed.append(f"{path.name}: {error}")
+                continue
+            imported += 1
+        return {
+            "scanned": len(candidates),
+            "imported": imported,
+            "skipped": skipped,
+            "errors": failed[:20],
+            "output_root": str(root),
+        }
 
     def upsert_snapshot(
         self,
