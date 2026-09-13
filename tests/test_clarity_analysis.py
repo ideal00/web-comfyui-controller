@@ -1,11 +1,16 @@
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import easy_panel
-
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import easy_panel
 
 
 class ClarityAnalysisTests(unittest.TestCase):
@@ -17,7 +22,7 @@ class ClarityAnalysisTests(unittest.TestCase):
 
     def test_clarity_panel_is_automatic_and_can_be_retested(self):
         for marker in (
-            "/assets/js/clarity-analysis.js?v=2",
+            "/assets/js/clarity-analysis.js?v=3",
             'id = "clarityAnalysisPanel"',
             "自动清晰度检测",
             "重新检测",
@@ -49,6 +54,62 @@ class ClarityAnalysisTests(unittest.TestCase):
             "generatedViewerImages", "清晰版 · 来源", "原图仍保留",
         ):
             self.assertIn(marker, self.script)
+
+    def test_clarity_panel_offers_history_images_and_model_choice(self):
+        """可以直接选之前生成的图，并且放大模型可换。"""
+
+        for marker in (
+            "clarityUpscaleModel", "/api/upscale-models", "历史输出", "optgroup",
+            "clarityUpscalePreview", "loadClarityHistory", "loadClarityModels",
+            "body: JSON.stringify({ name, scale: 1.5, model })",
+        ):
+            self.assertIn(marker, self.script)
+
+    def test_clarity_uses_the_selected_upscale_model(self):
+        with patch.object(easy_panel, "prepare_generation_image", return_value="easy_panel/source.png"):
+            workflow = easy_panel.build_clarity_upscale_workflow(
+                {"name": "source.png", "scale": 1.5, "model": "4x-UltraSharp.pth"})
+        self.assertEqual(workflow["prompt"]["2"]["inputs"]["model_name"], "4x-UltraSharp.pth")
+
+    def test_clarity_defaults_to_the_bundled_anime_model(self):
+        with patch.object(easy_panel, "prepare_generation_image", return_value="easy_panel/source.png"):
+            workflow = easy_panel.build_clarity_upscale_workflow({"name": "source.png"})
+        self.assertEqual(workflow["prompt"]["2"]["inputs"]["model_name"],
+                         easy_panel.HIRES_UPSCALE_MODEL)
+
+    def test_clarity_resizes_to_source_times_scale_for_any_model(self):
+        """换任何放大模型都要得到同样的成品尺寸：原图 × 倍率，而不是靠模型原生倍率。"""
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "easy_panel"
+            source.mkdir(parents=True)
+            Image.new("RGB", (512, 768), (10, 20, 30)).save(source / "source.png")
+            with patch.object(easy_panel, "COMFY_INPUT", Path(folder)), \
+                 patch.object(easy_panel, "prepare_generation_image",
+                              return_value="easy_panel/source.png"):
+                workflow = easy_panel.build_clarity_upscale_workflow(
+                    {"name": "source.png", "scale": 1.5, "model": "2x-model.pth"})
+        resize = workflow["prompt"]["4"]
+        self.assertEqual(resize["class_type"], "ImageScale")
+        self.assertEqual(resize["inputs"]["width"], 768)
+        self.assertEqual(resize["inputs"]["height"], 1152)
+        self.assertEqual(resize["inputs"]["crop"], "disabled")
+
+    def test_upscale_model_catalog_prefers_anime6b(self):
+        info = {"UpscaleModelLoader": {"input": {"required": {"model_name": [
+            ["RealESRGAN_x4plus_anime_6B.pth", "4x-UltraSharp.pth"]]}}}}
+        with patch.object(easy_panel, "comfy_json", return_value=info):
+            catalog = easy_panel.upscale_model_catalog()
+        self.assertEqual(catalog["models"],
+                         ["RealESRGAN_x4plus_anime_6B.pth", "4x-UltraSharp.pth"])
+        self.assertEqual(catalog["default"], easy_panel.HIRES_UPSCALE_MODEL)
+
+    def test_upscale_model_catalog_falls_back_to_first_available(self):
+        info = {"UpscaleModelLoader": {"input": {"required": {"model_name": [
+            ["4x-UltraSharp.pth"]]}}}}
+        with patch.object(easy_panel, "comfy_json", return_value=info):
+            catalog = easy_panel.upscale_model_catalog()
+        self.assertEqual(catalog["default"], "4x-UltraSharp.pth")
 
     def test_clarity_workflow_is_postprocess_only(self):
         with patch.object(easy_panel, "prepare_generation_image", return_value="easy_panel/source.png"):

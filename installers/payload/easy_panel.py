@@ -4205,26 +4205,87 @@ def build_workflow(data: dict) -> dict:
     return {"prompt": nodes, "client_id": "easy-panel"}
 
 
+def upscale_model_choices() -> list[str]:
+    """ComfyUI 当前可用的放大模型（UpscaleModelLoader 的 model_name 选项）。"""
+
+    try:
+        return object_info_choices(comfy_json("/object_info"), "UpscaleModelLoader", "model_name")
+    except Exception:
+        folder = COMFY_MODELS / "upscale_models"
+        if not folder.is_dir():
+            return []
+        return sorted(path.name for path in folder.iterdir()
+                      if path.is_file() and path.suffix.lower()
+                      in {".pth", ".pt", ".safetensors", ".ckpt", ".onnx"})
+
+
+def clarity_upscale_model(data: dict) -> str:
+    """清晰版使用的放大模型；请求没指定时用默认的 Anime6B。"""
+
+    wanted = str((data or {}).get("model", "") or "").strip()
+    return wanted or HIRES_UPSCALE_MODEL
+
+
+def upscale_model_catalog() -> dict:
+    """给前端下拉用：可用放大模型 + 默认选中项。"""
+
+    models = upscale_model_choices()
+    default = HIRES_UPSCALE_MODEL if HIRES_UPSCALE_MODEL in models else (models[0] if models else "")
+    return {"models": models, "default": default, "preferred": HIRES_UPSCALE_MODEL}
+
+
+def upscale_output_size(image_name: str, scale: float) -> tuple[int, int] | None:
+    """目标输出尺寸 = 原图 × 倍率；读不到原图时返回 None。"""
+
+    try:
+        from PIL import Image as pil_image
+    except Exception:
+        return None
+    try:
+        with pil_image.open(COMFY_INPUT / str(image_name)) as opened:
+            width, height = opened.size
+    except Exception:
+        return None
+    if not width or not height:
+        return None
+    return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
+
+
+def clarity_upscale_resize_node(image_ref, size: tuple[int, int] | None) -> dict:
+    """把放大结果收到目标尺寸。
+
+    不同放大模型的原生倍率不一样（Anime6B 是 4x，也有 2x / 1x / 8x 的模型），
+    所以这里不按模型倍率反推，而是直接缩放到“原图 × 用户倍率”，换任何模型都能
+    得到同样的成品尺寸。读不到原图尺寸时退回 Anime6B 4x 的旧算法。
+    """
+
+    if not size:
+        return {"class_type": "ImageScaleBy", "inputs": {
+            "image": image_ref, "upscale_method": "lanczos", "scale_by": 0.375,
+        }}
+    return {"class_type": "ImageScale", "inputs": {
+        "image": image_ref, "upscale_method": "lanczos",
+        "width": int(size[0]), "height": int(size[1]), "crop": "disabled",
+    }}
+
+
 def build_clarity_upscale_workflow(data: dict) -> dict:
     """Upscale one existing output without diffusion or prompt regeneration."""
     if not isinstance(data, dict):
         raise ValueError("清晰版请求格式无效。")
     image_name = prepare_generation_image(str(data.get("name", "") or ""))
     scale = bounded(data.get("scale"), 1.5, 1.1, 2.0, integer=False)
+    model_name = clarity_upscale_model(data)
+    size = upscale_output_size(image_name, scale)
     nodes = {
         "1": {"class_type": "LoadImage", "inputs": {"image": image_name}},
         "2": {"class_type": "UpscaleModelLoader", "inputs": {
-            "model_name": HIRES_UPSCALE_MODEL,
+            "model_name": model_name,
         }},
         "3": {"class_type": "ImageUpscaleWithModel", "inputs": {
             "upscale_model": ["2", 0], "image": ["1", 0],
         }},
-        # Anime6B outputs 4x. Scale it back to the requested delivery size so
-        # the image gains reconstructed edges without creating a huge 4x file.
-        "4": {"class_type": "ImageScaleBy", "inputs": {
-            "image": ["3", 0], "upscale_method": "lanczos",
-            "scale_by": scale / 4.0,
-        }},
+        "4": clarity_upscale_resize_node(["3", 0], size),
         "5": {"class_type": "SaveImage", "inputs": {
             "filename_prefix": "EasyPanel_Clarity", "images": ["4", 0],
         }},
@@ -5393,6 +5454,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"entries": load_lora_sidecars()})
             elif parsed.path == "/api/output-images":
                 self.send_json({"entries": list_output_images()})
+            elif parsed.path == "/api/upscale-models":
+                self.send_json(upscale_model_catalog())
             elif parsed.path == "/api/snapshots":
                 items = load_snapshots()
                 self.send_json({"entries": [normalize_generation_snapshot(item)
@@ -5713,10 +5776,12 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/preview-pose":
                 self.send_json(comfy_json("/prompt", "POST", build_pose_preview_workflow(data)))
             elif self.path == "/api/clarity-upscale":
-                info = comfy_json("/object_info")
-                available = object_info_choices(info, "UpscaleModelLoader", "model_name")
-                if HIRES_UPSCALE_MODEL not in available:
-                    raise ValueError("缺少 Anime6B 放大模型，无法生成同图清晰版。")
+                available = upscale_model_choices()
+                if not available:
+                    raise ValueError("ComfyUI 里没有可用的放大模型，请先放入 models/upscale_models。")
+                chosen = clarity_upscale_model(data)
+                if chosen not in available:
+                    raise ValueError("找不到放大模型「" + chosen + "」，请在列表里重新选择。")
                 self.send_json(comfy_json("/prompt", "POST", build_clarity_upscale_workflow(data)))
             elif self.path == "/api/lora-notes":
                 save_lora_notes(data.get("notes", {}))
