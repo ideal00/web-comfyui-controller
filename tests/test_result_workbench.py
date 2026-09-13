@@ -42,13 +42,21 @@ class ResultWorkbenchTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
 
-    def test_hires_no_longer_saves_the_first_pass_image(self):
+    def test_compare_dialog_offers_local_zoom_and_hotspots(self):
+        script = (ROOT / "web/assets/js/result-workbench.js").read_text(encoding="utf-8")
+        for marker in ("sharpnessGrid", "drawCompareZoom", "renderCompareSpots",
+                       "hc-zoom-row", 'data-zoom="base"', 'data-zoom="final"',
+                       "1:1", "锐度 ×", "data-spot", "zoomReadout"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, script)
+
+    def test_hires_saves_the_first_pass_for_comparison_only(self):
         backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
-        # 二采只保留成品：不再有 _base 的 SaveImage，但前缀选择器仍保留。
-        self.assertNotIn('generation_filename_prefix(data, "_base")', backend)
-        self.assertIn("def generation_filename_prefix", backend)
-        self.assertIn("不再另存首采原图", backend)
-        # 旧的 _base 文件仍要被手机端结果列表过滤掉，所以标记保留。
+        # 首采图只作为 _base 对照文件保留；作品库/手机端/画廊都按该标记跳过它。
+        self.assertIn('generation_filename_prefix(data, "_base")', backend)
+        self.assertIn("只用于「首采 vs 二采」局部对照", backend)
+        index = (ROOT / "easy_panel_app/creative_index.py").read_text(encoding="utf-8")
+        self.assertIn("HIRES_BASE_FILE_MARKER", index)
         mobile = (ROOT / "easy_panel_app/rpg_api.py").read_text(encoding="utf-8")
         self.assertIn('HIRES_BASE_MARKER = "_base_"', mobile)
 

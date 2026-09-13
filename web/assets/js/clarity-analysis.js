@@ -25,7 +25,7 @@
         <select id="clarityUpscaleTarget" aria-label="选择要增强的生成图片"><option value="">— 当前没有生成图片 —</option></select>
         <button id="clarityUpscaleButton" class="secondary" type="button" onclick="generateSelectedClarityVersion()" disabled>生成清晰版</button>
       </div>
-      <div id="clarityUpscaleStatus" class="small">多张图片时先选择其中一张；结果会追加到预览并另存。要选历史图、换增强方式或改倍率，请打开左侧「高级工具 → 同图清晰版」。</div>`;
+      <div id="clarityUpscaleStatus" class="small">清晰版不重新构图，只提高输出清晰度/尺寸。多张图片时先选一张；要选历史图、换增强方式或改倍率，请打开左侧「高级工具 → 同图清晰版」。</div>`;
     result.closest(".preview-card")?.appendChild(action);
     const observer = new MutationObserver(() => {
       refreshClarityTargets();
@@ -49,6 +49,7 @@
     block.innerHTML = `
       <summary>同图清晰版（可选任意图 · 换模型 · 改倍率）</summary>
       <div class="clarity-upscale-panel">
+        <div class="small" style="margin-bottom:6px">定位：不重新构图，只提高输出清晰度 / 尺寸。要改善结构、补生成细节请用二采。</div>
         <div class="field-title"><span>要增强的图片</span><span class="small">「本次生成」或「历史输出」里任选</span></div>
         <select id="clarityDrawerTarget" aria-label="选择要增强的图片"><option value="">— 正在读取输出目录… —</option></select>
         <div class="two" style="margin-top:8px">

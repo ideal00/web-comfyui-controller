@@ -3837,8 +3837,13 @@ def build_workflow(data: dict) -> dict:
                 "samples": sample_ref, "vae": vae_ref,
             }}
         color_reference_ref = [base_decode_id, 0]
-        # 首采只在内存里作为二采的输入（并供调色取色）；不再另存首采原图，
-        # 作品库与输出目录只保留二采后的成品图。
+        # 首采图另存为 _base 对照文件：作品库代表图、手机端结果列表和预览画廊都会
+        # 跳过 _base_，所以它不会当成成品展示，只用于「首采 vs 二采」局部对照。
+        base_save_id = alloc()
+        nodes[base_save_id] = {"class_type": "SaveImage", "inputs": {
+            "filename_prefix": generation_filename_prefix(data, "_base"),
+            "images": [base_decode_id, 0],
+        }}
         nodes[upscale_loader_id] = {
             "class_type": "UpscaleModelLoader",
             "inputs": {"model_name": HIRES_UPSCALE_MODEL},

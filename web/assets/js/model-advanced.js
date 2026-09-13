@@ -94,7 +94,7 @@
     }
     notes.push(locked
       ? "锁定首采构图：重绘幅度已限制在 0.35 以内，二采只做细节增强。"
-      : "重绘幅度参考：0.20–0.30 优先保留构图；0.30–0.40 强化细节但可能改动构图；超过 0.40 更接近重新生成。");
+      : "重绘幅度参考：0.15–0.23 高清保真（只补细节）；0.24–0.35 结构 / 细节重绘；超过 0.35 更接近重新生成。");
     hint.textContent = notes.join(" ");
   };
 
@@ -260,22 +260,23 @@
       block.id = "hiresStrengthPanel";
       block.className = "hires-strength-panel";
       block.innerHTML = `
-        <div class="field-title"><span>二采质量档位</span>${help("二采只补细节、不重新构图。档位 = 重绘幅度的推荐区间：保真 0.15–0.20 保留首采结构与脸；均衡 0.20–0.26 常规成图；重绘 0.27–0.35 允许改服装褶皱与局部结构。")}</div>
-        <div class="hires-tier-row">
-          <button type="button" class="secondary" data-tier="faithful" onclick="applyHiresTier('faithful')">保真 0.15–0.20</button>
-          <button type="button" class="secondary" data-tier="balanced" onclick="applyHiresTier('balanced')">均衡 0.20–0.26</button>
-          <button type="button" class="secondary" data-tier="redraw" onclick="applyHiresTier('redraw')">重绘 0.27–0.35</button>
+        <div class="field-title"><span>二采目的</span>${help("先想清楚“我要它干什么”，再微调数值。二采会重新采样，它能改善结构与生成细节；只提高清晰度/尺寸请用左侧「同图清晰版」。")}</div>
+        <div class="hires-purpose-row">
+          <button type="button" data-purpose="keep" onclick="applyHiresPurpose('keep')"><b>保留首采</b><span>尽量不改脸、姿势、服装和构图</span><em>denoise 0.15–0.20</em></button>
+          <button type="button" data-purpose="detail" onclick="applyHiresPurpose('detail')"><b>增强细节</b><span>补发丝、衣服褶皱、眼睛、饰品</span><em>denoise 0.20–0.26</em></button>
+          <button type="button" data-purpose="redraw" onclick="applyHiresPurpose('redraw')"><b>局部重绘</b><span>允许重新塑造结构</span><em>denoise 0.27–0.35</em></button>
         </div>
         <div class="hires-strength">
-          <div class="hires-strength-head"><b id="hiresStrengthValue">0.25</b><span id="hiresStrengthTier" class="small">均衡</span></div>
-          <div class="hires-strength-track"><div id="hiresStrengthFill" class="hires-strength-fill"></div><span class="hires-strength-zero" style="left:17%">0.15</span><span class="hires-strength-zero" style="left:83%">0.35</span></div>
+          <div class="hires-strength-head"><b id="hiresStrengthValue">0.25</b><span id="hiresStrengthTier" class="small">增强细节</span></div>
+          <div class="hires-strength-track"><div id="hiresStrengthFill" class="hires-strength-fill"></div><span class="hires-strength-zero" style="left:17%">0.15</span><span class="hires-strength-zero" style="left:43%">0.23</span><span class="hires-strength-zero" style="left:83%">0.35</span></div>
+          <div class="hires-strength-scale"><span>高清保真 0.15–0.23</span><span>结构 / 细节重绘 0.24–0.35</span></div>
           <div id="hiresStrengthNote" class="small"></div>
         </div>`;
       hiresControls.insertBefore(block, hiresControls.firstChild);
       byId("hiresDenoise")?.addEventListener("input", () => window.renderHiresStrength());
       window.renderHiresStrength();
       if (!window.__hiresStrengthTimer) {
-        // 换模型会按预设改写重绘幅度，这里跟着刷新档位与提示。
+        // 换模型会按预设改写重绘幅度，这里跟着刷新目的与提示。
         window.__hiresStrengthTimer = setInterval(() => {
           const panel = byId("hiresStrengthPanel");
           if (!panel || panel.offsetParent === null) return;
@@ -310,7 +311,7 @@
         <textarea id="hiresNegative" rows="2" placeholder="例如：blurry details, smeared fabric texture, plastic skin" oninput="hiresPromptInputChanged()"></textarea>
         <div class="actions"><button class="secondary" type="button" onclick="pasteHiresPromptField('hiresNegative')">从剪贴板粘贴</button><button class="secondary" type="button" onclick="clearHiresPromptField('hiresNegative')">清空</button></div>
         <div class="actions"><button class="secondary" type="button" onclick="insertHiresPromptTemplate('detail')">＋ 细节强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('hair')">＋ 发丝强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('clothing')">＋ 服装强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('expression')">＋ 表情强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('lighting')">＋ 光影强化</button></div>
-        <div class="switch" style="margin-top:6px"><input id="hiresCompositionLock" type="checkbox" checked onchange="hiresCompositionLockChanged()"><div><b>优先保持首采构图</b><div class="small">勾选后二采重绘幅度上限锁到 0.35（前端与后端都会限制），只做细节增强；不建议再写镜头、景别、构图类提示词。</div></div></div>
+        <div class="switch" style="margin-top:6px"><input id="hiresCompositionLock" type="checkbox" checked onchange="hiresCompositionLockChanged()"><div><b>优先保持首采构图</b><div class="small">勾选后把二采重绘幅度上限锁到 0.35（前端与后端都限制）。注意 0.35 已经是「局部重绘」上限：真正只补细节请把 denoise 保持在 0.15–0.26；不建议再写镜头、景别、构图类提示词。</div></div></div>
         <div id="hiresPromptHint" class="small" style="margin-top:6px"></div>`;
       hiresControls.appendChild(promptBlock);
       window.hiresPromptModeChanged(true);
@@ -325,23 +326,23 @@
 
   window.hiresTierOf = function (value) {
     if (value < 0.15) {
-      return { id: "conservative", label: "偏保守",
-               note: "低于保真区间：细节可能补得不够；想要更清楚可以升到 0.15–0.20。" };
+      return { id: "below", label: "低于保真区",
+               note: "低于 0.15 几乎不改变画面，细节也不会明显增加；要补细节建议 0.18–0.23。" };
     }
     if (value <= 0.20) {
-      return { id: "faithful", label: "保真",
+      return { id: "keep", label: "保留首采",
                note: "✓ 构图稳定　✓ 角色一致性高　✓ 细节增强" };
     }
     if (value <= 0.26) {
-      return { id: "balanced", label: "均衡",
-               note: "✓ 构图基本保持　✓ 细节明显增强　• 衣物纹理可能轻微变化" };
+      return { id: "detail", label: "增强细节",
+               note: "✓ 构图基本保持　✓ 细节明显增强（发丝 / 衣物褶皱 / 眼睛 / 饰品）" };
     }
     if (value <= 0.35) {
-      return { id: "redraw", label: "重绘",
-               note: "⚠ 已进入明显重绘区间，可能改变：脸 / 发型 / 手 / 服装褶皱 / 背景" };
+      return { id: "redraw", label: "局部重绘",
+               note: "⚠ 已进入重绘区：可能改变脸 / 发型 / 手 / 服装褶皱 / 背景；0.35 是重新塑造结构前的上限。" };
     }
-    return { id: "regenerate", label: "接近重生成",
-             note: "⚠⚠ 超过 0.35：构图与人物也可能变；建议降回 0.35 以内，或直接用精准模式重画。" };
+    return { id: "over", label: "超出重绘上限",
+             note: "⚠⚠ 超过 0.35 已不属于保真二采：构图与人物都可能变；建议回到 0.35 以内，或直接用精准模式重画。" };
   };
 
   window.renderHiresStrength = function () {
@@ -356,22 +357,28 @@
     const panel = byId("hiresStrengthPanel");
     if (panel) {
       panel.dataset.tier = tier.id;
-      panel.querySelectorAll("button[data-tier]").forEach((button) => {
-        button.classList.toggle("active", button.dataset.tier === tier.id);
+      panel.querySelectorAll("button[data-purpose]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.purpose === tier.id);
       });
     }
     const fill = byId("hiresStrengthFill");
     if (fill) fill.style.width = percent.toFixed(1) + "%";
   };
 
-  window.applyHiresTier = function (tier) {
-    const presets = { faithful: 0.18, balanced: 0.23, redraw: 0.30 };
-    const value = presets[tier];
+  window.applyHiresPurpose = function (purpose) {
+    const presets = { keep: 0.18, detail: 0.23, redraw: 0.30 };
+    const value = presets[purpose];
     const input = byId("hiresDenoise");
     if (value === undefined || !input) return;
     input.value = String(value);
     window.renderHiresStrength();
     input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  // 旧名字保留，避免其它脚本/习惯调用失效。
+  window.applyHiresTier = function (tier) {
+    const legacy = { faithful: "keep", balanced: "detail", redraw: "redraw" };
+    window.applyHiresPurpose(legacy[tier] || tier);
   };
 
   function syncSourceLink() {

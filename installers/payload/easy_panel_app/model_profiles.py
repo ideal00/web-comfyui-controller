@@ -20,7 +20,7 @@ DEFAULT_HIRES = {
     "scale": 1.25,
     "min_scale": 1.10,
     "max_scale": 1.50,
-    "denoise": 0.35,
+    "denoise": 0.25,
     "min_denoise": 0.15,
     "max_denoise": 0.45,
     "steps": 20,

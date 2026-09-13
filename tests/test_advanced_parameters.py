@@ -307,19 +307,17 @@ class SamplingProfileTests(unittest.TestCase):
                    for node in self.nodes_of(nodes, "CLIPTextEncode")]
         self.assertFalse(any("torn clothes" in text for text in encoded))
 
-    def test_hires_keeps_only_the_refined_image(self):
+    def test_hires_saves_one_comparison_copy_plus_the_refined_image(self):
         data = payload("waiIllustriousSDXL_v140.safetensors")
         data.update({"illustriousMode": "hires", "hiresScale": 1.2})
         nodes = self.build(data)
         saves = self.nodes_of(nodes, "SaveImage")
-        # 二采不再另存首采原图：输出目录只保留二采后的成品。
-        self.assertEqual(1, len(saves))
-        self.assertEqual("EasyPanel", saves[0]["inputs"]["filename_prefix"])
-        self.assertFalse(any(
-            node["inputs"]["filename_prefix"].endswith("_base")
-            for node in nodes.values() if node.get("class_type") == "SaveImage"
-        ))
-        # 首采解码仍然存在，但只作为二采（与调色取色）的内部输入。
+        # 二采保存两张：_base 只用来做「首采 vs 二采」局部对照（作品库/手机端/画廊会跳过它），
+        # 成品图才是交付用的。
+        self.assertEqual(2, len(saves))
+        prefixes = [node["inputs"]["filename_prefix"] for node in saves]
+        self.assertEqual(["EasyPanel_base", "EasyPanel"], prefixes)
+        # 首采解码仍作为二采与调色取色的内部输入。
         self.assertTrue(any(node.get("class_type") == "VAEDecode" for node in nodes.values()))
 
         precision = self.build(payload("waiIllustriousSDXL_v140.safetensors"))
@@ -738,34 +736,63 @@ class SamplingProfileTests(unittest.TestCase):
 
 
 class HiresTierPanelTests(unittest.TestCase):
-    """二采质量档位与强度预览（纯前端接线）。"""
+    """二采目的（保留首采/增强细节/局部重绘）与强度预览。"""
 
     def setUp(self):
         self.script = (MODULE_PATH.parent / "web/assets/js/model-advanced.js").read_text(encoding="utf-8")
 
-    def test_tiers_and_strength_preview_are_wired(self):
+    def test_purposes_and_strength_preview_are_wired(self):
         for marker in (
-            "hiresStrengthPanel", "hiresTierOf", "renderHiresStrength", "applyHiresTier",
-            "保真 0.15–0.20", "均衡 0.20–0.26", "重绘 0.27–0.35",
+            "hiresStrengthPanel", "hiresTierOf", "renderHiresStrength", "applyHiresPurpose",
+            "保留首采", "增强细节", "局部重绘",
+            "denoise 0.15–0.20", "denoise 0.20–0.26", "denoise 0.27–0.35",
         ):
             self.assertIn(marker, self.script)
 
-    def test_tier_notes_explain_the_expected_impact(self):
+    def test_strength_notes_explain_the_expected_impact(self):
         for marker in (
             "构图稳定", "角色一致性高", "细节增强",
-            "已进入明显重绘区间", "脸 / 发型 / 手 / 服装褶皱 / 背景",
-            "超过 0.35",
+            "已进入重绘区", "脸 / 发型 / 手 / 服装褶皱 / 背景",
+            "超过 0.35", "高清保真 0.15–0.23", "结构 / 细节重绘 0.24–0.35",
         ):
             self.assertIn(marker, self.script)
 
-    def test_tier_presets_sit_inside_their_ranges(self):
-        self.assertIn("faithful: 0.18", self.script)
-        self.assertIn("balanced: 0.23", self.script)
+    def test_purpose_presets_sit_inside_their_ranges(self):
+        self.assertIn("keep: 0.18", self.script)
+        self.assertIn("detail: 0.23", self.script)
         self.assertIn("redraw: 0.30", self.script)
 
-    def test_default_denoise_is_in_the_balanced_tier(self):
+    def test_composition_lock_points_at_the_retouch_ceiling(self):
+        """构图锁的说明必须讲清 0.35 是重绘上限，只补细节应该更低。"""
+        for marker in ("0.35 已经是「局部重绘」上限", "保持在 0.15–0.26"):
+            self.assertIn(marker, self.script)
+
+    def test_defaults_are_consistent_across_the_stack(self):
+        """实际默认值 / 前端 / 摘要 fallback 必须一致（曾经 20/5 与 16/4 混用）。"""
+        from easy_panel_app.model_profiles import DEFAULT_HIRES
         html = (MODULE_PATH.parent / "index.html").read_text(encoding="utf-8")
+        workbench = (MODULE_PATH.parent / "web/assets/js/result-workbench.js").read_text(encoding="utf-8")
+        panel = (MODULE_PATH.parent / "web/assets/js/panel.js").read_text(encoding="utf-8")
+        self.assertEqual(20, DEFAULT_HIRES["steps"])
+        self.assertEqual(5.0, DEFAULT_HIRES["cfg"])
+        self.assertEqual(0.25, DEFAULT_HIRES["denoise"])
         self.assertIn('id="hiresDenoise" type="number" min="0.05" max="1.00" step="0.05" value="0.25"', html)
+        self.assertIn('id="hiresSteps" type="number" min="1" max="150" step="1" value="20"', html)
+        self.assertIn("steps:'20',cfg:'5'", panel)
+        self.assertIn('hiresSteps, "20"', workbench)
+        self.assertIn('hiresCfg, "5"', workbench)
+        self.assertNotIn('hiresSteps, "16"', workbench)
+        self.assertNotIn('hiresCfg, "4"', workbench)
+
+    def test_model_catalog_hires_denoise_matches_the_default(self):
+        text = (MODULE_PATH.parent / "easy_panel_app/data/model_profiles.json").read_text(encoding="utf-8")
+        checked = 0
+        for line in text.splitlines():
+            if '"hires": {' not in line:
+                continue
+            checked += 1
+            self.assertIn('"denoise": 0.25', line)
+        self.assertGreater(checked, 0)
 
 
 class BatchQueueTests(unittest.TestCase):

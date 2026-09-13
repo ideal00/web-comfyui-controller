@@ -200,7 +200,7 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     const mode = text(data.hiresPromptMode, "append");
     const label = mode === "inherit" ? "继承首采" : mode === "append" ? "追加补充" : "完全独立";
     const lock = data.hiresCompositionLock === true ? " · 优先保持首采构图" : "";
-    return `二采：${text(data.hiresScale, "1.3")}× / denoise ${text(data.hiresDenoise, "0.25")} / ${text(data.hiresSteps, "16")} 步 / CFG ${text(data.hiresCfg, "4")} · ${label}${lock}`;
+    return `二采：${text(data.hiresScale, "1.25")}× / denoise ${text(data.hiresDenoise, "0.25")} / ${text(data.hiresSteps, "20")} 步 / CFG ${text(data.hiresCfg, "5")} · ${label}${lock}`;
   }
 
   function cardSummary() {
@@ -356,7 +356,7 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     return {
       size: `${text(data.width, "?")} × ${text(data.height, "?")} → ${expected}`,
       seed: String(data.seed == null ? "随机" : data.seed),
-      hires: `${text(data.hiresScale, "1.3")}× · denoise ${text(data.hiresDenoise, "0.25")} · ${text(data.hiresSteps, "16")} 步 · CFG ${text(data.hiresCfg, "4")}`,
+      hires: `${text(data.hiresScale, "1.25")}× · denoise ${text(data.hiresDenoise, "0.25")} · ${text(data.hiresSteps, "20")} 步 · CFG ${text(data.hiresCfg, "5")}`,
     };
   }
 
@@ -371,6 +371,93 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     });
     document.body.appendChild(dialog);
     return dialog;
+  }
+
+  function loadCompareImage(src) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => resolve(image);
+      image.onerror = () => resolve(null);
+      image.src = src;
+    });
+  }
+
+  // 把画面缩成 3x3 网格逐格算拉普拉斯方差（锐度），用来找出二采提升最明显的位置。
+  function sharpnessGrid(image) {
+    const size = 240;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(image, 0, 0, size, size);
+    const pixels = context.getImageData(0, 0, size, size).data;
+    const gray = new Float32Array(size * size);
+    for (let index = 0, pixel = 0; index < pixels.length; index += 4, pixel += 1) {
+      gray[pixel] = pixels[index] * 0.299 + pixels[index + 1] * 0.587 + pixels[index + 2] * 0.114;
+    }
+    const step = size / 3;
+    const cells = [];
+    for (let row = 0; row < 3; row += 1) {
+      for (let column = 0; column < 3; column += 1) {
+        const x0 = Math.floor(column * step), x1 = Math.floor((column + 1) * step);
+        const y0 = Math.floor(row * step), y1 = Math.floor((row + 1) * step);
+        let sum = 0, square = 0, count = 0;
+        for (let y = Math.max(1, y0); y < Math.min(size - 1, y1); y += 1) {
+          for (let x = Math.max(1, x0); x < Math.min(size - 1, x1); x += 1) {
+            const index = y * size + x;
+            const laplacian = 4 * gray[index] - gray[index - 1] - gray[index + 1]
+              - gray[index - size] - gray[index + size];
+            sum += laplacian;
+            square += laplacian * laplacian;
+            count += 1;
+          }
+        }
+        const mean = count ? sum / count : 0;
+        cells.push({
+          x: (x0 + x1) / 2 / size, y: (y0 + y1) / 2 / size,
+          variance: count ? Math.max(0, square / count - mean * mean) : 0,
+        });
+      }
+    }
+    return cells;
+  }
+
+  const COMPARE_SPOT_NAMES = ["左上", "上中", "右上", "左中", "中央", "右中", "左下", "中下", "右下"];
+
+  // 1:1 局部放大：两侧各自按原始像素取同一个归一化位置的窗口，方便看发丝、褶皱、眼睛。
+  function drawCompareZoom(state, centerX = 0.5, centerY = 0.5) {
+    [["base", state.baseImage], ["final", state.finalImage]].forEach(([role, image]) => {
+      const canvas = state.dialog.querySelector(`[data-zoom="${role}"]`);
+      if (!canvas) return;
+      const context = canvas.getContext("2d");
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      if (!image) return;
+      const windowSize = canvas.width;
+      const width = image.naturalWidth;
+      const height = image.naturalHeight;
+      const cropWidth = Math.min(windowSize, width);
+      const cropHeight = Math.min(windowSize, height);
+      const sourceX = Math.max(0, Math.min(Math.max(0, width - cropWidth), centerX * width - cropWidth / 2));
+      const sourceY = Math.max(0, Math.min(Math.max(0, height - cropHeight), centerY * height - cropHeight / 2));
+      context.drawImage(image, sourceX, sourceY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+    });
+    const readout = state.dialog.querySelector('[data-role="zoomReadout"]');
+    if (readout) {
+      readout.textContent = `位置 ${Math.round(centerX * 100)}% / ${Math.round(centerY * 100)}% · 两侧都按原始像素 1:1 显示`;
+    }
+  }
+
+  function renderCompareSpots(state, baseCells, finalCells) {
+    const spots = state.dialog.querySelector('[data-role="spots"]');
+    if (!spots) return;
+    const ranked = baseCells.map((cell, index) => {
+      const after = finalCells[index] || { variance: 0 };
+      return { cell, index, gain: cell.variance > 1 ? after.variance / cell.variance : after.variance };
+    }).sort((left, right) => right.gain - left.gain).slice(0, 3);
+    spots.innerHTML = ranked.map((item) =>
+      `<button type="button" class="secondary" data-spot="${item.cell.x},${item.cell.y}">` +
+      `${COMPARE_SPOT_NAMES[item.index] || "局部"} 锐度 ×${item.gain.toFixed(2)}</button>`).join("");
   }
 
   function openCompare() {
@@ -396,12 +483,48 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
       <div class="hc-block"><b>二采参数</b><div class="small">${esc(parameters.hires)} · ${esc(text(lastPayload?.hiresPromptMode, "append") === "inherit" ? "继承首采" : text(lastPayload?.hiresPromptMode, "append") === "append" ? "追加补充" : "完全独立")}${lastPayload?.hiresCompositionLock === true ? " · 优先保持首采构图" : ""}</div></div>
       <div class="hc-block"><b>提示词变化</b><div class="small">${esc(promptDiff.title)}${promptDiff.items.length ? `<br>${promptDiff.items.map((item) => `+ ${esc(item)}`).join("<br>")}` : ""}</div></div>
       <div class="hc-block"><b>参数变化</b><div class="small">尺寸 ${esc(parameters.size)}<br>Seed ${esc(parameters.seed)}（两阶段相同）</div></div>
-      <div class="hc-block"><span class="hc-level">构图保持：${esc(outlook.keep)}</span><div class="small">原因：${esc(outlook.reason)}（基于二采参数与补充词的规则判断，不是对两张图做视觉分析）</div></div>`;
+      <div class="hc-block"><span class="hc-level">构图保持：${esc(outlook.keep)}</span><div class="small">原因：${esc(outlook.reason)}（基于二采参数与补充词的规则判断，不是对两张图做视觉分析）</div></div>
+      <div class="hc-block"><b>局部放大对比</b>
+        <div class="small">把鼠标移到任一张图上，两侧会同步显示同一位置的 1:1 局部；下面是二采锐度提升最明显的三处，点一下就能跳过去细看。</div>
+        <div class="hc-zoom-row">
+          <div class="hc-zoom"><canvas data-zoom="base" width="240" height="240"></canvas><span class="small">首采 · 1:1</span></div>
+          <div class="hc-zoom"><canvas data-zoom="final" width="240" height="240"></canvas><span class="small">二采 · 1:1</span></div>
+        </div>
+        <div class="hc-zoom-spots" data-role="spots"></div>
+        <div class="small" data-role="zoomReadout"></div>
+      </div>`;
     dialog.querySelectorAll("img").forEach((image) => {
       image.addEventListener("load", () => {
         const target = dialog.querySelector(`[data-role="${image.dataset.role}Size"]`);
         if (target) target.textContent = `实际 ${image.naturalWidth} × ${image.naturalHeight}`;
       });
+    });
+    const state = { dialog, baseImage: null, finalImage: null };
+    Promise.all([
+      loadCompareImage("/output?name=" + encodeURIComponent(base.filename)),
+      loadCompareImage("/output?name=" + encodeURIComponent(final.filename)),
+    ]).then(([baseImage, finalImage]) => {
+      state.baseImage = baseImage;
+      state.finalImage = finalImage;
+      if (baseImage && finalImage) {
+        renderCompareSpots(state, sharpnessGrid(baseImage), sharpnessGrid(finalImage));
+      }
+      drawCompareZoom(state, 0.5, 0.5);
+    });
+    dialog.querySelectorAll("img").forEach((image) => {
+      image.addEventListener("mousemove", (event) => {
+        const rect = image.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        drawCompareZoom(state, (event.clientX - rect.left) / rect.width,
+                                (event.clientY - rect.top) / rect.height);
+      });
+      image.addEventListener("mouseleave", () => drawCompareZoom(state, 0.5, 0.5));
+    });
+    dialog.querySelector('[data-role="spots"]')?.addEventListener("click", (event) => {
+      const spot = event.target.closest && event.target.closest("[data-spot]");
+      if (!spot) return;
+      const [x, y] = String(spot.dataset.spot || "").split(",").map(Number);
+      if (Number.isFinite(x) && Number.isFinite(y)) drawCompareZoom(state, x, y);
     });
     dialog.showModal();
   }
