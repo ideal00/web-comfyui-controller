@@ -4227,11 +4227,71 @@ def clarity_upscale_model(data: dict) -> str:
 
 
 def upscale_model_catalog() -> dict:
-    """给前端下拉用：可用放大模型 + 默认选中项。"""
+    """给前端下拉用：可用放大模型 + 默认选中项 + SeedVR2 可用性。"""
 
     models = upscale_model_choices()
     default = HIRES_UPSCALE_MODEL if HIRES_UPSCALE_MODEL in models else (models[0] if models else "")
-    return {"models": models, "default": default, "preferred": HIRES_UPSCALE_MODEL}
+    return {"models": models, "default": default, "preferred": HIRES_UPSCALE_MODEL,
+            "seedvr2": {"ready": seedvr2_ready(), "model": SEEDVR2_MODEL}}
+
+
+CLARITY_ENGINES = ("upscale", "seedvr2")
+
+
+def clarity_upscale_engine(data: dict) -> str:
+    """清晰版增强方式：upscale=放大模型（默认），seedvr2=SeedVR2 生成式超分。"""
+
+    wanted = str((data or {}).get("engine", "") or "").strip().lower()
+    return wanted if wanted in CLARITY_ENGINES else "upscale"
+
+
+def seedvr2_ready() -> bool:
+    """SeedVR2 所需的三个自定义节点是否已在 ComfyUI 里注册。"""
+
+    try:
+        info = comfy_json("/object_info")
+    except Exception:
+        return False
+    return all(node in info for node in
+               ("SeedVR2Preprocess", "SeedVR2Conditioning", "SeedVR2PostProcessing"))
+
+
+def clarity_seedvr2_nodes(target: tuple[int, int], data: dict) -> dict:
+    """SeedVR2 生成式超分节点；参数与“输出增强工作流”保持一致。"""
+
+    color_method = str((data or {}).get("seedvrColor", "lab") or "lab")
+    if color_method not in {"lab", "wavelet", "adain", "none"}:
+        color_method = "lab"
+    return {
+        "2": {"class_type": "ImageScale", "inputs": {
+            "image": ["1", 0], "upscale_method": "lanczos",
+            "width": int(target[0]), "height": int(target[1]), "crop": "disabled",
+        }},
+        "3": {"class_type": "SeedVR2Preprocess", "inputs": {"resized_images": ["2", 0]}},
+        "4": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": SEEDVR2_MODEL, "weight_dtype": "default"}},
+        "5": {"class_type": "VAELoader", "inputs": {"vae_name": SEEDVR2_VAE}},
+        "6": {"class_type": "VAEEncodeTiled", "inputs": {
+            "pixels": ["3", 0], "vae": ["5", 0],
+            "tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8,
+        }},
+        "7": {"class_type": "SeedVR2Conditioning", "inputs": {
+            "model": ["4", 0], "vae_conditioning": ["6", 0],
+        }},
+        "8": {"class_type": "KSampler", "inputs": {
+            "seed": 42, "steps": 1, "cfg": 1.0, "sampler_name": "euler",
+            "scheduler": "simple", "denoise": 1.0, "model": ["4", 0],
+            "positive": ["7", 0], "negative": ["7", 1], "latent_image": ["6", 0],
+        }},
+        "9": {"class_type": "VAEDecodeTiled", "inputs": {
+            "samples": ["8", 0], "vae": ["5", 0],
+            "tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8,
+        }},
+        "10": {"class_type": "SeedVR2PostProcessing", "inputs": {
+            "images": ["9", 0], "original_resized_images": ["2", 0],
+            "color_correction_method": color_method,
+        }},
+    }
 
 
 def upscale_output_size(image_name: str, scale: float) -> tuple[int, int] | None:
@@ -4270,26 +4330,36 @@ def clarity_upscale_resize_node(image_ref, size: tuple[int, int] | None) -> dict
 
 
 def build_clarity_upscale_workflow(data: dict) -> dict:
-    """Upscale one existing output without diffusion or prompt regeneration."""
+    """Upscale one existing output without diffusion or prompt regeneration.
+
+    engine=upscale：任意放大模型（Anime6B / 4x-UltraSharp…），快、保真。
+    engine=seedvr2：SeedVR2 生成式超分，能修细节但更慢，与放大模型无关。
+    """
+
     if not isinstance(data, dict):
         raise ValueError("清晰版请求格式无效。")
     image_name = prepare_generation_image(str(data.get("name", "") or ""))
-    scale = bounded(data.get("scale"), 1.5, 1.1, 2.0, integer=False)
-    model_name = clarity_upscale_model(data)
+    scale = bounded(data.get("scale"), 1.5, 1.1, 4.0, integer=False)
+    engine = clarity_upscale_engine(data)
     size = upscale_output_size(image_name, scale)
-    nodes = {
-        "1": {"class_type": "LoadImage", "inputs": {"image": image_name}},
-        "2": {"class_type": "UpscaleModelLoader", "inputs": {
-            "model_name": model_name,
-        }},
-        "3": {"class_type": "ImageUpscaleWithModel", "inputs": {
+    nodes: dict = {"1": {"class_type": "LoadImage", "inputs": {"image": image_name}}}
+    if engine == "seedvr2":
+        if not size:
+            raise ValueError("读不到原图尺寸，无法生成 SeedVR2 清晰版。")
+        nodes.update(clarity_seedvr2_nodes(size, data))
+        last = "10"
+    else:
+        nodes["2"] = {"class_type": "UpscaleModelLoader", "inputs": {
+            "model_name": clarity_upscale_model(data),
+        }}
+        nodes["3"] = {"class_type": "ImageUpscaleWithModel", "inputs": {
             "upscale_model": ["2", 0], "image": ["1", 0],
-        }},
-        "4": clarity_upscale_resize_node(["3", 0], size),
-        "5": {"class_type": "SaveImage", "inputs": {
-            "filename_prefix": "EasyPanel_Clarity", "images": ["4", 0],
-        }},
-    }
+        }}
+        nodes["4"] = clarity_upscale_resize_node(["3", 0], size)
+        last = "4"
+    nodes["save"] = {"class_type": "SaveImage", "inputs": {
+        "filename_prefix": "EasyPanel_Clarity", "images": [last, 0],
+    }}
     return {"prompt": nodes, "client_id": "easy-panel-clarity"}
 
 
@@ -5776,12 +5846,17 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/preview-pose":
                 self.send_json(comfy_json("/prompt", "POST", build_pose_preview_workflow(data)))
             elif self.path == "/api/clarity-upscale":
-                available = upscale_model_choices()
-                if not available:
-                    raise ValueError("ComfyUI 里没有可用的放大模型，请先放入 models/upscale_models。")
-                chosen = clarity_upscale_model(data)
-                if chosen not in available:
-                    raise ValueError("找不到放大模型「" + chosen + "」，请在列表里重新选择。")
+                engine = clarity_upscale_engine(data)
+                if engine == "seedvr2":
+                    if not seedvr2_ready():
+                        raise ValueError("ComfyUI 里没有 SeedVR2 节点，无法用生成式超分；请改用放大模型。")
+                else:
+                    available = upscale_model_choices()
+                    if not available:
+                        raise ValueError("ComfyUI 里没有可用的放大模型，请先放入 models/upscale_models。")
+                    chosen = clarity_upscale_model(data)
+                    if chosen not in available:
+                        raise ValueError("找不到放大模型「" + chosen + "」，请在列表里重新选择。")
                 self.send_json(comfy_json("/prompt", "POST", build_clarity_upscale_workflow(data)))
             elif self.path == "/api/lora-notes":
                 save_lora_notes(data.get("notes", {}))

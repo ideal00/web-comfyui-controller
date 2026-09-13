@@ -22,14 +22,11 @@
     action.innerHTML = `
       <div class="field-title"><b>生成同图清晰版</b><span class="small">保留原图，不重新抽噪声</span></div>
       <div class="clarity-upscale-controls">
-        <select id="clarityUpscaleTarget" aria-label="选择要增强的图片"><option value="">— 当前没有可用的图片 —</option></select>
-        <select id="clarityUpscaleModel" aria-label="选择放大模型"><option value="">— 放大模型加载中 —</option></select>
+        <select id="clarityUpscaleTarget" aria-label="选择要增强的生成图片"><option value="">— 当前没有生成图片 —</option></select>
         <button id="clarityUpscaleButton" class="secondary" type="button" onclick="generateSelectedClarityVersion()" disabled>生成清晰版</button>
       </div>
-      <img id="clarityUpscalePreview" class="clarity-upscale-preview" alt="待增强图片预览" hidden>
-      <div id="clarityUpscaleStatus" class="small">可选本次生成的图或「历史输出」里任意一张；换不同放大模型得到不同质感，结果都另存为新图。</div>`;
+      <div id="clarityUpscaleStatus" class="small">多张图片时先选择其中一张；结果会追加到预览并另存。要选历史图、换增强方式或改倍率，请打开左侧「高级工具 → 同图清晰版」。</div>`;
     result.closest(".preview-card")?.appendChild(action);
-    byId("clarityUpscaleTarget")?.addEventListener("change", refreshClarityPreview);
     const observer = new MutationObserver(() => {
       refreshClarityTargets();
       scheduleClarityAnalysis();
@@ -37,8 +34,34 @@
     observer.observe(result, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
     refreshClarityTargets();
     scheduleClarityAnalysis();
-    loadClarityModels();
-    loadClarityHistory();
+    installClarityDrawerPanel();
+    loadClarityCatalog();
+  }
+
+  // 左侧「高级工具」抽屉里的完整版：可选任意历史图、换增强方式、改倍率。
+  function installClarityDrawerPanel() {
+    const root = byId("studioToolDrawerContent");
+    if (!root || byId("clarityDrawerPanel")) return;
+    const block = document.createElement("details");
+    block.id = "clarityDrawerPanel";
+    block.className = "clarity-drawer-panel";
+    block.open = true;
+    block.innerHTML = `
+      <summary>同图清晰版（可选任意图 · 换模型 · 改倍率）</summary>
+      <div class="clarity-upscale-panel">
+        <div class="field-title"><span>要增强的图片</span><span class="small">「本次生成」或「历史输出」里任选</span></div>
+        <select id="clarityDrawerTarget" aria-label="选择要增强的图片"><option value="">— 正在读取输出目录… —</option></select>
+        <div class="two" style="margin-top:8px">
+          <div><div class="field-title"><span>增强方式</span><span class="small" title="放大模型最快、最保真，适合交付放大；SeedVR2 是生成式超分，会重绘细节，最慢但修得最多。">?</span></div><select id="clarityDrawerEngine" onchange="clarityDrawerEngineChanged()"><option value="upscale">放大模型（快 · 保真）</option></select></div>
+          <div><div class="field-title"><span>放大倍率</span><span class="small" title="成品边长 = 原图 × 倍率；倍率越高越吃显存，也越容易看出增强痕迹。">?</span></div><input id="clarityDrawerScale" type="number" min="1.1" max="4" step="0.05" value="1.5"></div>
+        </div>
+        <div id="clarityDrawerModelWrap"><div class="field-title"><span>放大模型</span></div><select id="clarityUpscaleModel"><option value="">— 放大模型加载中 —</option></select></div>
+        <img id="clarityUpscalePreview" class="clarity-upscale-preview" alt="待增强图片预览" hidden>
+        <div class="actions"><button id="clarityDrawerButton" class="secondary" type="button" onclick="generateDrawerClarityVersion()" disabled>生成清晰版</button></div>
+        <div id="clarityDrawerStatus" class="small">结果另存为新图，原图不会被覆盖。</div>
+      </div>`;
+    root.insertBefore(block, root.firstChild);
+    byId("clarityDrawerTarget")?.addEventListener("change", () => refreshClarityPreview("clarityDrawerTarget", "clarityUpscalePreview"));
   }
 
   function clarityTargetEntries() {
@@ -56,40 +79,93 @@
     }).filter((item) => item.name && !seen.has(item.name) && seen.add(item.name));
   }
 
-  function refreshClarityTargets() {
-    const select = byId("clarityUpscaleTarget");
-    const button = byId("clarityUpscaleButton");
-    if (!select || !button) return;
-    const previous = select.value;
+  let clarityHistoryEntries = [];
+  let clarityModelOptions = { models: [], default: "", seedvr2: { ready: false, model: "" } };
+
+  function clarityTargetGroups() {
     const current = clarityTargetEntries();
     const listed = new Set(current.map((item) => item.name));
-    const history = clarityHistoryEntries.filter((item) => !listed.has(item.name));
-    if (!current.length && !history.length) {
-      select.innerHTML = '<option value="">— 当前没有可用的图片 —</option>';
-      button.disabled = true;
-      return;
-    }
-    const groups = [];
-    if (current.length) {
-      groups.push(`<optgroup label="本次生成">${current.map((item, index) =>
-        `<option value="${escapeHtml(item.name)}">第 ${index + 1} 张 · ${escapeHtml(item.name)}</option>`
-      ).join("")}</optgroup>`);
-    }
-    if (history.length) {
-      groups.push(`<optgroup label="历史输出（最近 ${history.length} 张）">${history.map((item) =>
-        `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`
-      ).join("")}</optgroup>`);
-    }
-    select.innerHTML = groups.join("");
-    if (previous && [...select.options].some((option) => option.value === previous)) select.value = previous;
-    button.disabled = false;
-    refreshClarityPreview();
+    return { current, history: clarityHistoryEntries.filter((item) => !listed.has(item.name)) };
   }
 
-  let clarityHistoryEntries = [];
-  let clarityModelOptions = { models: [], default: "" };
+  function refreshClarityTargets() {
+    // 主界面：只列本次生成的图（保持原来的样子）。
+    const select = byId("clarityUpscaleTarget");
+    const button = byId("clarityUpscaleButton");
+    if (select && button) {
+      const previous = select.value;
+      const current = clarityTargetEntries();
+      select.innerHTML = current.length
+        ? current.map((item, index) =>
+            `<option value="${escapeHtml(item.name)}">第 ${index + 1} 张 · ${escapeHtml(item.name)}</option>`).join("")
+        : '<option value="">— 当前没有生成图片 —</option>';
+      if (previous && [...select.options].some((option) => option.value === previous)) select.value = previous;
+      button.disabled = !current.length;
+    }
+    // 抽屉：本次生成 + 历史输出。
+    const drawer = byId("clarityDrawerTarget");
+    const drawerButton = byId("clarityDrawerButton");
+    if (!drawer || !drawerButton) return;
+    const previous = drawer.value;
+    const { current, history } = clarityTargetGroups();
+    if (!current.length && !history.length) {
+      drawer.innerHTML = '<option value="">— 当前没有可用的图片 —</option>';
+      drawerButton.disabled = true;
+    } else {
+      const groups = [];
+      if (current.length) {
+        groups.push(`<optgroup label="本次生成">${current.map((item, index) =>
+          `<option value="${escapeHtml(item.name)}">第 ${index + 1} 张 · ${escapeHtml(item.name)}</option>`
+        ).join("")}</optgroup>`);
+      }
+      if (history.length) {
+        groups.push(`<optgroup label="历史输出（最近 ${history.length} 张）">${history.map((item) =>
+          `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`
+        ).join("")}</optgroup>`);
+      }
+      drawer.innerHTML = groups.join("");
+      if (previous && [...drawer.options].some((option) => option.value === previous)) drawer.value = previous;
+      drawerButton.disabled = false;
+    }
+    refreshClarityPreview("clarityDrawerTarget", "clarityUpscalePreview");
+  }
 
-  async function loadClarityHistory() {
+  async function loadClarityCatalog() {
+    try {
+      const response = await fetch("/api/upscale-models");
+      const data = await response.json();
+      clarityModelOptions = {
+        models: Array.isArray(data.models) ? data.models.map(String) : [],
+        default: String(data.default || ""),
+        seedvr2: {
+          ready: Boolean(data.seedvr2 && data.seedvr2.ready),
+          model: String(data.seedvr2 && data.seedvr2.model || ""),
+        },
+      };
+    } catch {
+      clarityModelOptions = { models: [], default: "", seedvr2: { ready: false, model: "" } };
+    }
+    const modelSelect = byId("clarityUpscaleModel");
+    if (modelSelect) {
+      const previous = modelSelect.value;
+      if (!clarityModelOptions.models.length) {
+        modelSelect.innerHTML = '<option value="">— 没有可用的放大模型 —</option>';
+      } else {
+        modelSelect.innerHTML = clarityModelOptions.models
+          .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+        const wanted = clarityModelOptions.models.includes(previous) ? previous : clarityModelOptions.default;
+        if (wanted) modelSelect.value = wanted;
+      }
+    }
+    const engineSelect = byId("clarityDrawerEngine");
+    if (engineSelect) {
+      const previous = engineSelect.value;
+      engineSelect.innerHTML = '<option value="upscale">放大模型（快 · 保真）</option>'
+        + (clarityModelOptions.seedvr2.ready
+            ? '<option value="seedvr2">SeedVR2 生成式超分（慢 · 修细节）</option>' : "");
+      if (previous === "seedvr2" && clarityModelOptions.seedvr2.ready) engineSelect.value = "seedvr2";
+      window.clarityDrawerEngineChanged();
+    }
     try {
       const response = await fetch("/api/output-images");
       const data = await response.json();
@@ -102,33 +178,15 @@
     refreshClarityTargets();
   }
 
-  async function loadClarityModels() {
-    const select = byId("clarityUpscaleModel");
-    try {
-      const response = await fetch("/api/upscale-models");
-      const data = await response.json();
-      clarityModelOptions = {
-        models: Array.isArray(data.models) ? data.models.map(String) : [],
-        default: String(data.default || ""),
-      };
-    } catch {
-      clarityModelOptions = { models: [], default: "" };
-    }
-    if (!select) return;
-    const previous = select.value;
-    if (!clarityModelOptions.models.length) {
-      select.innerHTML = '<option value="">— 没有可用的放大模型 —</option>';
-      return;
-    }
-    select.innerHTML = clarityModelOptions.models
-      .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
-    const wanted = clarityModelOptions.models.includes(previous) ? previous : clarityModelOptions.default;
-    if (wanted) select.value = wanted;
-  }
+  window.clarityDrawerEngineChanged = function () {
+    const engine = byId("clarityDrawerEngine")?.value || "upscale";
+    const modelWrap = byId("clarityDrawerModelWrap");
+    if (modelWrap) modelWrap.style.display = engine === "seedvr2" ? "none" : "";
+  };
 
-  function refreshClarityPreview() {
-    const select = byId("clarityUpscaleTarget");
-    const preview = byId("clarityUpscalePreview");
+  function refreshClarityPreview(selectId, previewId) {
+    const select = byId(selectId);
+    const preview = byId(previewId);
     if (!select || !preview) return;
     const name = select.value;
     if (!name) {
@@ -146,31 +204,31 @@
     return node.innerHTML;
   }
 
-  window.generateSelectedClarityVersion = async function () {
-    const select = byId("clarityUpscaleTarget");
-    const modelSelect = byId("clarityUpscaleModel");
-    const button = byId("clarityUpscaleButton");
-    const status = byId("clarityUpscaleStatus");
-    const name = select?.value || "";
-    const model = modelSelect?.value || "";
-    if (!name || !button || !status) return;
-    if (!model) {
+  let clarityBusy = false;
+
+  async function runClarityUpscale({ name, engine, model, scale, button, status }) {
+    const ratio = Math.min(4, Math.max(1.1, Number(scale) || 1.5));
+    if (engine !== "seedvr2" && !model) {
       status.textContent = "没有可用的放大模型：把 .pth 放进 models/upscale_models 后重新载入页面。";
-      return;
+      return false;
     }
+    const label = engine === "seedvr2" ? "SeedVR2 生成式超分" : `放大模型 ${model}`;
     const oldLabel = button.textContent;
     button.disabled = true;
     button.textContent = "正在增强…";
-    status.textContent = `正在处理：${name}（放大模型 ${model}）；原图不会被覆盖。`;
+    status.textContent = `正在处理：${name}（${label} · ${ratio}×）；原图不会被覆盖。`;
     try {
       const previous = typeof generatedViewerImages === "undefined" ? [] : generatedViewerImages.map((item) => ({
         filename: item.name, experimentLabel: item.label || "",
       }));
       beginGenerationProgress(1, "同图清晰版");
+      const body = { name, scale: ratio };
+      if (engine === "seedvr2") body.engine = "seedvr2";
+      else body.model = model;
       const response = await fetch("/api/clarity-upscale", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, scale: 1.5, model }),
+        body: JSON.stringify(body),
       });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
@@ -179,15 +237,60 @@
       output.forEach((image) => image.experimentLabel = `清晰版 · 来源 ${name}`);
       renderGeneratedImages([...previous, ...output]);
       finishGenerationProgress(true, "同图清晰版已生成并追加到预览。原图仍保留。 ");
-      status.textContent = `完成：${name} 的 1.5× 清晰版（${model}）已追加到预览，原图仍保留。`;
+      status.textContent = `完成：${name} 的 ${ratio}× 清晰版（${label}）已追加到预览，原图仍保留。`;
       loadOutputImages();
-      loadClarityHistory();
+      loadClarityCatalog();
+      return true;
     } catch (error) {
       finishGenerationProgress(false, error.message);
       status.textContent = "生成清晰版失败：" + error.message;
+      return false;
     } finally {
       button.textContent = oldLabel;
+      button.disabled = false;
+    }
+  }
+
+  // 主界面：沿用原来的行为——只处理本次生成、默认放大模型、1.5×。
+  window.generateSelectedClarityVersion = async function () {
+    if (clarityBusy) return;
+    const select = byId("clarityUpscaleTarget");
+    const button = byId("clarityUpscaleButton");
+    const status = byId("clarityUpscaleStatus");
+    const name = select?.value || "";
+    if (!name || !button || !status) return;
+    clarityBusy = true;
+    try {
+      await runClarityUpscale({
+        name, engine: "upscale",
+        model: clarityModelOptions.default || (clarityModelOptions.models[0] || ""),
+        scale: 1.5, button, status,
+      });
+    } finally {
+      clarityBusy = false;
       refreshClarityTargets();
+    }
+  };
+
+  // 抽屉：可选任意图、换增强方式、改倍率。
+  window.generateDrawerClarityVersion = async function () {
+    if (clarityBusy) return;
+    const target = byId("clarityDrawerTarget");
+    const engine = byId("clarityDrawerEngine")?.value || "upscale";
+    const modelSelect = byId("clarityUpscaleModel");
+    const scaleInput = byId("clarityDrawerScale");
+    const button = byId("clarityDrawerButton");
+    const status = byId("clarityDrawerStatus");
+    const name = target?.value || "";
+    if (!name || !button || !status) return;
+    clarityBusy = true;
+    try {
+      await runClarityUpscale({
+        name, engine, model: modelSelect?.value || "",
+        scale: scaleInput?.value || 1.5, button, status,
+      });
+    } finally {
+      clarityBusy = false;
     }
   };
 

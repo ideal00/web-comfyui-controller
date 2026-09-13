@@ -22,7 +22,7 @@ class ClarityAnalysisTests(unittest.TestCase):
 
     def test_clarity_panel_is_automatic_and_can_be_retested(self):
         for marker in (
-            "/assets/js/clarity-analysis.js?v=3",
+            "/assets/js/clarity-analysis.js?v=4",
             'id = "clarityAnalysisPanel"',
             "自动清晰度检测",
             "重新检测",
@@ -56,14 +56,66 @@ class ClarityAnalysisTests(unittest.TestCase):
             self.assertIn(marker, self.script)
 
     def test_clarity_panel_offers_history_images_and_model_choice(self):
-        """可以直接选之前生成的图，并且放大模型可换。"""
+        """抽屉里可以直接选之前生成的图，并且增强方式/模型/倍率都能选。"""
 
         for marker in (
-            "clarityUpscaleModel", "/api/upscale-models", "历史输出", "optgroup",
-            "clarityUpscalePreview", "loadClarityHistory", "loadClarityModels",
-            "body: JSON.stringify({ name, scale: 1.5, model })",
+            "clarityDrawerPanel", "studioToolDrawerContent", "clarityDrawerTarget",
+            "clarityDrawerEngine", "clarityDrawerScale", "clarityUpscaleModel",
+            "/api/upscale-models", "历史输出", "optgroup", "clarityUpscalePreview",
+            "loadClarityCatalog", "generateDrawerClarityVersion",
         ):
             self.assertIn(marker, self.script)
+
+    def test_main_panel_stays_simple(self):
+        """主界面保持原样：只处理本次生成的图，不带模型/倍率控件。"""
+
+        self.assertIn("— 当前没有生成图片 —", self.script)
+        self.assertNotIn("clarityUpscaleTarget\", \"clarityUpscalePreview", self.script)
+        self.assertNotIn('id="clarityUpscaleModel" aria-label="选择放大模型"', self.script)
+
+    def test_clarity_seedvr2_engine_builds_seedvr2_graph(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "easy_panel"
+            source.mkdir(parents=True)
+            Image.new("RGB", (512, 768), (10, 20, 30)).save(source / "source.png")
+            with patch.object(easy_panel, "COMFY_INPUT", Path(folder)), \
+                 patch.object(easy_panel, "prepare_generation_image",
+                              return_value="easy_panel/source.png"):
+                workflow = easy_panel.build_clarity_upscale_workflow(
+                    {"name": "source.png", "scale": 1.25, "engine": "seedvr2"})
+        nodes = workflow["prompt"]
+        classes = [node["class_type"] for node in nodes.values()]
+        self.assertIn("SeedVR2Preprocess", classes)
+        self.assertIn("SeedVR2PostProcessing", classes)
+        self.assertNotIn("UpscaleModelLoader", classes)
+        self.assertEqual(nodes["2"]["inputs"]["width"], 640)
+        self.assertEqual(nodes["2"]["inputs"]["height"], 960)
+        self.assertEqual(nodes["10"]["inputs"]["color_correction_method"], "lab")
+
+    def test_clarity_scale_can_go_up_to_4x(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "easy_panel"
+            source.mkdir(parents=True)
+            Image.new("RGB", (512, 768), (10, 20, 30)).save(source / "source.png")
+            with patch.object(easy_panel, "COMFY_INPUT", Path(folder)), \
+                 patch.object(easy_panel, "prepare_generation_image",
+                              return_value="easy_panel/source.png"):
+                workflow = easy_panel.build_clarity_upscale_workflow({"name": "source.png", "scale": 9})
+        resize = workflow["prompt"]["4"]["inputs"]
+        self.assertEqual((2048, 3072), (resize["width"], resize["height"]))
+
+    def test_upscale_catalog_reports_seedvr2_readiness(self):
+        info = {"UpscaleModelLoader": {"input": {"required": {"model_name": [["m.pth"]]}}},
+                "SeedVR2Preprocess": {}, "SeedVR2Conditioning": {}, "SeedVR2PostProcessing": {}}
+        with patch.object(easy_panel, "comfy_json", return_value=info):
+            catalog = easy_panel.upscale_model_catalog()
+        self.assertTrue(catalog["seedvr2"]["ready"])
+        self.assertEqual(catalog["seedvr2"]["model"], easy_panel.SEEDVR2_MODEL)
+
+    def test_unknown_engine_falls_back_to_upscale(self):
+        self.assertEqual(easy_panel.clarity_upscale_engine({"engine": "nope"}), "upscale")
+        self.assertEqual(easy_panel.clarity_upscale_engine({}), "upscale")
+        self.assertEqual(easy_panel.clarity_upscale_engine({"engine": "SEEDVR2"}), "seedvr2")
 
     def test_clarity_uses_the_selected_upscale_model(self):
         with patch.object(easy_panel, "prepare_generation_image", return_value="easy_panel/source.png"):
@@ -121,7 +173,7 @@ class ClarityAnalysisTests(unittest.TestCase):
         ])
         self.assertNotIn("KSampler", classes)
         self.assertEqual(nodes["4"]["inputs"]["scale_by"], 0.375)
-        self.assertEqual(nodes["5"]["inputs"]["filename_prefix"], "EasyPanel_Clarity")
+        self.assertEqual(nodes["save"]["inputs"]["filename_prefix"], "EasyPanel_Clarity")
 
     def test_runtime_and_installer_payload_match(self):
         self.assertEqual(

@@ -255,6 +255,34 @@
     const workflowHeading = byId("illustriousPanel")?.querySelector("h3");
     if (workflowHeading) workflowHeading.textContent = "SDXL / Illustrious 精准生成";
     const hiresControls = byId("hiresControls");
+    if (hiresControls && !byId("hiresStrengthPanel")) {
+      const block = document.createElement("div");
+      block.id = "hiresStrengthPanel";
+      block.className = "hires-strength-panel";
+      block.innerHTML = `
+        <div class="field-title"><span>二采质量档位</span>${help("二采只补细节、不重新构图。档位 = 重绘幅度的推荐区间：保真 0.15–0.20 保留首采结构与脸；均衡 0.20–0.26 常规成图；重绘 0.27–0.35 允许改服装褶皱与局部结构。")}</div>
+        <div class="hires-tier-row">
+          <button type="button" class="secondary" data-tier="faithful" onclick="applyHiresTier('faithful')">保真 0.15–0.20</button>
+          <button type="button" class="secondary" data-tier="balanced" onclick="applyHiresTier('balanced')">均衡 0.20–0.26</button>
+          <button type="button" class="secondary" data-tier="redraw" onclick="applyHiresTier('redraw')">重绘 0.27–0.35</button>
+        </div>
+        <div class="hires-strength">
+          <div class="hires-strength-head"><b id="hiresStrengthValue">0.25</b><span id="hiresStrengthTier" class="small">均衡</span></div>
+          <div class="hires-strength-track"><div id="hiresStrengthFill" class="hires-strength-fill"></div><span class="hires-strength-zero" style="left:17%">0.15</span><span class="hires-strength-zero" style="left:83%">0.35</span></div>
+          <div id="hiresStrengthNote" class="small"></div>
+        </div>`;
+      hiresControls.insertBefore(block, hiresControls.firstChild);
+      byId("hiresDenoise")?.addEventListener("input", () => window.renderHiresStrength());
+      window.renderHiresStrength();
+      if (!window.__hiresStrengthTimer) {
+        // 换模型会按预设改写重绘幅度，这里跟着刷新档位与提示。
+        window.__hiresStrengthTimer = setInterval(() => {
+          const panel = byId("hiresStrengthPanel");
+          if (!panel || panel.offsetParent === null) return;
+          window.renderHiresStrength();
+        }, 900);
+      }
+    }
     if (hiresControls && !byId("hiresSampler")) {
       const row = document.createElement("div");
       row.className = "two";
@@ -294,6 +322,57 @@
       size.add(new Option("Krea 2 超清方图 2048 × 2048", "2048x2048"));
     }
   }
+
+  window.hiresTierOf = function (value) {
+    if (value < 0.15) {
+      return { id: "conservative", label: "偏保守",
+               note: "低于保真区间：细节可能补得不够；想要更清楚可以升到 0.15–0.20。" };
+    }
+    if (value <= 0.20) {
+      return { id: "faithful", label: "保真",
+               note: "✓ 构图稳定　✓ 角色一致性高　✓ 细节增强" };
+    }
+    if (value <= 0.26) {
+      return { id: "balanced", label: "均衡",
+               note: "✓ 构图基本保持　✓ 细节明显增强　• 衣物纹理可能轻微变化" };
+    }
+    if (value <= 0.35) {
+      return { id: "redraw", label: "重绘",
+               note: "⚠ 已进入明显重绘区间，可能改变：脸 / 发型 / 手 / 服装褶皱 / 背景" };
+    }
+    return { id: "regenerate", label: "接近重生成",
+             note: "⚠⚠ 超过 0.35：构图与人物也可能变；建议降回 0.35 以内，或直接用精准模式重画。" };
+  };
+
+  window.renderHiresStrength = function () {
+    const input = byId("hiresDenoise");
+    if (!byId("hiresStrengthPanel")) return;
+    const value = Math.max(0, Math.min(1, Number(input?.value || 0.25)));
+    const tier = window.hiresTierOf(value);
+    const percent = Math.max(0, Math.min(100, ((value - 0.10) / 0.30) * 100));
+    if (byId("hiresStrengthValue")) byId("hiresStrengthValue").textContent = value.toFixed(2);
+    if (byId("hiresStrengthTier")) byId("hiresStrengthTier").textContent = tier.label;
+    if (byId("hiresStrengthNote")) byId("hiresStrengthNote").textContent = tier.note;
+    const panel = byId("hiresStrengthPanel");
+    if (panel) {
+      panel.dataset.tier = tier.id;
+      panel.querySelectorAll("button[data-tier]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.tier === tier.id);
+      });
+    }
+    const fill = byId("hiresStrengthFill");
+    if (fill) fill.style.width = percent.toFixed(1) + "%";
+  };
+
+  window.applyHiresTier = function (tier) {
+    const presets = { faithful: 0.18, balanced: 0.23, redraw: 0.30 };
+    const value = presets[tier];
+    const input = byId("hiresDenoise");
+    if (value === undefined || !input) return;
+    input.value = String(value);
+    window.renderHiresStrength();
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
 
   function syncSourceLink() {
     const target = byId("advancedSource");

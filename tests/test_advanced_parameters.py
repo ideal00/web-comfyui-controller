@@ -737,6 +737,37 @@ class SamplingProfileTests(unittest.TestCase):
             self.assertEqual(1, len(self.nodes_of(nodes, class_type)))
 
 
+class HiresTierPanelTests(unittest.TestCase):
+    """二采质量档位与强度预览（纯前端接线）。"""
+
+    def setUp(self):
+        self.script = (MODULE_PATH.parent / "web/assets/js/model-advanced.js").read_text(encoding="utf-8")
+
+    def test_tiers_and_strength_preview_are_wired(self):
+        for marker in (
+            "hiresStrengthPanel", "hiresTierOf", "renderHiresStrength", "applyHiresTier",
+            "保真 0.15–0.20", "均衡 0.20–0.26", "重绘 0.27–0.35",
+        ):
+            self.assertIn(marker, self.script)
+
+    def test_tier_notes_explain_the_expected_impact(self):
+        for marker in (
+            "构图稳定", "角色一致性高", "细节增强",
+            "已进入明显重绘区间", "脸 / 发型 / 手 / 服装褶皱 / 背景",
+            "超过 0.35",
+        ):
+            self.assertIn(marker, self.script)
+
+    def test_tier_presets_sit_inside_their_ranges(self):
+        self.assertIn("faithful: 0.18", self.script)
+        self.assertIn("balanced: 0.23", self.script)
+        self.assertIn("redraw: 0.30", self.script)
+
+    def test_default_denoise_is_in_the_balanced_tier(self):
+        html = (MODULE_PATH.parent / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="hiresDenoise" type="number" min="0.05" max="1.00" step="0.05" value="0.25"', html)
+
+
 class BatchQueueTests(unittest.TestCase):
     def test_twenty_two_tasks_with_three_images_expand_to_sixty_six(self):
         jobs = [{"prompt": f"task {index}", "batchCount": 3, "seed": str(1000 + index * 10)}
