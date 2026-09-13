@@ -323,7 +323,7 @@ function snapshotGeneration(
   const scalarKeys = [
     'steps', 'cfg', 'sampler', 'scheduler', 'hiresScale', 'hiresDenoise', 'hiresSteps',
     'hiresCfg', 'hiresSampler', 'hiresScheduler', 'hiresPromptMode', 'hiresPositive',
-    'hiresNegative', 'hiresCompositionLock', 'styleFamily', 'illustriousMode',
+    'hiresNegative', 'hiresPurpose', 'hiresCompositionLock', 'styleFamily', 'illustriousMode',
   ] as const
   for (const key of scalarKeys) {
     const value = payload[key] ?? sourceGeneration[key] ?? enhancements[key]

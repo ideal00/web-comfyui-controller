@@ -62,7 +62,9 @@ export interface VisualGenerationSettings {
   /** Extra detail terms for the hi-res pass (append) or the full prompt (replace). */
   hiresPositive?: string
   hiresNegative?: string
-  /** Keeps the first-stage framing: the hi-res denoise is capped at 0.35. */
+  /** 二采目的：preserve / enhance（默认）/ redraw，决定 denoise 上限（0.23 / 0.26 / 0.35）。 */
+  hiresPurpose?: string
+  /** Keeps the first-stage framing: only blocks large framing changes; the denoise cap follows hiresPurpose. */
   hiresCompositionLock?: boolean
   loras?: Array<{ name: string; weight?: number | string }>
   characterLoras?: Array<{ name: string; weight?: number | string }>
