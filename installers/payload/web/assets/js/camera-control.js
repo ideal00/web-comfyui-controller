@@ -24,6 +24,10 @@
   ];
 
   let previewTimer = 0;
+  let quickPreviewTimer = 0;
+  let quickPreviewBusy = false;
+  let quickPreviewSeed = null;
+  let quickPreviewCount = 0;
 
   function escapeHtml(value) {
     const node = document.createElement("span");
@@ -72,6 +76,12 @@
           <div><div class="field-title"><span>挂载</span></div><div class="actions"><button type="button" class="secondary" onclick="cameraControlMountLora()">挂载机位 LoRA</button><button type="button" class="secondary" onclick="cameraControlReset()">重置滑杆</button></div></div>
         </div>
         <div id="cameraControlStatus" class="small"></div>
+        <div class="field-title" style="margin-top:8px"><span>快速预览（松手自动出图）</span></div>
+        <label class="switch"><input id="cameraControlAutoPreview" type="checkbox"><div><b>拖动结束后自动跑一张预览图</b><div class="small">停止拖动约 1.5 秒后，按当前机位跑一张低步数图（同一 Seed 便于对比，只跑首采）；会占用算力，图片按 <code>EasyPanel_camPreview</code> 前缀保存，可在作品库删除。</div></div></label>
+        <div class="two" style="margin-top:6px">
+          <div><div class="field-title"><span>预览步数</span></div><input id="cameraControlPreviewSteps" type="number" min="4" max="30" step="1" value="8"></div>
+          <div><div class="field-title"><span>手动</span></div><div class="actions"><button type="button" class="secondary" onclick="cameraControlQuickPreview(true)">立即预览</button></div></div>
+        </div>
       </div>`;
     anchor.appendChild(block);
     byId("cameraControlEnabled")?.addEventListener("change", cameraControlRefresh);
@@ -311,7 +321,63 @@
     updateCameraControlHint();
     if (window.promptEditorChanged) window.promptEditorChanged();
     scheduleCameraPreview();
+    scheduleQuickPreview();
   }
+
+  // 松手后的低步数预览：拖完就出一张图，效果上就是“调机位→图片跟着变”。
+  function cameraAutoPreviewEnabled() {
+    return byId("cameraControlAutoPreview")?.checked === true
+      && byId("cameraControlEnabled")?.checked === true
+      && cameraCapable();
+  }
+
+  function scheduleQuickPreview() {
+    if (!cameraAutoPreviewEnabled() || quickPreviewBusy) return;
+    clearTimeout(quickPreviewTimer);
+    quickPreviewTimer = setTimeout(() => window.cameraControlQuickPreview(false), 1500);
+  }
+
+  window.cameraControlQuickPreview = async function () {
+    if (quickPreviewBusy || !byId("model")?.value) return;
+    const steps = Math.max(4, Math.min(30, Number(byId("cameraControlPreviewSteps")?.value || 8)));
+    quickPreviewBusy = true;
+    const status = byId("cameraControlStatus");
+    if (status) status.textContent = "正在跑低步数预览…";
+    try {
+      const data = window.payload();
+      data.steps = steps;
+      if (quickPreviewSeed == null) {
+        const current = Number(byId("seed")?.value);
+        quickPreviewSeed = Number.isFinite(current) && current > 0
+          ? current
+          : Math.floor(Math.random() * 2 ** 31);
+      }
+      data.seed = quickPreviewSeed;
+      data.filenamePrefix = "EasyPanel_camPreview";
+      // 预览只跑首采：关掉高清/细节增强/输出增强，避免每次拖动排长链。
+      if (data.hires && typeof data.hires === "object") data.hires = { ...data.hires, enabled: false };
+      delete data.animaHighres;
+      delete data.animaDetailRefine;
+      delete data.outputEnhancement;
+      if (data.illustriousMode) data.illustriousMode = "precision";
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      if (result.error) throw new Error(result.error);
+      if (window.registerGenerationPrompt) window.registerGenerationPrompt(result.prompt_id, result.plan);
+      const images = await window.poll(result.prompt_id);
+      if (window.renderGeneratedImages) window.renderGeneratedImages(images);
+      quickPreviewCount += 1;
+      if (status) status.textContent = `预览 #${quickPreviewCount} 完成（步数 ${steps}，Seed ${quickPreviewSeed}）。`;
+    } catch (error) {
+      if (status) status.textContent = "预览失败：" + error.message;
+    } finally {
+      quickPreviewBusy = false;
+    }
+  };
 
   // 机位词只是指令，真正执行转向的是配套 LoRA；没挂时直接提醒，别生成完才发现没效果。
   function updateCameraControlHint() {
@@ -421,6 +487,7 @@
     if (typeof original !== "function" || original.__cameraControlWrapped) return;
     const wrapped = function (...args) {
       const result = original.apply(this, args);
+      quickPreviewSeed = null;
       window.cameraControlSyncVisibility();
       cameraControlRefresh();
       return result;
