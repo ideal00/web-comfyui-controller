@@ -83,6 +83,8 @@ export interface VisualGenerationSettings {
   animaDetailRefine?: Record<string, unknown>
   /** Anima 高清重建（Anime6B 放大 + 二采）：{ enabled, scale, denoise, steps, cfg }。 */
   animaHighres?: Record<string, unknown>
+  /** 相机机位控制（BSK 语义）：{ enabled, x, y, z, roll }，需搭配机位 LoRA。 */
+  cameraControl?: Record<string, unknown>
   repair?: Record<string, unknown>
   img2img?: Record<string, unknown>
   pose?: Record<string, unknown>

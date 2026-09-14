@@ -345,7 +345,7 @@ function snapshotGeneration(
   for (const key of [
     'characterLoras', 'styleLoras', 'guidance', 'vae', 'modelEnhancement', 'transparentBackground',
     'colorCorrection', 'outputEnhancement', 'repair', 'img2img', 'pose', 'depth', 'animaDetailRefine',
-    'animaHighres',
+    'animaHighres', 'cameraControl',
   ] as const) {
     const value = payload[key] ?? enhancements[key] ?? (key === 'vae' ? source.vae : undefined)
     if (value && typeof value === 'object' && !Array.isArray(value)) result[key] = value as never

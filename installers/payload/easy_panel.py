@@ -48,6 +48,7 @@ from easy_panel_app.anima_refine import (
     merge_anima_detail_prompt,
     normalize_anima_detail_refine,
 )
+from easy_panel_app import camera_control
 from easy_panel_app.config import (
     ANIMA_TAG_DATA,
     CHECKPOINT_DIR,
@@ -2268,6 +2269,12 @@ def compile_prompt(data: dict) -> dict:
     natural_language = sections["naturalLanguage"].strip()
     if natural_language:
         source("naturalLanguage", "自然语言关系", "positive", True, [natural_language])
+    camera_terms = camera_control.prompt_terms(data)
+    if camera_terms:
+        # 机位控制：滑杆值折算成加权相机词（from left / eye-level / close-up …），
+        # 与 BSK_相机控制 节点同语义，但由面板滑杆直接给出，不依赖外部插件。
+        source("cameraControl", "机位控制（BSK 相机）", "positive", True, camera_terms)
+        extend(camera_terms)
     positive = ", ".join(ordered)
     if natural_language:
         positive = positive.rstrip(" .") + ". " + natural_language
@@ -5983,7 +5990,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/camera-prompt", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -6280,6 +6287,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(illustrious_preflight(data))
             elif self.path == "/api/prompt-compile":
                 self.send_json(compile_prompt(data))
+            elif self.path == "/api/camera-prompt":
+                self.send_json(camera_control.preview_response(data))
             elif self.path == "/api/preview-pose":
                 self.send_json(comfy_json("/prompt", "POST", build_pose_preview_workflow(data)))
             elif self.path == "/api/clarity-upscale":
