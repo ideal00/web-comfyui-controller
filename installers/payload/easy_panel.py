@@ -36,6 +36,11 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from easy_panel_app.anima_highres import normalize_anima_highres
+from easy_panel_app.generation_errors import (
+    STAGE_LABELS,
+    friendly_comfy_error,
+    friendly_error_text,
+)
 from easy_panel_app.anima_refine import (
     REFINE_MODE_LABELS,
     build_anima_detail_refine,
@@ -736,6 +741,51 @@ def _comfy_error_text(status: dict) -> str:
     return "ComfyUI 执行失败。"
 
 
+def generation_plan(workflow: dict) -> dict:
+    """从工作流节点表推导阶段计划（节点 id → 用户可读阶段），供前端进度条显示。
+
+    阶段名只是展示层：首采采样 / 高清二采 / 细节重绘 / 输出增强采样。
+    """
+
+    nodes = (workflow or {}).get("prompt") if isinstance(workflow, dict) else None
+    if not isinstance(nodes, dict):
+        return {"stages": {}, "samplers": {}, "samplerOrder": []}
+    upscale_types = {"UpscaleModelLoader", "ImageUpscaleWithModel", "UltimateSDUpscale"}
+    has_upscale = any(isinstance(node, dict) and str(node.get("class_type")) in upscale_types
+                      for node in nodes.values())
+    stages: dict[str, str] = {}
+    samplers: dict[str, int] = {}
+    sampler_order: list[str] = []
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        if class_type in {"KSampler", "KSamplerAdvanced"}:
+            steps = int(bounded(inputs.get("steps"), 20, 1, 400))
+            cfg_value = bounded(inputs.get("cfg"), 5.0, 0.0, 100.0, integer=False)
+            denoise = bounded(inputs.get("denoise"), 1.0, 0.0, 1.0, integer=False)
+            index = len(sampler_order)
+            sampler_order.append(str(node_id))
+            samplers[str(node_id)] = steps
+            if index == 0:
+                label = "首采采样"
+            elif steps <= 2 and cfg_value <= 1.0:
+                label = "输出增强采样"
+            elif denoise < 0.999:
+                label = "高清二采" if (has_upscale and index == 1) else (
+                    "细节重绘" if index == 1 else "二次采样")
+            else:
+                label = f"采样 {index + 1}"
+            stages[str(node_id)] = label
+            continue
+        label = STAGE_LABELS.get(class_type)
+        if not label:
+            continue
+        stages[str(node_id)] = label
+    return {"stages": stages, "samplers": samplers, "samplerOrder": sampler_order}
+
+
 TRANSPARENT_DETAIL_METHODS = ("GuidedFilter", "PyMatting", "VITMatte", "VITMatte(local)",
                               "vitmatte-base-composition-1k")
 TRANSPARENT_PRESETS = ("fast", "detail", "tight")
@@ -903,7 +953,8 @@ def task_comfy_probe(prompt_id: str) -> tuple[str, dict]:
         status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
         state = str(status.get("status_str") or "").casefold()
         if state == "error":
-            return "error", {"error": _comfy_error_text(status)}
+            friendly = friendly_comfy_error({"status": status})
+            return "error", {"error": friendly_error_text(friendly), "friendlyError": friendly}
         if state in {"success", "completed"}:
             return "completed", {"images": _comfy_history_images(entry)}
         return "running", {}
@@ -5735,7 +5786,14 @@ class Handler(BaseHTTPRequestHandler):
                 job = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
                 if not re.fullmatch(r"[0-9a-f-]{36}", job):
                     raise ValueError("无效任务编号。")
-                self.send_json(comfy_json("/history/" + job))
+                history = comfy_json("/history/" + job)
+                for entry in (history or {}).values():
+                    if not isinstance(entry, dict):
+                        continue
+                    status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+                    if str(status.get("status_str") or "").lower() == "error":
+                        entry["friendlyError"] = friendly_comfy_error(entry)
+                self.send_json(history)
             elif parsed.path == "/api/tasks":
                 self.send_json(task_queue_snapshot())
             elif parsed.path == "/output":
@@ -6133,6 +6191,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "image_count": item["image_count"],
                                       "prompt_id": prompt_id, "snapshot_id": snapshot["id"],
                                       "label": snapshot["label"],
+                                      "plan": generation_plan(item["workflow"]),
                                       **({"generation_id": indexed["generation_id"]}
                                          if indexed.get("generation_id") else {})})
                 self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
@@ -6155,7 +6214,8 @@ class Handler(BaseHTTPRequestHandler):
                             "message": "发现完全相同的生成任务，已跳过。",
                         })
                         return
-                result = comfy_json("/prompt", "POST", build_workflow(data))
+                workflow = build_workflow(data)
+                result = comfy_json("/prompt", "POST", workflow)
                 snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""))
                 indexed = index_snapshot_best_effort(
                     snapshot,
@@ -6165,6 +6225,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({
                     **result,
                     "snapshot_id": snapshot["id"],
+                    "plan": generation_plan(workflow),
                     **({"generation_id": indexed["generation_id"]}
                        if indexed.get("generation_id") else {}),
                 })

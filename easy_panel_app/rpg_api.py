@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 from easy_panel_app.config import ROOT
+from easy_panel_app.generation_errors import friendly_comfy_error, friendly_error_text
 from easy_panel_app.media_storage import is_hires_base_filename, split_hires_outputs
 from easy_panel_app.prompt_utils import unique_prompt_terms
 
@@ -585,8 +586,10 @@ def history_to_rpg_status(prompt_id: str, history: Mapping[str, Any]) -> Dict[st
     status = job.get("status") if isinstance(job.get("status"), Mapping) else {}
     if str(status.get("status_str", "")).lower() == "error":
         result["status"] = "error"
-        messages = status.get("messages")
-        result["error"] = messages if isinstance(messages, list) else "ComfyUI 执行失败。"
+        # 手机端与桌面共用同一套用户可读解释（generation_errors）。
+        friendly = friendly_comfy_error({"status": status})
+        result["error"] = friendly_error_text(friendly) or "ComfyUI 执行失败。"
+        result["error_detail"] = friendly
         return result
     outputs = job.get("outputs") if isinstance(job.get("outputs"), Mapping) else {}
     images: List[Dict[str, Any]] = []
