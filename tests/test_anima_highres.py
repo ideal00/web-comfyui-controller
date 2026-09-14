@@ -211,6 +211,22 @@ class AnimaHighresUiTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
 
+    def test_custom_prompt_has_paste_and_clear_buttons(self):
+        """自定义二采提示词与提示词分区一致：可一键粘贴/清除。"""
+
+        script = (PROJECT_DIR / "web/assets/js/anima-highres.js").read_text(encoding="utf-8")
+        self.assertIn('id="animaHighresCustomPaste"', script)
+        self.assertIn('id="animaHighresCustomClear"', script)
+        self.assertIn('class="prompt-section-paste"', script)
+        self.assertIn('class="prompt-section-clear"', script)
+        self.assertIn('onclick="animaHighresCustomPaste()"', script)
+        self.assertIn('onclick="animaHighresCustomClear()"', script)
+        self.assertIn("window.animaHighresCustomPaste = async function", script)
+        self.assertIn("window.animaHighresCustomClear = function", script)
+        # 粘贴/清除后必须走一次刷新，让二采参数与校验同步。
+        self.assertIn("已从剪贴板填入自定义二采提示词。", script)
+        self.assertIn("已清空自定义二采提示词。", script)
+
     def test_panel_reads_anima_highres_for_output_size(self):
         panel_js = (PROJECT_DIR / "web/assets/js/panel.js").read_text(encoding="utf-8")
         self.assertIn("animaHighresEnabled", panel_js)

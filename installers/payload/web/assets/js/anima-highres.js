@@ -163,6 +163,7 @@
           <option value="custom">自定义二采提示词</option>
         </select>
         <div id="animaHighresCustomWrap" style="display:none;margin-top:6px">
+          <div class="field-title"><span class="prompt-section-label">自定义二采提示词<button class="prompt-section-clear" id="animaHighresCustomClear" type="button" onclick="animaHighresCustomClear()">清除</button><button class="prompt-section-paste" id="animaHighresCustomPaste" type="button" onclick="animaHighresCustomPaste()">粘贴</button></span></div>
           <textarea id="animaHighresCustom" rows="2" placeholder="自定义二采提示词：首采描述不再参与，建议写清角色与构图，再补细节词" oninput="animaHighresRefresh()"></textarea>
           <div class="small">自定义 = 二采只用这里的文本（替换模式）；不确定时请用「继承 + 自动细节词」。</div>
         </div>
@@ -324,6 +325,38 @@
     if (wrap) wrap.style.display = scope === "custom" ? "block" : "none";
     pushToHiresControls();
     if (!silent) animaHighresRefresh();
+  };
+
+  // 与提示词分区的粘贴/清除保持一致，但提示写到 tokenHint（无则写 status）。
+  // 这里只改文本框，仍然经 animaHighresRefresh() 走一遍参数校验与同步。
+  function highresCustomHint(text) {
+    const hint = byId("tokenHint") || byId("status");
+    if (hint) hint.textContent = text;
+  }
+
+  window.animaHighresCustomPaste = async function () {
+    const field = byId("animaHighresCustom");
+    if (!field) return;
+    try {
+      if (!navigator.clipboard?.readText) throw new Error("no clipboard");
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) { highresCustomHint("剪贴板中没有可粘贴的文字。"); return; }
+      field.value = text;
+      window.animaHighresRefresh();
+      field.focus();
+      highresCustomHint("已从剪贴板填入自定义二采提示词。");
+    } catch (error) {
+      highresCustomHint("无法读取剪贴板：请允许此页面访问剪贴板，或在输入框中按 Ctrl+V。");
+    }
+  };
+
+  window.animaHighresCustomClear = function () {
+    const field = byId("animaHighresCustom");
+    if (!field) return;
+    field.value = "";
+    window.animaHighresRefresh();
+    field.focus();
+    highresCustomHint("已清空自定义二采提示词。");
   };
 
   window.animaHighresRefresh = function () {

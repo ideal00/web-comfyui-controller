@@ -12,6 +12,7 @@ import ipaddress
 import io
 import mimetypes
 import os
+import queue
 import random
 import re
 import secrets
@@ -77,6 +78,7 @@ from easy_panel_app.integrations.ai import (
     validated_ai_endpoint,
 )
 from easy_panel_app.integrations.comfy_client import comfy_json
+from easy_panel_app.comfy_progress_hub import ComfyProgressHub
 from easy_panel_app.image_ops import apply_color_correction
 from easy_panel_app.lora_sidecars import atomic_write_notes, classify_lora_note_outfits, merge_note, parse_lora_sidecar, read_text_smart
 from easy_panel_app.media_storage import (
@@ -561,6 +563,18 @@ _TASK_QUEUE: TaskQueue | None = None
 _TASK_RUNNER: TaskQueueRunner | None = None
 # 必须可重入：start_task_queue_runner() 会在持锁时再调用 task_queue() 取同一个队列实例。
 _TASK_QUEUE_LOCK = threading.RLock()
+_COMFY_PROGRESS_HUB: ComfyProgressHub | None = None
+_COMFY_PROGRESS_HUB_LOCK = threading.Lock()
+
+
+def comfy_progress_hub() -> ComfyProgressHub:
+    """实时进度枢纽：服务端唯一上游连接，页面共享（避免多标签页互相顶掉）。"""
+
+    global _COMFY_PROGRESS_HUB
+    with _COMFY_PROGRESS_HUB_LOCK:
+        if _COMFY_PROGRESS_HUB is None:
+            _COMFY_PROGRESS_HUB = ComfyProgressHub(url_provider=comfy_websocket_url)
+        return _COMFY_PROGRESS_HUB
 
 
 def task_queue() -> TaskQueue:
@@ -5521,14 +5535,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def stream_comfy_progress(self):
-        """Relay ComfyUI WebSocket JSON as same-origin server-sent events."""
-        try:
-            import asyncio
-            import aiohttp
-        except ImportError:
-            self.send_json({"error": "当前 Python 缺少 aiohttp，无法读取实时采样进度。"},
-                           HTTPStatus.SERVICE_UNAVAILABLE)
-            return
+        """Relay the shared hub as same-origin server-sent events.
+
+        每条页面不再各连 ComfyUI（会互相顶掉 client_id 映射），而是订阅服务端维
+        持的唯一连接；接入时先补最后一帧，所以刷新页面也能立即看到当前进度。
+        """
 
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -5537,33 +5548,30 @@ class Handler(BaseHTTPRequestHandler):
         self.add_rpg_session_header()
         self.end_headers()
 
-        async def relay():
-            # build_workflow() submits prompts with this client_id. ComfyUI
-            # routes execution/progress events only to the matching socket.
-            client_id = "easy-panel"
-            separator = "&" if "?" in comfy_websocket_url() else "?"
-            target = comfy_websocket_url() + separator + urllib.parse.urlencode({"clientId": client_id})
-            timeout = aiohttp.ClientTimeout(total=None, connect=10, sock_read=None)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.ws_connect(target, heartbeat=30) as websocket:
-                    self.wfile.write(b": connected\n\n")
-                    self.wfile.flush()
-                    async for message in websocket:
-                        if message.type == aiohttp.WSMsgType.TEXT:
-                            encoded = ("data: " + message.data.replace("\n", "") + "\n\n").encode("utf-8")
-                            self.wfile.write(encoded)
-                            self.wfile.flush()
-                        elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
-                            break
-
+        hub = comfy_progress_hub()
+        hub.start()
+        channel = hub.subscribe()
         try:
-            asyncio.run(relay())
+            for frame in hub.replay_frames():
+                self.wfile.write(("data: " + frame.replace("\n", "") + "\n\n").encode("utf-8"))
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    payload = channel.get(timeout=15.0)
+                except queue.Empty:
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+                    continue
+                self.wfile.write(("data: " + str(payload).replace("\n", "") + "\n\n").encode("utf-8"))
+                self.wfile.flush()
         except CLIENT_DISCONNECT_ERRORS:
             return
         except Exception:
-            # EventSource reconnects automatically. Avoid writing a second HTTP
-            # response after the stream headers have already been sent.
+            # EventSource 会自动重连；响应头已发出，不能再写第二个响应。
             return
+        finally:
+            hub.unsubscribe(channel)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -5907,7 +5915,13 @@ class Handler(BaseHTTPRequestHandler):
                     "running": len(queue.get("queue_running", [])),
                     "pending": len(queue.get("queue_pending", [])),
                     "progress_stream": "/api/progress-stream",
+                    "progress": comfy_progress_hub().snapshot(),
                 })
+            elif parsed.path == "/api/progress":
+                # 内存快照：SSE 断流 / 多标签页抢 client_id 时，页面轮询也能拿到进度。
+                hub = comfy_progress_hub()
+                hub.start()
+                self.send_json({"ok": True, **hub.snapshot()})
             elif parsed.path == "/api/tags":
                 query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0]
                 self.send_json({"tags": search_tags(query[:100]), "total": len(TAG_INDEX)})

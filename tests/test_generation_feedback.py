@@ -254,7 +254,7 @@ class FeedbackWiringTests(unittest.TestCase):
         self.assertIn("当前：${stage}", panel)
 
         html = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("panel.js?v=69", html)
+        self.assertIn("panel.js?v=71", html)
 
     def test_stage_eta_and_chain_summary_are_wired(self):
         panel = (ROOT / "web/assets/js/panel.js").read_text(encoding="utf-8")

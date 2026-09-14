@@ -30,7 +30,12 @@ class GenerationProgressUiTests(unittest.TestCase):
         self.assertIn("markGenerationPromptComplete(id)", javascript)
         self.assertIn('parsed.path == "/api/progress-stream"', backend)
         self.assertIn('"progress_stream": "/api/progress-stream"', backend)
-        self.assertIn('client_id = "easy-panel"', backend)
+        # 提交与进度读取必须共用同一个 client_id。ComfyUI 按 client_id 投递事件，
+        # 所以这条连接现在由进度枢纽持有（多页面共享，不再各连一条互相顶掉）。
+        self.assertIn('"client_id": "easy-panel"', backend)
+        hub = (ROOT / "easy_panel_app" / "comfy_progress_hub.py").read_text(encoding="utf-8")
+        self.assertIn('client_id: str = "easy-panel"', hub)
+        self.assertIn('{"clientId": self._client_id}', hub)
 
     def test_installers_ship_the_unified_service_controller(self):
         builder = (ROOT / "installers" / "Build-Packages.ps1").read_text(encoding="utf-8")
