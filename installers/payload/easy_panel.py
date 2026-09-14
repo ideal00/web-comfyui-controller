@@ -35,6 +35,12 @@ if str(PROJECT_DIR) not in sys.path:
     # move into ``easy_panel_app``.
     sys.path.insert(0, str(PROJECT_DIR))
 
+from easy_panel_app.anima_refine import (
+    REFINE_MODE_LABELS,
+    build_anima_detail_refine,
+    merge_anima_detail_prompt,
+    normalize_anima_detail_refine,
+)
 from easy_panel_app.config import (
     ANIMA_TAG_DATA,
     CHECKPOINT_DIR,
@@ -3921,6 +3927,26 @@ def build_workflow(data: dict) -> dict:
                             "inputs": {"samples": sample_ref, "vae": vae_ref}}
 
     image_ref = [decode_id, 0]
+
+    # Anima 专属「细节重绘」：同尺寸、低 denoise 的 latent 细化，与 Illustrious 的
+    # 二次采样（hires）是两套语义。它不放大、不加 Tile，只让 Anima 在已有结构上补
+    # 高频细节；首采图另存为 _base 对照，方便与细化结果做 A/B。
+    anima_refine = normalize_anima_detail_refine(data)
+    if anima_refine["enabled"]:
+        if not anima:
+            raise ValueError("细节增强只对 Anima 模型开放；其他模型请用高清二次采样或同图清晰版。")
+        refine_nodes, refine_ref = build_anima_detail_refine(
+            alloc=alloc, image_ref=image_ref, model_ref=model_ref, vae_ref=vae_ref,
+            clip_ref=clip_ref,
+            positive_text=merge_anima_detail_prompt(base_positive, anima_refine),
+            negative_text=negative, params=anima_refine, cfg=cfg,
+            sampler_name=sampler_name, scheduler=scheduler, seed=seed,
+            base_prefix=generation_filename_prefix(data, "_base"),
+        )
+        nodes.update(refine_nodes)
+        image_ref = refine_ref
+        if color_reference_ref is None:
+            color_reference_ref = image_ref
 
     # Output enhancement is separate from generative hires. This gives Anima and
     # Krea 2 a safe post-only upscale path and reserves tiled diffusion for large

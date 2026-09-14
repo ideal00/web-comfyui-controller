@@ -77,6 +77,8 @@ export interface VisualGenerationSettings {
   transparentBackground?: Record<string, unknown>
   colorCorrection?: Record<string, unknown>
   outputEnhancement?: Record<string, unknown>
+  /** Anima 专属细节重绘（同尺寸低 denoise）；与二采互不替代。 */
+  animaDetailRefine?: Record<string, unknown>
   repair?: Record<string, unknown>
   img2img?: Record<string, unknown>
   pose?: Record<string, unknown>
