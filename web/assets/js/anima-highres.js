@@ -5,10 +5,9 @@
  *   细节增强      → 同尺寸低 denoise 润色（不改尺寸，见 anima-refine.js）
  *   高清重建      → Anime6B 超分 → 缩放回目标倍率 → Anima 二采（本脚本）
  *
- * 参数范围与后端 easy_panel_app/anima_highres.py 保持一致：
- * 倍率 1.15–2.0、denoise 0.20–0.30（默认 1.5× / 0.25 / 20 步），长边上限 2560。
- * 所有数值都同步写入现有一整套 #hires* 控件（payload 的唯一来源），
- * 本面板只负责 Anima 友好的档位与文案；仅在 Anima 模型下显示。
+ * 参数范围不再写在本文件：统一读能力契约 profile.constraints.highres_reconstruction
+ * （model_profiles.FAMILY_CONSTRAINTS → /api/models → window.currentSamplingProfile）。
+ * 这里的 FALLBACK_LIMITS 仅作为 catalog 未就绪时的兑底。
  */
 (function () {
   "use strict";
@@ -28,12 +27,62 @@
     "fine individual hair strands, refined fabric folds, detailed clothing texture, " +
     "clean line details, small accessory details, crisp facial features";
 
-  const RANGES = {
+  // catalog 未就绪时的兑底（正常路径一律走约束契约）。
+  const FALLBACK_LIMITS = {
     scale: { min: 1.15, max: 2.0, step: 0.05 },
     denoise: { min: 0.20, max: 0.30, step: 0.01 },
     steps: { min: 6, max: 40, step: 1 },
     cfg: { min: 1, max: 10, step: 0.1 },
+    max_long_edge: 2560,
+    upscalers: ["RealESRGAN_x4plus_anime_6B.pth"],
   };
+
+  function highresConstraints() {
+    try {
+      const profile = window.currentSamplingProfile ? window.currentSamplingProfile() : null;
+      const value = profile && profile.constraints ? profile.constraints.highres_reconstruction : null;
+      if (value && typeof value === "object") return value;
+    } catch (error) { /* 回退到兑底常量 */ }
+    return {};
+  }
+
+  function constraintPair(value, fallback) {
+    if (Array.isArray(value) && value.length === 2 && Number.isFinite(Number(value[0]))
+        && Number.isFinite(Number(value[1]))) {
+      return { min: Number(value[0]), max: Number(value[1]) };
+    }
+    return { min: fallback.min, max: fallback.max };
+  }
+
+  function rangeLimits() {
+    const contract = highresConstraints();
+    return {
+      scale: { ...constraintPair(contract.scale, FALLBACK_LIMITS.scale), step: FALLBACK_LIMITS.scale.step },
+      denoise: { ...constraintPair(contract.denoise, FALLBACK_LIMITS.denoise), step: FALLBACK_LIMITS.denoise.step },
+      steps: { ...constraintPair(contract.steps, FALLBACK_LIMITS.steps), step: FALLBACK_LIMITS.steps.step },
+      cfg: { ...constraintPair(contract.cfg, FALLBACK_LIMITS.cfg), step: FALLBACK_LIMITS.cfg.step },
+    };
+  }
+
+  function allowedUpscalers() {
+    const value = highresConstraints().allowed_upscalers;
+    if (Array.isArray(value) && value.length) return value.map(String);
+    return FALLBACK_LIMITS.upscalers;
+  }
+
+  // 把契约里的范围写回输入框（换模型 / 重启面板后立即生效，不再硬编码 min/max）。
+  function applyConstraintRanges() {
+    const limits = rangeLimits();
+    ["animaHighresScale", "animaHighresDenoise", "animaHighresSteps", "animaHighresCfg"]
+      .forEach((id) => {
+        const field = byId(id);
+        const limit = limits[id.replace("animaHighres", "").toLowerCase()];
+        if (!field || !limit) return;
+        field.min = String(limit.min);
+        field.max = String(limit.max);
+        field.step = String(limit.step);
+      });
+  }
 
   let scope = "auto";
   // 上一次已知的模型族。select 的 value 在下拉 change 之前就已经更新，所以不能
@@ -279,6 +328,7 @@
 
   window.animaHighresRefresh = function () {
     const state = window.animaHighresState();
+    applyConstraintRanges();
     const body = byId("animaHighresBody");
     if (body) body.style.display = state.enabled ? "" : "none";
     if (state.enabled) pushToHiresControls();
@@ -289,7 +339,8 @@
     if (!note) return;
     const lines = [];
     const [baseWidth, baseHeight] = String(byId("size")?.value || "864x1152").split("x").map(Number);
-    const maxLongEdge = Number(profileHires().max_long_edge || 2560) || 0;
+    const contract = highresConstraints();
+    const maxLongEdge = Number(contract.max_long_edge || FALLBACK_LIMITS.max_long_edge) || 0;
     let width = Math.max(8, Math.round((baseWidth || 864) * state.scale / 8) * 8);
     let height = Math.max(8, Math.round((baseHeight || 1152) * state.scale / 8) * 8);
     let limited = false;
@@ -306,7 +357,7 @@
       ? `请求 ${state.scale}×，受长边上限 ${maxLongEdge} 限制，实际约 ${effectiveScale.toFixed(2)}×`
       : `按 ${state.scale}× 执行`;
     lines.push(`预计输出 ${width}×${height}（${clampNote}）· 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise}。`);
-    lines.push(`超分模型：${String(profileHires().upscaler || "RealESRGAN_x4plus_anime_6B.pth").replace(".pth", "")}（已锁定）`);
+    lines.push(`超分模型：${String(allowedUpscalers()[0] || FALLBACK_LIMITS.upscalers[0]).replace(".pth", "")}（已锁定）`);
     if (!state.enabled) lines.length = 1;
     const outputMode = String(byId("outputEnhancementMode")?.value || "off");
     if (state.enabled && outputMode !== "off") {

@@ -60,6 +60,36 @@ class FriendlyErrorTests(unittest.TestCase):
                 self.assertTrue(friendly["solutions"])
                 self.assertTrue(friendly["technical"])
 
+    def test_known_errors_report_code_and_confidence(self):
+        cases = [
+            ("CUDA error: out of memory", "cuda_oom", "high"),
+            ("Value not in list: ckpt_name", "missing_file", "high"),
+            ("Cannot execute because node FaceDetailer does not exist", "missing_node", "high"),
+            ("ModuleNotFoundError: No module named 'insightface'", "plugin_import_error", "high"),
+            ("Prompt outputs failed validation: KSampler", "validation_failed", "high"),
+            ("execution interrupted", "interrupted", "high"),
+            ("RuntimeError: failed to allocate memory", "cuda_oom", "medium"),
+            ("something nobody predicted", "unknown", "low"),
+        ]
+        for message, code, confidence in cases:
+            with self.subTest(message):
+                friendly = friendly_comfy_error(error_item(message))
+                self.assertEqual(code, friendly["code"])
+                self.assertEqual(confidence, friendly["confidence"])
+
+    def test_plugin_import_error_is_not_misdiagnosed_as_missing_node(self):
+        friendly = friendly_comfy_error(error_item(
+            "ModuleNotFoundError: No module named 'segment_anything'", node_type="FaceDetailer"))
+        self.assertEqual("plugin_import_error", friendly["code"])
+        self.assertEqual("插件运行出错", friendly["title"])
+        self.assertNotEqual("missing_node", friendly["code"])
+
+    def test_cuda_runtime_error_is_not_reported_as_oom(self):
+        friendly = friendly_comfy_error(error_item(
+            "CUDA error: an illegal memory access was encountered"))
+        self.assertEqual("cuda_runtime", friendly["code"])
+        self.assertEqual("high", friendly["confidence"])
+
     def test_unknown_error_falls_back_and_keeps_node(self):
         friendly = friendly_comfy_error(error_item("some exotic failure", node="FaceDetailer"))
         self.assertEqual("生成失败", friendly["title"])
@@ -145,7 +175,23 @@ class FeedbackWiringTests(unittest.TestCase):
         self.assertIn("当前：${stage}", panel)
 
         html = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("panel.js?v=67", html)
+        self.assertIn("panel.js?v=68", html)
+
+    def test_stage_eta_and_chain_summary_are_wired(self):
+        panel = (ROOT / "web/assets/js/panel.js").read_text(encoding="utf-8")
+        self.assertIn("function stageEtaText(", panel)
+        self.assertIn("easyPanelStageTimingsV1", panel)
+        self.assertIn("recordStageDuration(", panel)
+        self.assertIn("本阶段预计还需", panel)
+
+        chain = (ROOT / "web/assets/js/generation-chain.js").read_text(encoding="utf-8")
+        self.assertIn("执行链：", chain)
+        self.assertIn("预计 ${chain.samplers} 次采样", chain)
+        self.assertIn("refreshGenerationChain", chain)
+
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="generationChainSummary"', html)
+        self.assertIn("generation-chain.js?v=1", html)
 
     def test_error_hint_labels_are_chinese(self):
         for label in STAGE_LABELS.values():

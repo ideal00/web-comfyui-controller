@@ -978,12 +978,12 @@ def task_comfy_submit(item: dict) -> dict:
             "generation_id": indexed.get("generation_id", "")}
 
 
-def wait_for_output_files(images: Any, timeout: float = 2.0) -> bool:
+def wait_for_output_files(images: Any, timeout: float = 6.0) -> tuple[bool, list[str]]:
     """等输出文件真正落盘并稳定（两轮 size/mtime 一致）。
 
-    ComfyUI 的 ``/history`` 先于文件完全写完就可能被读到，慢盘或 SeedVR2/4K 这类
-    大图尤其明显；直接索引会得到 ``exists=false`` 的假“文件丢失”。这里最多等
-    ``timeout`` 秒（默认 2 秒，每 0.2 秒复查一次），超时也不报错。
+    返回 ``(全部就绪, 超时仍不稳定的文件名列表)``。超时不等于失败：调用方会把
+    这些文件以 ``file_state='pending'`` 写入索引，之后由 reconcile 落定，而不是
+    误报“文件丢失”。默认 6 秒（SeedVR2 / 4K / 慢盘 / 网络盘都能覆盖）。
     """
 
     entries: list[tuple[str, str]] = []
@@ -996,30 +996,46 @@ def wait_for_output_files(images: Any, timeout: float = 2.0) -> bool:
         if name:
             entries.append((subfolder, name))
     if not entries:
-        return False
+        return True, []
     deadline = time.monotonic() + max(0.0, float(timeout))
     previous: dict[tuple[str, str], tuple[int, int]] = {}
     while True:
-        stable = True
+        pending: list[str] = []
         for subfolder, name in entries:
             path = OUTPUT / subfolder / name if subfolder else OUTPUT / name
             try:
                 stat = path.stat()
             except OSError:
-                stable = False
+                pending.append(name)
                 continue
             if stat.st_size <= 0:
-                stable = False
+                pending.append(name)
                 continue
             marker = (int(stat.st_size), int(stat.st_mtime_ns))
             if previous.get((subfolder, name)) != marker:
-                stable = False
+                pending.append(name)
             previous[(subfolder, name)] = marker
-        if stable:
-            return True
+        if not pending:
+            return True, []
         if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.2)
+            return False, pending
+        time.sleep(0.25)
+
+
+def generation_output_stage(data: dict) -> str:
+    """这次输出属于哪一步（artifact_stage）：base / highres / detail_refine / upscale。"""
+
+    payload = data if isinstance(data, dict) else {}
+    post = str((payload.get("outputEnhancement") or {}).get("mode", "off") or "off")
+    if post not in {"off", ""}:
+        return "upscale"
+    refine = payload.get("animaDetailRefine") if isinstance(payload.get("animaDetailRefine"), dict) else {}
+    if refine.get("enabled"):
+        return "detail_refine"
+    highres = payload.get("animaHighres") if isinstance(payload.get("animaHighres"), dict) else {}
+    if highres.get("enabled") or str(payload.get("illustriousMode", "precision")) == "hires":
+        return "highres"
+    return "base"
 
 
 def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
@@ -1029,9 +1045,11 @@ def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
     if not snapshot_id:
         return
     images = (payload or {}).get("images") if isinstance((payload or {}).get("images"), list) else []
+    pending_files: list[str] = []
     if status == "completed":
-        # 大图/慢盘上 ComfyUI history 先就绪、文件可能还在写：先确认尺寸稳定再入索引。
-        wait_for_output_files(images)
+        # 大图/慢盘上 ComfyUI history 先就绪、文件可能还在写：等稳定；超时则把文件
+        # 标成 pending（不是 missing），由后台 reconcile 继续落定。
+        _ready, pending_files = wait_for_output_files(images)
     split = split_hires_outputs(images)
     if status == "completed" and split["final"]:
         try:
@@ -1040,6 +1058,7 @@ def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
                 [image.get("filename") if isinstance(image, dict) else image for image in split["final"]],
                 base_outputs=[image.get("filename") if isinstance(image, dict) else image
                               for image in split["base"]],
+                pending_files=pending_files,
             )
             return
         except Exception:
@@ -1290,6 +1309,9 @@ def update_creative_index_status_best_effort(snapshot_id: str, status: dict) -> 
             images=status.get("images") if isinstance(status.get("images"), list) else (),
             comparison_images=(status.get("comparisonImages")
                                if isinstance(status.get("comparisonImages"), list) else ()),
+            pending_files=(status.get("pendingFiles")
+                           if isinstance(status.get("pendingFiles"), list) else ()),
+            stage=str(status.get("stage") or ""),
             output_root=OUTPUT,
         ) or {}
     except Exception:
@@ -1310,6 +1332,9 @@ def update_creative_index_job_status_best_effort(job: dict, status: dict) -> dic
             images=status.get("images") if isinstance(status.get("images"), list) else (),
             comparison_images=(status.get("comparisonImages")
                                if isinstance(status.get("comparisonImages"), list) else ()),
+            pending_files=(status.get("pendingFiles")
+                           if isinstance(status.get("pendingFiles"), list) else ()),
+            stage=str(status.get("stage") or ""),
             output_root=OUTPUT,
         ) or {}
     except Exception:
@@ -1525,8 +1550,9 @@ def reconcile_creative_index_jobs(limit: int = CREATIVE_INDEX_RECONCILE_LIMIT) -
                 try:
                     split = split_hires_outputs(image_names)
                     if split["final"]:
-                        wait_for_output_files(status.get("images") or [])
-                        attach_snapshot_outputs(snapshot_id, split["final"], base_outputs=split["base"])
+                        _ready, pending = wait_for_output_files(status.get("images") or [])
+                        attach_snapshot_outputs(snapshot_id, split["final"], base_outputs=split["base"],
+                                                pending_files=pending)
                 except Exception:
                     pass
     return reconciled
@@ -5123,15 +5149,23 @@ def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: 
     return snapshot
 
 
-def attach_snapshot_outputs(snapshot_id: str, outputs, base_outputs=None) -> dict:
-    """写入成品输出；首采对照图单独放进 comparisonOutputs，不和成品混在一起。"""
+def attach_snapshot_outputs(snapshot_id: str, outputs, base_outputs=None,
+                            pending_files=None, stage: str = "") -> dict:
+    """写入成品输出；首采对照图单独放进 comparisonOutputs，不和成品混在一起。
+
+    ``stage`` 缺省时按快照 payload 推导（base / highres / detail_refine / upscale）；
+    ``pending_files`` 里的文件会以 ``file_state='pending'`` 登记，而不是当成丢失。
+    """
 
     names = [Path(str(name)).name for name in (outputs or []) if Path(str(name)).name]
     comparison = [Path(str(name)).name for name in (base_outputs or []) if Path(str(name)).name]
+    pending = [Path(str(name)).name for name in (pending_files or []) if Path(str(name)).name]
     items = load_snapshots()
     target = next((item for item in items if item.get("id") == snapshot_id), None)
     if target is None:
         raise ValueError("找不到生成快照。")
+    if not stage:
+        stage = generation_output_stage(target.get("payload") or {})
     target["outputs"] = list(dict.fromkeys(names))[:16]
     target["comparisonOutputs"] = list(dict.fromkeys(comparison))[:16]
     write_snapshots(items)
@@ -5139,6 +5173,8 @@ def attach_snapshot_outputs(snapshot_id: str, outputs, base_outputs=None) -> dic
         "status": "completed",
         "images": outputs if isinstance(outputs, list) else [],
         "comparisonImages": base_outputs if isinstance(base_outputs, list) else [],
+        "pendingFiles": pending,
+        "stage": stage,
     })
     return normalize_generation_snapshot(target)
 

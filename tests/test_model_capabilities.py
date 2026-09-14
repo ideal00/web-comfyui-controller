@@ -144,6 +144,27 @@ class CapabilityContractTests(unittest.TestCase):
         self.assertEqual(2560, hires["max_long_edge"])
         self.assertEqual("RealESRGAN_x4plus_anime_6B.pth", hires["upscaler"])
 
+    def test_constraints_are_the_single_source_for_ui_ranges(self):
+        anima = mp.model_sampling_profile("anima-base-v1.0.safetensors")
+        highres = mp.capability_constraints(anima, "highres_reconstruction")
+        self.assertTrue(highres["enabled"])
+        self.assertEqual([1.15, 2.0], highres["scale"])
+        self.assertEqual([0.2, 0.3], highres["denoise"])
+        self.assertEqual(2560, highres["max_long_edge"])
+        self.assertEqual(["RealESRGAN_x4plus_anime_6B.pth"], highres["allowed_upscalers"])
+        self.assertEqual([0.05, 0.2], mp.capability_constraints(anima, "detail_refine")["denoise"])
+
+        sdxl = mp.model_sampling_profile("waiIllustriousSDXL_v170.safetensors")
+        sdxl_highres = mp.capability_constraints(sdxl, "highres_reconstruction")
+        self.assertEqual([1.1, 1.5], sdxl_highres["scale"])
+        self.assertEqual([], sdxl_highres["allowed_upscalers"])
+        self.assertEqual({}, mp.capability_constraints(sdxl, "not_a_capability"))
+
+        script = (ROOT / "web/assets/js/anima-highres.js").read_text(encoding="utf-8")
+        self.assertIn("constraints.highres_reconstruction", script)
+        self.assertIn("allowed_upscalers", script)
+        self.assertIn("applyConstraintRanges", script)
+
     def test_profile_components_override_encoder_and_vae(self):
         profile = {"id": "anima-custom", "match": ["anima-base"], "family": "anima",
                    "components": {"text_encoder": "custom_te.safetensors",
@@ -320,9 +341,9 @@ class FrontendFamilySourceTests(unittest.TestCase):
 
     def test_script_versions_are_bumped(self):
         index_html = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("panel.js?v=67", index_html)
+        self.assertIn("panel.js?v=68", index_html)
         self.assertIn("anima-refine.js?v=3", index_html)
-        self.assertIn("anima-highres.js?v=3", index_html)
+        self.assertIn("anima-highres.js?v=4", index_html)
 
 
 if __name__ == "__main__":

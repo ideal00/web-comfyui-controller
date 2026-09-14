@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-#: 按顺序匹配；命中第一条即使用。
+#: 规则顺序即优先级；每条规则有 strong（高置信）与 weak（低置信，仅当 strong 未命中）。
+#: 命中结果带 ``code`` 与 ``confidence``，便于前端 / 手机端分组与埋点，而不是只看标题。
 GENERATION_ERROR_HINTS: tuple[dict[str, Any], ...] = (
     {
-        "match": ("out of memory", "allocation on device", "insufficient memory",
-                  "cuda_error_out_of_memory", "failed to allocate"),
+        "code": "cuda_oom",
+        "strong": ("out of memory", "cuda_error_out_of_memory", "insufficient memory",
+                   "torch.outofmemoryerror"),
+        "weak": ("failed to allocate", "allocation on device", "not enough memory"),
         "title": "显存不足",
         "reason": "ComfyUI 在采样或放大时用尽了显存（大图、二次采样、输出增强最容易触发）。",
         "solutions": [
@@ -23,8 +26,9 @@ GENERATION_ERROR_HINTS: tuple[dict[str, Any], ...] = (
         ],
     },
     {
-        "match": ("missing node", "cannot execute because node", "node type not found",
-                  "has no attribute", "importerror"),
+        "code": "missing_node",
+        "strong": ("missing node", "cannot execute because node", "node type not found"),
+        "weak": (),
         "title": "缺少自定义节点",
         "reason": "工作流用到当前 ComfyUI 未安装（或版本不符）的节点。",
         "solutions": [
@@ -33,8 +37,21 @@ GENERATION_ERROR_HINTS: tuple[dict[str, Any], ...] = (
         ],
     },
     {
-        "match": ("value not in list", "no such file", "does not exist", "cannot find",
-                  "not a valid", "invalid file", "filenotfound"),
+        "code": "plugin_import_error",
+        "strong": ("modulenotfounderror", "no module named", "cannot import name"),
+        "weak": ("importerror", "has no attribute"),
+        "title": "插件运行出错",
+        "reason": "自定义节点内部导入失败（插件版本与 ComfyUI / 依赖不匹配），不是缺节点。",
+        "solutions": [
+            "用 ComfyUI Manager 把对应插件更新到与 ComfyUI 匹配的版本。",
+            "更新插件依赖（在插件的 requirements.txt 目录执行安装）。",
+            "或先关闭使用该插件的功能。",
+        ],
+    },
+    {
+        "code": "missing_file",
+        "strong": ("value not in list", "no such file", "filenotfound"),
+        "weak": ("does not exist", "cannot find", "not a valid", "invalid file"),
         "title": "模型或文件缺失",
         "reason": "工作流引用的模型 / LoRA / 图片文件不在 ComfyUI 的目录里（可能被移动、改名或删除）。",
         "solutions": [
@@ -45,7 +62,9 @@ GENERATION_ERROR_HINTS: tuple[dict[str, Any], ...] = (
         ],
     },
     {
-        "match": ("prompt outputs failed validation", "failed validation", "invalid input"),
+        "code": "validation_failed",
+        "strong": ("prompt outputs failed validation",),
+        "weak": ("failed validation", "invalid input"),
         "title": "节点参数校验失败",
         "reason": "提交的参数超出了某个节点允许的范围（步数 / CFG / 尺寸 / 放大倍率等）。",
         "solutions": [
@@ -54,21 +73,27 @@ GENERATION_ERROR_HINTS: tuple[dict[str, Any], ...] = (
         ],
     },
     {
-        "match": ("interrupted", "interrupt"),
+        "code": "interrupted",
+        "strong": ("interrupted",),
+        "weak": ("interrupt",),
         "title": "生成已中断",
         "reason": "任务被取消，或被新的提交 / 中断操作打断。",
         "solutions": ["重新生成即可；多个任务请用「发送队列」排队。"],
     },
     {
-        "match": ("tuple index out of range", "resolve_areas_and_cond_masks"),
+        "code": "regional_incompatible",
+        "strong": ("resolve_areas_and_cond_masks",),
+        "weak": ("tuple index out of range",),
         "title": "区域提示词与当前模型不兼容",
         "reason": "该模型（如 Anima / Krea 2）不支持多人区域 Conditioning。",
         "solutions": ["关闭多人分区，或改用支持分区的 SDXL / Illustrious 模型。"],
     },
     {
-        "match": ("cuda", "cudnn", "device-side assert"),
+        "code": "cuda_runtime",
+        "strong": ("cuda_error", "cuda error", "cudnn", "device-side assert", "illegal memory access"),
+        "weak": ("cuda",),
         "title": "显卡运行出错",
-        "reason": "CUDA / 驱动层面的错误（驱动版本、显存碎片或显卡状态异常）。",
+        "reason": "CUDA / cuDNN 层面的错误（驱动版本、显存碎片或显卡状态异常）。",
         "solutions": [
             "关闭其他占用显卡的程序后重试。",
             "更新显卡驱动，或重启电脑。",
@@ -148,21 +173,28 @@ def _error_payloads(item: Any) -> tuple[str, str]:
 
 
 def friendly_comfy_error(item: Any) -> dict[str, Any]:
-    """把 ComfyUI 执行错误整理成 {title, reason, solutions, technical}。"""
+    """把 ComfyUI 执行错误整理成 {code, confidence, title, reason, solutions, technical}。"""
 
     node, raw = _error_payloads(item)
     raw = raw or "ComfyUI 返回了未分类的错误。"
     lowered = raw.lower()
     node_suffix = f"（节点：{node}）" if node else ""
     for rule in GENERATION_ERROR_HINTS:
-        if any(token in lowered for token in rule["match"]):
-            return {
-                "title": rule["title"],
-                "reason": rule["reason"] + node_suffix,
-                "solutions": list(rule["solutions"]),
-                "technical": raw[:600],
-            }
+        strong_hit = any(token in lowered for token in rule.get("strong") or ())
+        weak_hit = any(token in lowered for token in rule.get("weak") or ())
+        if not (strong_hit or weak_hit):
+            continue
+        return {
+            "code": rule["code"],
+            "confidence": "high" if strong_hit else "medium",
+            "title": rule["title"],
+            "reason": rule["reason"] + node_suffix,
+            "solutions": list(rule["solutions"]),
+            "technical": raw[:600],
+        }
     return {
+        "code": "unknown",
+        "confidence": "low",
         "title": "生成失败",
         "reason": raw[:200] + node_suffix,
         "solutions": ["按技术细节检查参数或模型；无法判断时可把技术细节发给开发者。"],

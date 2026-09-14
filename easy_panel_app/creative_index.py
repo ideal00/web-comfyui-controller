@@ -395,6 +395,10 @@ ARTIFACT_ROLE_COMPARISON = "comparison"
 ARTIFACT_ROLE_INTERMEDIATE = "intermediate"
 ARTIFACT_ROLE_VALUES = (ARTIFACT_ROLE_FINAL, ARTIFACT_ROLE_COMPARISON, ARTIFACT_ROLE_INTERMEDIATE)
 
+#: 输出文件在 history 回来后可能还在写盘：这段宽限期内保持 file_state=pending，
+#: 不标 missing、不删除记录；超时后才当作真的缺失。
+PENDING_FILE_GRACE_MS = 10 * 60 * 1000
+
 
 def _artifact_role_for(filename: str, image_type: str, kind: str) -> str:
     """Derive the artifact role; explicit values win in ``normalize_artifact_ref``."""
@@ -402,6 +406,22 @@ def _artifact_role_for(filename: str, image_type: str, kind: str) -> str:
     if kind != "output" or image_type != "output":
         return ARTIFACT_ROLE_INTERMEDIATE if image_type == "output" else ""
     return ARTIFACT_ROLE_COMPARISON if is_hires_base_filename(filename) else ARTIFACT_ROLE_FINAL
+
+
+#: artifact_stage：这一步产物来自流程的哪一段（与 role 是“是什么/从哪来”两个维度）。
+ARTIFACT_STAGE_VALUES = ("base", "highres", "detail_refine", "face", "hand", "upscale")
+
+
+def _artifact_stage_value(ref: Mapping[str, Any], stage: str) -> str:
+    """显式 stage > 首采对照固定 base > 调用方声明的流程 stage。"""
+
+    value = str(ref.get("artifact_stage") or "").strip().casefold()
+    if value:
+        return value[:32]
+    if (str(ref.get("artifact_role") or "") == ARTIFACT_ROLE_COMPARISON
+            or is_hires_base_filename(ref.get("filename"))):
+        return "base"
+    return str(stage or "").strip().casefold()[:32]
 
 
 def _is_comparison_artifact(item: Any) -> bool:
@@ -870,6 +890,7 @@ class CreativeIndex:
                 "image_type": "TEXT NOT NULL DEFAULT 'output'",
                 "artifact_kind": "TEXT NOT NULL DEFAULT 'output'",
                 "artifact_role": "TEXT NOT NULL DEFAULT ''",
+                "artifact_stage": "TEXT NOT NULL DEFAULT ''",
                 "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
                 "created_at": "INTEGER NOT NULL DEFAULT 0",
             },
@@ -918,6 +939,13 @@ class CreativeIndex:
                 "ELSE 'final' END "
                 "WHERE image_type = 'output' AND artifact_kind = 'output' AND artifact_role = ''"
             )
+        if ("artifacts", "artifact_stage") in added:
+            # 旧库只能从文件名识别首采图；其余 stage 无法回溯，保持空。
+            connection.execute(
+                "UPDATE artifacts SET artifact_stage = 'base' "
+                "WHERE image_type = 'output' AND artifact_stage = '' "
+                "AND filename LIKE '%\\_base\\_%' ESCAPE '\\'"
+            )
 
     @staticmethod
     def _create_schema_v1(connection: sqlite3.Connection) -> None:
@@ -964,6 +992,7 @@ class CreativeIndex:
                 image_type TEXT NOT NULL DEFAULT 'output',
                 artifact_kind TEXT NOT NULL DEFAULT 'output',
                 artifact_role TEXT NOT NULL DEFAULT '',
+                artifact_stage TEXT NOT NULL DEFAULT '',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at INTEGER NOT NULL,
                 UNIQUE(generation_id, filename, subfolder, image_type, artifact_kind)
@@ -1303,6 +1332,8 @@ class CreativeIndex:
         output_root: Path | None,
         *,
         warnings: list[str],
+        pending_files: frozenset[str] = frozenset(),
+        stage: str = "",
     ) -> list[str]:
         artifact_ids: list[str] = []
         for raw in list(outputs)[:128]:
@@ -1311,7 +1342,11 @@ class CreativeIndex:
                 warnings.append(warning)
             if not ref:
                 continue
+            if ref["filename"] in pending_files:
+                # 文件还在写：标记 pending（不是 missing），reconcile 会继续落定。
+                ref["metadata"] = {**ref["metadata"], "exists": False, "file_state": "pending"}
             metadata_json = _json_text(ref["metadata"])
+            stage_value = _artifact_stage_value(ref, stage)
             existing = connection.execute(
                 """SELECT artifact_id FROM artifacts
                    WHERE generation_id = ? AND filename = ? AND subfolder = ?
@@ -1327,8 +1362,9 @@ class CreativeIndex:
             if existing:
                 artifact_id = str(existing[0])
                 connection.execute(
-                    "UPDATE artifacts SET metadata_json = ?, artifact_role = ? WHERE artifact_id = ?",
-                    (metadata_json, ref.get("artifact_role") or "", artifact_id),
+                    "UPDATE artifacts SET metadata_json = ?, artifact_role = ?, artifact_stage = ? "
+                    "WHERE artifact_id = ?",
+                    (metadata_json, ref.get("artifact_role") or "", stage_value, artifact_id),
                 )
             else:
                 # 同一张图只能属于一条作品：如果扫描导入先建了空壳记录，就把文件
@@ -1372,8 +1408,8 @@ class CreativeIndex:
                     connection.execute(
                         """INSERT INTO artifacts(
                                artifact_id, generation_id, filename, subfolder, image_type,
-                               artifact_kind, artifact_role, metadata_json, created_at
-                           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                               artifact_kind, artifact_role, artifact_stage, metadata_json, created_at
+                           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             artifact_id,
                             generation_id,
@@ -1382,6 +1418,7 @@ class CreativeIndex:
                             ref["image_type"],
                             ref["artifact_kind"],
                             ref.get("artifact_role") or "",
+                            stage_value,
                             metadata_json,
                             now_ms(),
                         ),
@@ -1778,12 +1815,16 @@ class CreativeIndex:
         status: Any,
         images: Sequence[Any] = (),
         comparison_images: Sequence[Any] = (),
+        pending_files: Sequence[Any] = (),
+        stage: Any = "",
         output_root: str | Path | None = None,
     ) -> dict[str, Any] | None:
         wanted = _safe_text(snapshot_id, 128)
         if not wanted:
             return None
         output_path = Path(output_root).expanduser() if output_root is not None else None
+        pending_set = frozenset(Path(str(name)).name for name in (pending_files or ())
+                                if str(name).strip())
         warnings: list[str] = []
         with self._write_transaction() as connection:
             row = connection.execute(
@@ -1802,14 +1843,17 @@ class CreativeIndex:
                 list(images),
                 output_path,
                 warnings=warnings,
+                pending_files=pending_set,
+                stage=str(stage or ""),
             )
-            # 首采对照图也登记，但角色是 comparison：它不参与作品数量、也不会抢代表图。
+            # 首采对照图也登记，但角色是 comparison、stage 固定 base。
             self._upsert_artifacts(
                 connection,
                 str(row["generation_id"]),
                 list(comparison_images),
                 output_path,
                 warnings=warnings,
+                stage=str(stage or ""),
             )
             latest = connection.execute(
                 "SELECT * FROM generations WHERE generation_id = ?", (row["generation_id"],)
@@ -1829,12 +1873,16 @@ class CreativeIndex:
         status: Any = "unknown",
         images: Sequence[Any] = (),
         comparison_images: Sequence[Any] = (),
+        pending_files: Sequence[Any] = (),
+        stage: Any = "",
         output_root: str | Path | None = None,
     ) -> dict[str, Any] | None:
         wanted_snapshot = _safe_text(snapshot_id, 128)
         wanted_prompt = _safe_text(prompt_id, 128)
         wanted_request = _safe_text(request_id, 128)
         output_path = Path(output_root).expanduser() if output_root is not None else None
+        pending_set = frozenset(Path(str(name)).name for name in (pending_files or ())
+                                if str(name).strip())
         warnings: list[str] = []
         with self._write_transaction() as connection:
             row = self._find_existing(connection, wanted_snapshot or None, wanted_prompt, wanted_request)
@@ -1863,6 +1911,8 @@ class CreativeIndex:
                 list(images),
                 output_path,
                 warnings=warnings,
+                pending_files=pending_set,
+                stage=str(stage or ""),
             )
             self._upsert_artifacts(
                 connection,
@@ -1870,6 +1920,7 @@ class CreativeIndex:
                 list(comparison_images),
                 output_path,
                 warnings=warnings,
+                stage=str(stage or ""),
             )
             latest = connection.execute(
                 "SELECT * FROM generations WHERE generation_id = ?", (row["generation_id"],)
@@ -1989,6 +2040,7 @@ class CreativeIndex:
             "type": str(row["image_type"] or "output"),
             "kind": str(row["artifact_kind"] or "output"),
             "role": _row_text(row, "artifact_role", 32),
+            "stage": _row_text(row, "artifact_stage", 32),
             "exists": exists,
             "metadata": metadata,
             "url": artifact_url(str(row["filename"]), str(row["subfolder"] or ""), str(row["image_type"] or "output"))
@@ -2118,7 +2170,10 @@ class CreativeIndex:
         Works in place over a bounded number of terminal generations that already
         have at least one recorded output artifact.  For every scanned generation
         each output artifact is re-checked against ``output_root``; artifact
-        ``metadata.exists`` is refreshed to the current on-disk state.  A
+        ``metadata.exists`` is refreshed to the current on-disk state.  Files
+        recorded as ``file_state='pending'`` (history returned before the write
+        finished) stay pending during ``PENDING_FILE_GRACE_MS`` and are never
+        treated as deletion evidence until the grace window expires.  A
         generation is only deleted when none of its output files survive, which
         removes its artifacts, derivations and LoRA rows through ON DELETE
         CASCADE.  Queued/running rows (which usually have no artifacts yet) are
@@ -2128,12 +2183,14 @@ class CreativeIndex:
         root = Path(str(output_root)).resolve()
         scan_limit = max(1, min(4000, int(limit)))
         pruned: list[str] = []
+        pending_kept = 0
         scanned = 0
         refreshed = 0
+        current_ms = now_ms()
         with self._write_transaction() as connection:
             rows = connection.execute(
                 """
-                SELECT DISTINCT g.generation_id
+                SELECT DISTINCT g.generation_id, g.updated_at
                 FROM generations g
                 JOIN artifacts a ON a.generation_id = g.generation_id
                 WHERE g.status IN ('completed', 'error', 'cancelled', 'unknown')
@@ -2146,6 +2203,7 @@ class CreativeIndex:
             for row in rows:
                 scanned += 1
                 generation_id = str(row["generation_id"])
+                generation_age = current_ms - (_safe_int(row["updated_at"], current_ms) or current_ms)
                 artifacts = connection.execute(
                     """SELECT artifact_id, filename, subfolder, image_type, metadata_json
                        FROM artifacts
@@ -2154,6 +2212,7 @@ class CreativeIndex:
                     (generation_id,),
                 ).fetchall()
                 exists_any = False
+                pending_any = False
                 for artifact in artifacts:
                     filename = str(artifact["filename"] or "")
                     subfolder = str(artifact["subfolder"] or "").replace("\\", "/").strip("/")
@@ -2164,10 +2223,15 @@ class CreativeIndex:
                         metadata = {}
                     else:
                         metadata = dict(metadata)
+                    was_pending = str(metadata.get("file_state") or "") == "pending"
                     updates = {"exists": exists,
                                "file_state": "ready" if exists else "missing"}
                     if exists:
                         updates.update({"file_size": size, "file_mtime": mtime})
+                    elif was_pending and generation_age < PENDING_FILE_GRACE_MS:
+                        # 还在写盘：保持 pending，不当作删除依据。
+                        updates = {"exists": False, "file_state": "pending"}
+                        pending_any = True
                     if any(metadata.get(key) != value for key, value in updates.items()):
                         metadata.update(updates)
                         connection.execute(
@@ -2175,7 +2239,9 @@ class CreativeIndex:
                             (json.dumps(metadata, ensure_ascii=False), artifact["artifact_id"]),
                         )
                         refreshed += 1
-                if not exists_any:
+                if pending_any:
+                    pending_kept += 1
+                if not exists_any and not pending_any:
                     pruned.append(generation_id)
             for generation_id in pruned:
                 connection.execute("DELETE FROM generations WHERE generation_id = ?", (generation_id,))
@@ -2183,6 +2249,7 @@ class CreativeIndex:
             "scanned_generations": scanned,
             "pruned_generations": len(pruned),
             "refreshed_artifacts": refreshed,
+            "pending_generations": pending_kept,
         }
 
     def index_report(self, output_root: Any, *, limit: int = 4000,
@@ -2200,13 +2267,17 @@ class CreativeIndex:
             imported = int(connection.execute(
                 "SELECT COUNT(*) FROM generations WHERE operation = 'imported'").fetchone()[0] or 0)
             missing_artifacts = 0
+            pending_artifacts = 0
             live_owners: dict[tuple[str, str], set[str]] = {}
             for row in connection.execute(
                     "SELECT filename, subfolder, generation_id, metadata_json FROM artifacts "
                     "WHERE image_type = 'output' LIMIT 20000"):
                 metadata = _json_value(row["metadata_json"])
                 if isinstance(metadata, Mapping) and metadata.get("exists") is False:
-                    missing_artifacts += 1
+                    if str(metadata.get("file_state") or "") == "pending":
+                        pending_artifacts += 1
+                    else:
+                        missing_artifacts += 1
                     continue
                 key = (str(row["filename"] or ""), str(row["subfolder"] or ""))
                 live_owners.setdefault(key, set()).add(str(row["generation_id"]))
@@ -2238,6 +2309,7 @@ class CreativeIndex:
             "generations": total,
             "imported_generations": imported,
             "missing_artifacts": missing_artifacts,
+            "pending_artifacts": pending_artifacts,
             "duplicate_total": len(live_duplicates),
             "duplicates": duplicates,
             "orphan_total": len(orphan_files),

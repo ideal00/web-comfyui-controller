@@ -169,32 +169,53 @@ class SnapshotComparisonOutputsTests(unittest.TestCase):
     def test_task_queue_outputs_only_writes_final_images(self):
         captured = {}
 
-        def fake_attach(snapshot_id, outputs, base_outputs=None):
+        def fake_attach(snapshot_id, outputs, base_outputs=None, pending_files=None, stage=""):
             captured["snapshot_id"] = snapshot_id
             captured["outputs"] = list(outputs)
             captured["base_outputs"] = list(base_outputs or [])
+            captured["pending_files"] = list(pending_files or [])
+            captured["stage"] = stage
             return {}
 
         payload = {"images": [
             {"filename": "EasyPanel_001_base_00001_.png"},
             {"filename": "EasyPanel_001_00001_.png"},
         ]}
-        with patch.object(easy_panel, "attach_snapshot_outputs", fake_attach):
+        with patch.object(easy_panel, "attach_snapshot_outputs", fake_attach), \
+             patch.object(easy_panel, "wait_for_output_files",
+                          lambda images, timeout=6.0: (True, [])):
             easy_panel.task_queue_outputs({"snapshot_id": "snap-9"}, "completed", payload)
         self.assertEqual("snap-9", captured["snapshot_id"])
         self.assertEqual(["EasyPanel_001_00001_.png"], captured["outputs"])
         self.assertEqual(["EasyPanel_001_base_00001_.png"], captured["base_outputs"])
+        self.assertEqual([], captured["pending_files"])
+
+    def test_task_queue_outputs_passes_pending_files_on_timeout(self):
+        captured = {}
+
+        def fake_attach(snapshot_id, outputs, base_outputs=None, pending_files=None, stage=""):
+            captured["pending_files"] = list(pending_files or [])
+            return {}
+
+        payload = {"images": [{"filename": "EasyPanel_001_00001_.png"}]}
+        with patch.object(easy_panel, "attach_snapshot_outputs", fake_attach), \
+             patch.object(easy_panel, "wait_for_output_files",
+                          lambda images, timeout=6.0: (False, ["EasyPanel_001_00001_.png"])):
+            easy_panel.task_queue_outputs({"snapshot_id": "snap-1"}, "completed", payload)
+        self.assertEqual(["EasyPanel_001_00001_.png"], captured["pending_files"])
 
     def test_task_queue_outputs_without_base_writes_only_final(self):
         captured = {}
 
-        def fake_attach(snapshot_id, outputs, base_outputs=None):
+        def fake_attach(snapshot_id, outputs, base_outputs=None, pending_files=None, stage=""):
             captured["outputs"] = list(outputs)
             captured["base_outputs"] = list(base_outputs or [])
             return {}
 
         payload = {"images": [{"filename": "EasyPanel_001_00001_.png"}]}
-        with patch.object(easy_panel, "attach_snapshot_outputs", fake_attach):
+        with patch.object(easy_panel, "attach_snapshot_outputs", fake_attach), \
+             patch.object(easy_panel, "wait_for_output_files",
+                          lambda images, timeout=6.0: (True, [])):
             easy_panel.task_queue_outputs({"snapshot_id": "snap-1"}, "completed", payload)
         self.assertEqual(["EasyPanel_001_00001_.png"], captured["outputs"])
         self.assertEqual([], captured["base_outputs"])

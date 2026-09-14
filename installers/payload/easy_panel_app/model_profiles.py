@@ -6,6 +6,7 @@ import copy
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 
 DATA_FILE = Path(__file__).resolve().parent / "data" / "model_profiles.json"
@@ -45,6 +46,26 @@ ANIMA_HIGHRES_DEFAULTS = {
     "max_long_edge": 2560,
     "upscaler": "RealESRGAN_x4plus_anime_6B.pth",
 }
+#: 能力的行为边界（数值唯一来源）：前端滑块 min/max、后端校验提示、Android / RPG
+#: 都读 ``profile.constraints``，不要再在各自代码里复制 1.15–2.0 / 0.20–0.30 / 2560。
+FAMILY_CONSTRAINTS: dict[str, dict[str, dict[str, Any]]] = {
+    "anima": {
+        "highres_reconstruction": {
+            "max_long_edge": ANIMA_HIGHRES_DEFAULTS["max_long_edge"],
+            "scale": [ANIMA_HIGHRES_DEFAULTS["min_scale"], ANIMA_HIGHRES_DEFAULTS["max_scale"]],
+            "denoise": [ANIMA_HIGHRES_DEFAULTS["min_denoise"], ANIMA_HIGHRES_DEFAULTS["max_denoise"]],
+            "steps": [6, 40],
+            "cfg": [1.0, 10.0],
+            "allowed_upscalers": [ANIMA_HIGHRES_DEFAULTS["upscaler"]],
+        },
+        "detail_refine": {
+            "denoise": [0.05, 0.20],
+            "steps": [6, 40],
+        },
+    },
+}
+
+
 DEFAULT_FREEU = {
     "key": "sdxl_official",
     "label": "官方 SDXL / ComfyUI V2",
@@ -303,6 +324,23 @@ def model_sampling_profile(model_name: str) -> dict:
     hires = copy.deepcopy(default_hires)
     custom_hires = profile.get("hires") if isinstance(profile.get("hires"), dict) else {}
     hires.update({key: value for key, value in custom_hires.items() if value is not None})
+    constraints = copy.deepcopy(FAMILY_CONSTRAINTS.get(family) or {})
+    hires_constraint = {
+        "enabled": bool(capabilities.get("highres_reconstruction") or capabilities.get("hires_fix")),
+        "max_long_edge": int(hires.get("max_long_edge") or resolution.get("max") or DEFAULT_RESOLUTION["max"]),
+        "scale": [float(hires.get("min_scale", 1.0)), float(hires.get("max_scale", 2.0))],
+        "default_scale": float(hires.get("scale", 1.25)),
+        "denoise": [float(hires.get("min_denoise", 0.0)), float(hires.get("max_denoise", 1.0))],
+        "default_denoise": float(hires.get("denoise", 0.25)),
+        "steps_default": int(hires.get("steps", 20)),
+        "cfg_default": float(hires.get("cfg", 5.0)),
+        "allowed_upscalers": (["RealESRGAN_x4plus_anime_6B.pth"] if family == "anima" else []),
+    }
+    declared = constraints.get("highres_reconstruction")
+    if isinstance(declared, dict):
+        hires_constraint.update({key: value for key, value in declared.items()
+                                 if value not in (None, "", [])})
+    constraints["highres_reconstruction"] = hires_constraint
     return {
         **first,
         "id": profile.get("id", "unknown"),
@@ -313,6 +351,7 @@ def model_sampling_profile(model_name: str) -> dict:
         "prediction": prediction,
         "zsnr": bool(profile.get("zsnr", False)),
         "hires": hires,
+        "constraints": constraints,
         "freeu": copy.deepcopy(profile.get("freeu") or DEFAULT_FREEU),
         "resolution": resolution,
         "components": components,
@@ -336,6 +375,14 @@ def supports_capability(profile: dict, capability: str, default: bool = False) -
     """按能力契约判断，不要在业务代码里再写 `if anima or krea2`。"""
     capabilities = (profile or {}).get("capabilities") or {}
     return bool(capabilities.get(capability, default))
+
+
+def capability_constraints(profile: dict, capability: str) -> dict:
+    """某个能力的数值边界（前端滑块 / 外部客户端都从这里取，不要各写一份）。"""
+
+    constraints = (profile or {}).get("constraints") or {}
+    value = constraints.get(capability)
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def anima_sampling_settings(model_name: str) -> tuple[str, str]:

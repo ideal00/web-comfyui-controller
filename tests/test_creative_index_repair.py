@@ -246,11 +246,62 @@ class OutputStabilityTests(unittest.TestCase):
             root = Path(folder)
             (root / "EasyPanel_02012_.png").write_bytes(b"x" * 64)
             with patch.object(easy_panel, "OUTPUT", root):
-                self.assertTrue(easy_panel.wait_for_output_files(
-                    [{"filename": "EasyPanel_02012_.png", "type": "output"}], timeout=1.0))
-                self.assertFalse(easy_panel.wait_for_output_files(
-                    [{"filename": "missing.png", "type": "output"}], timeout=0.3))
-                self.assertFalse(easy_panel.wait_for_output_files([], timeout=0.1))
+                ready, pending = easy_panel.wait_for_output_files(
+                    [{"filename": "EasyPanel_02012_.png", "type": "output"}], timeout=1.0)
+                self.assertTrue(ready)
+                self.assertEqual([], pending)
+                ready, pending = easy_panel.wait_for_output_files(
+                    [{"filename": "missing.png", "type": "output"}], timeout=0.3)
+                self.assertFalse(ready)
+                self.assertEqual(["missing.png"], pending)
+                ready, pending = easy_panel.wait_for_output_files([], timeout=0.1)
+                self.assertTrue(ready)
+                self.assertEqual([], pending)
+
+    def test_wait_timeout_marks_pending_not_missing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "EasyPanel_02013_.png").write_bytes(b"")
+            with patch.object(easy_panel, "OUTPUT", root):
+                ready, pending = easy_panel.wait_for_output_files(
+                    [{"filename": "EasyPanel_02013_.png", "type": "output"}], timeout=0.3)
+            self.assertFalse(ready)
+            self.assertEqual(["EasyPanel_02013_.png"], pending)
+
+    def test_pending_generation_is_not_pruned(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            index = CreativeIndex(root / "creative.sqlite3")
+            created = index.upsert_snapshot(snapshot("3" * 32), output_root=root, status="completed")
+            generation_id = created["generation_id"]
+            self.assertTrue(generation_id)
+            index.update_snapshot_status(
+                "3" * 32,
+                status="completed",
+                images=[{"filename": "EasyPanel_02014_.png", "type": "output"}],
+                pending_files=["EasyPanel_02014_.png"],
+                stage="highres",
+                output_root=root,
+            )
+            artifacts = index.get_generation(generation_id)["artifacts"]
+            self.assertEqual(1, len(artifacts))
+            self.assertEqual("pending", artifacts[0]["metadata"]["file_state"])
+            self.assertEqual("highres", artifacts[0]["stage"])
+            report = index.index_report(root)
+            self.assertEqual(1, report["pending_artifacts"])
+            self.assertEqual(0, report["missing_artifacts"])
+            prune = index.prune_missing_outputs(root)
+            self.assertEqual(0, prune["pruned_generations"])
+            self.assertEqual(1, prune["pending_generations"])
+            self.assertIsNotNone(index.get_generation(generation_id))
+    def test_output_stage_prefers_deepest_step(self):
+        self.assertEqual("base", easy_panel.generation_output_stage({}))
+        self.assertEqual("highres", easy_panel.generation_output_stage({"animaHighres": {"enabled": True}}))
+        self.assertEqual("detail_refine", easy_panel.generation_output_stage(
+            {"animaHighres": {"enabled": True}, "animaDetailRefine": {"enabled": True}}))
+        self.assertEqual("upscale", easy_panel.generation_output_stage(
+            {"animaDetailRefine": {"enabled": True}, "outputEnhancement": {"mode": "seedvr2"}}))
+        self.assertEqual("highres", easy_panel.generation_output_stage({"illustriousMode": "hires"}))
 
     def test_repair_route_is_wired(self):
         source = (Path(__file__).resolve().parent.parent / "easy_panel.py").read_text(encoding="utf-8")
