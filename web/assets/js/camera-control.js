@@ -61,6 +61,7 @@
         </div>
         <div class="field-title" style="margin-top:8px"><span>将写入的机位词</span></div>
         <div id="cameraControlPreviewValue" class="small" style="word-break:break-all">（未启用）</div>
+        <div id="cameraControlHint" class="small"></div>
         <div class="two" style="margin-top:8px">
           <div><div class="field-title"><span>机位 LoRA 权重</span></div><input id="cameraControlLoraWeight" type="number" min="0.1" max="1.5" step="0.05" value="0.8"></div>
           <div><div class="field-title"><span>挂载</span></div><div class="actions"><button type="button" class="secondary" onclick="cameraControlMountLora()">挂载机位 LoRA</button><button type="button" class="secondary" onclick="cameraControlReset()">重置滑杆</button></div></div>
@@ -132,6 +133,7 @@
       const weight = Number(byId("cameraControlLoraWeight")?.value || 0.8);
       window.addLora(found, String(weight));
       status.textContent = `已挂载 ${String(found).split(/[\\/]/).pop()}（权重 ${weight}）。`;
+      updateCameraControlHint();
     } catch (error) {
       status.textContent = "挂载失败：" + error.message;
     }
@@ -145,8 +147,30 @@
       const label = byId("cameraControlValue_" + key);
       if (label) label.textContent = Number(state[key]).toFixed(2);
     });
+    updateCameraControlHint();
     if (window.promptEditorChanged) window.promptEditorChanged();
     scheduleCameraPreview();
+  }
+
+  // 机位词只是指令，真正执行转向的是配套 LoRA；没挂时直接提醒，别生成完才发现没效果。
+  function updateCameraControlHint() {
+    const hint = byId("cameraControlHint");
+    if (!hint) return;
+    const state = window.cameraControlState();
+    if (!state.enabled) {
+      hint.textContent = "";
+      hint.className = "small";
+      return;
+    }
+    let mounted = false;
+    try {
+      const loras = (window.payload() || {}).loras || [];
+      mounted = loras.some((item) => String(item && item.name || "").includes(LORA_HINT));
+    } catch (error) { /* 拿不到 LoRA 列表时按未挂载提醒 */ }
+    hint.textContent = mounted
+      ? "✅ 机位 LoRA 已挂载；生成时这些词会并入正向提示词。"
+      : "⚠️ 还没挂载机位 LoRA：机位词只是文字，不会真的转镜头。点上面的「挂载机位 LoRA」。";
+    hint.className = "small " + (mounted ? "" : "diagnostic-warning");
   }
 
   function scheduleCameraPreview() {
@@ -244,12 +268,26 @@
     window.modelChanged = wrapped;
   }
 
+  // LoRA 行增删（挂载/清空/手动改动）后，挂载提醒要跟着变。
+  function wrapPromptEditorChanged() {
+    const original = window.promptEditorChanged;
+    if (typeof original !== "function" || original.__cameraControlWrapped) return;
+    const wrapped = function (...args) {
+      const result = original.apply(this, args);
+      updateCameraControlHint();
+      return result;
+    };
+    wrapped.__cameraControlWrapped = true;
+    window.promptEditorChanged = wrapped;
+  }
+
   function boot() {
     installPanel();
     injectPayload();
     injectCompilePayload();
     wrapRestore();
     wrapModelChanged();
+    wrapPromptEditorChanged();
     window.cameraControlSyncVisibility();
   }
 
