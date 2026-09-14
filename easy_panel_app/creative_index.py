@@ -1361,10 +1361,13 @@ class CreativeIndex:
             ).fetchone()
             if existing:
                 artifact_id = str(existing[0])
+                # 后续回写（对账 / 状态同步）可能拿不到阶段：不能把已经记录的
+                # artifact_stage 清掉，否则作品会丢掉“从哪一步来”的信息。
                 connection.execute(
-                    "UPDATE artifacts SET metadata_json = ?, artifact_role = ?, artifact_stage = ? "
+                    "UPDATE artifacts SET metadata_json = ?, artifact_role = ?, "
+                    "artifact_stage = CASE WHEN ? <> '' THEN ? ELSE artifact_stage END "
                     "WHERE artifact_id = ?",
-                    (metadata_json, ref.get("artifact_role") or "", stage_value, artifact_id),
+                    (metadata_json, ref.get("artifact_role") or "", stage_value, stage_value, artifact_id),
                 )
             else:
                 # 同一张图只能属于一条作品：如果扫描导入先建了空壳记录，就把文件
@@ -1971,10 +1974,19 @@ class CreativeIndex:
         # 高清二采的首采对照图（artifact_role='comparison'）不是成品：数量与列表
         # 都不计入，否则作品库里会同时出现“原图”和成品，看起来像重复生成。
         artifact_rows = connection.execute(
-            "SELECT filename, artifact_role FROM artifacts WHERE generation_id = ?",
+            "SELECT filename, artifact_role, metadata_json FROM artifacts WHERE generation_id = ?",
             (generation_id,),
         ).fetchall()
         artifact_count = sum(1 for item in artifact_rows if not _is_comparison_artifact(item))
+        # 文件还在写盘（file_state='pending'）：列表要能显示“保存中”，而不是让
+        # 用户以为作品库坏了（图片打不开）。
+        pending_count = 0
+        for item in artifact_rows:
+            if _is_comparison_artifact(item):
+                continue
+            metadata = _json_value(item["metadata_json"])
+            if isinstance(metadata, Mapping) and str(metadata.get("file_state") or "") == "pending":
+                pending_count += 1
         parent_count = connection.execute(
             "SELECT COUNT(*) FROM derivations WHERE child_generation_id = ?", (generation_id,)
         ).fetchone()[0]
@@ -1987,8 +1999,10 @@ class CreativeIndex:
         thumbnail_url = None
         preview_row = _preview_artifact_row(connection, generation_id)
         primary_artifact_id = ""
+        primary_stage = ""
         if preview_row is not None:
             primary_artifact_id = str(preview_row["artifact_id"])
+            primary_stage = _row_text(preview_row, "artifact_stage", 32)
             thumbnail_url = artifact_url(
                 str(preview_row["filename"]),
                 str(preview_row["subfolder"]),
@@ -2019,10 +2033,13 @@ class CreativeIndex:
             "groups": _groups_for_generation(connection, generation_id),
             "lora_count": int(lora_count),
             "artifact_count": int(artifact_count),
+            "pending_artifacts": int(pending_count),
+            "file_state": "pending" if pending_count else "ready",
             "parent_count": int(parent_count),
             "child_count": int(child_count),
             # 列表、桌面详情与手机详情共用同一个代表图，避免小图与大图不一致。
             "primary_artifact_id": primary_artifact_id or None,
+            "stage": primary_stage,
             "thumbnail_url": thumbnail_url,
         }
 

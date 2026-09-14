@@ -742,25 +742,46 @@ def _comfy_error_text(status: dict) -> str:
 
 
 def generation_plan(workflow: dict) -> dict:
-    """从工作流节点表推导阶段计划（节点 id → 用户可读阶段），供前端进度条显示。
+    """从**真实工作流**推导执行计划（唯一真相源；前端只做预览）。
 
-    阶段名只是展示层：首采采样 / 高清二采 / 细节重绘 / 输出增强采样。
+    返回：
+    * ``stages`` / ``samplers`` / ``samplerOrder``：主采样阶段（首采 / 高清二采 / 细节重绘…）；
+    * ``detailers``：FaceDetailer 这类局部重绘（内部自带采样，**不能**当成主采样次数）；
+    * ``upscalers``：放大节点；``samplerCount`` / ``detailerCount`` 供 UI 直接显示。
+
+    ``build_workflow`` 会在返回值里附一份带 ``output``（计划尺寸）与 ``outputStage``
+    （成品来自哪一步）的计划，所以前端不需要自己再算一套。
     """
 
+    empty = {"stages": {}, "samplers": {}, "samplerOrder": [], "detailers": [],
+             "upscalers": [], "samplerCount": 0, "detailerCount": 0}
     nodes = (workflow or {}).get("prompt") if isinstance(workflow, dict) else None
     if not isinstance(nodes, dict):
-        return {"stages": {}, "samplers": {}, "samplerOrder": []}
-    upscale_types = {"UpscaleModelLoader", "ImageUpscaleWithModel", "UltimateSDUpscale"}
+        return empty
+    upscale_types = {"UpscaleModelLoader", "ImageUpscaleWithModel", "UltimateSDUpscale",
+                     "ImageScaleBy", "SeedVR2", "SeedVR2AudioUpscale"}
     has_upscale = any(isinstance(node, dict) and str(node.get("class_type")) in upscale_types
                       for node in nodes.values())
     stages: dict[str, str] = {}
     samplers: dict[str, int] = {}
     sampler_order: list[str] = []
+    detailers: list[dict] = []
+    upscalers: list[str] = []
     for node_id, node in nodes.items():
         if not isinstance(node, dict):
             continue
         class_type = str(node.get("class_type") or "")
         inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        if class_type == "FaceDetailer":
+            # 局部重绘：内部自带采样器，与主采样分开计数。
+            detailers.append({
+                "node": str(node_id),
+                "detector": str(inputs.get("detector_model_name") or ""),
+                "steps": int(bounded(inputs.get("steps"), 0, 0, 400)),
+                "denoise": round(bounded(inputs.get("denoise"), 0.0, 0.0, 1.0, integer=False), 3),
+            })
+            stages[str(node_id)] = "局部重绘"
+            continue
         if class_type in {"KSampler", "KSamplerAdvanced"}:
             steps = int(bounded(inputs.get("steps"), 20, 1, 400))
             cfg_value = bounded(inputs.get("cfg"), 5.0, 0.0, 100.0, integer=False)
@@ -768,6 +789,11 @@ def generation_plan(workflow: dict) -> dict:
             index = len(sampler_order)
             sampler_order.append(str(node_id))
             samplers[str(node_id)] = steps
+            # workflow builder 声明的阶段优先（_meta.stageLabel），下标只是旧工作流的回退。
+            declared = (node.get("_meta") or {}).get("stageLabel")
+            if declared:
+                stages[str(node_id)] = str(declared)
+                continue
             if index == 0:
                 label = "首采采样"
             elif steps <= 2 and cfg_value <= 1.0:
@@ -779,11 +805,43 @@ def generation_plan(workflow: dict) -> dict:
                 label = f"采样 {index + 1}"
             stages[str(node_id)] = label
             continue
+        if class_type in upscale_types:
+            upscalers.append(class_type)
         label = STAGE_LABELS.get(class_type)
         if not label:
             continue
         stages[str(node_id)] = label
-    return {"stages": stages, "samplers": samplers, "samplerOrder": sampler_order}
+    return {
+        "stages": stages,
+        "samplers": samplers,
+        "samplerOrder": sampler_order,
+        "detailers": detailers,
+        "upscalers": list(dict.fromkeys(upscalers)),
+        "samplerCount": len(sampler_order),
+        "detailerCount": len(detailers),
+    }
+
+
+def generation_plan_summary(plan: dict) -> str:
+    """一句话描述后端实际计划（日志与手机端共用，避免各自措辞）。"""
+
+    data = plan if isinstance(plan, dict) else {}
+    stages = data.get("stages") if isinstance(data.get("stages"), dict) else {}
+    order = data.get("samplerOrder") if isinstance(data.get("samplerOrder"), list) else []
+    steps = data.get("samplers") if isinstance(data.get("samplers"), dict) else {}
+    pieces = []
+    for node_id in order:
+        label = str(stages.get(str(node_id)) or "采样")
+        count = steps.get(str(node_id))
+        pieces.append(f"{label}{f' {count} 步' if count else ''}")
+    detailer_count = int(data.get("detailerCount") or 0)
+    if detailer_count:
+        pieces.append(f"局部重绘 ×{detailer_count}")
+    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+    width, height = output.get("width"), output.get("height")
+    if width and height:
+        pieces.append(f"计划输出 {int(width)}×{int(height)}")
+    return " → ".join(pieces)
 
 
 TRANSPARENT_DETAIL_METHODS = ("GuidedFilter", "PyMatting", "VITMatte", "VITMatte(local)",
@@ -970,11 +1028,13 @@ def task_comfy_submit(item: dict) -> dict:
     """提交一个队列任务，并立刻登记创作索引（与单张生成同一套流程）。"""
 
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    result = comfy_json("/prompt", "POST", build_workflow(payload))
+    workflow = build_workflow(payload)
+    plan = execution_plan(workflow)
+    result = comfy_json("/prompt", "POST", comfy_prompt_body(workflow))
     prompt_id = str(result.get("prompt_id") or "")
-    snapshot = create_generation_snapshot(payload, prompt_id)
+    snapshot = create_generation_snapshot(payload, prompt_id, plan=plan)
     indexed = index_snapshot_best_effort(snapshot, source_request=payload, status="queued")
-    return {"prompt_id": prompt_id, "snapshot_id": snapshot["id"],
+    return {"prompt_id": prompt_id, "snapshot_id": snapshot["id"], "plan": plan,
             "generation_id": indexed.get("generation_id", "")}
 
 
@@ -3774,8 +3834,10 @@ def build_workflow(data: dict) -> dict:
         save_id = alloc()
         nodes[save_id] = {"class_type": "SaveImage", "inputs": {
             "filename_prefix": "EasyPanel_Route1", "images": [final_composite_id, 0],
-        }}
-        return {"prompt": nodes, "client_id": "easy-panel"}
+        }, "_meta": {"artifactStage": "base", "artifactRole": "final"}}
+        plan = generation_plan({"prompt": nodes})
+        plan["outputStage"] = "base"
+        return {"prompt": nodes, "client_id": "easy-panel", "plan": plan}
 
     # Local repaint: encode the uploaded image with a hand-drawn mask so the
     # KSampler only re-draws the masked region (denoise < 1 keeps the rest).
@@ -3946,6 +4008,7 @@ def build_workflow(data: dict) -> dict:
         "inputs": {"seed": seed, "steps": steps, "cfg": cfg,
                    "sampler_name": sampler_name, "scheduler": scheduler, "denoise": denoise, "model": model_ref,
                    "positive": positive_ref, "negative": negative_ref, "latent_image": latent_ref},
+        "_meta": {"stageLabel": "首采采样"},
     }
 
     sample_ref = [sampler_id, 0]
@@ -4057,7 +4120,7 @@ def build_workflow(data: dict) -> dict:
         nodes[base_save_id] = {"class_type": "SaveImage", "inputs": {
             "filename_prefix": generation_filename_prefix(data, "_base"),
             "images": [base_decode_id, 0],
-        }}
+        }, "_meta": {"artifactStage": "base", "artifactRole": "comparison"}}
         nodes[upscale_loader_id] = {
             "class_type": "UpscaleModelLoader",
             "inputs": {"model_name": hires_upscaler},
@@ -4089,6 +4152,7 @@ def build_workflow(data: dict) -> dict:
                        "denoise": hires_denoise, "model": model_ref,
                        "positive": hires_positive_ref, "negative": hires_negative_ref,
                        "latent_image": [hires_encode_id, 0]},
+            "_meta": {"stageLabel": "高清二采"},
         }
         sample_ref = [hires_sampler_id, 0]
 
@@ -4104,6 +4168,14 @@ def build_workflow(data: dict) -> dict:
                             "inputs": {"samples": sample_ref, "vae": vae_ref}}
 
     image_ref = [decode_id, 0]
+    # 成品来自哪一步（artifact_stage）：由 workflow builder 直接声明，
+    # 作品库索引 / 面板 / 手机端都读这份而是不反推参数。
+    if hires_enabled:
+        artifact_stage = "highres"
+        output_size = {"width": int(hires_width), "height": int(hires_height)}
+    else:
+        artifact_stage = "base"
+        output_size = {"width": int(sampling_width), "height": int(sampling_height)}
 
     # Anima 专属「细节重绘」：同尺寸、低 denoise 的 latent 细化，与 Illustrious 的
     # 二次采样（hires）是两套语义。它不放大、不加 Tile，只让 Anima 在已有结构上补
@@ -4121,6 +4193,7 @@ def build_workflow(data: dict) -> dict:
         )
         nodes.update(refine_nodes)
         image_ref = refine_ref
+        artifact_stage = "detail_refine"
         if color_reference_ref is None:
             color_reference_ref = image_ref
 
@@ -4180,7 +4253,7 @@ def build_workflow(data: dict) -> dict:
             "scheduler": "simple", "denoise": 1.0, "model": [seed_model_id, 0],
             "positive": [seed_cond_id, 0], "negative": [seed_cond_id, 1],
             "latent_image": [seed_encode_id, 0],
-        }}
+        }, "_meta": {"stageLabel": "输出增强采样"}}
         nodes[seed_decode_id] = {"class_type": "VAEDecodeTiled", "inputs": {
             "samples": [seed_sampler_id, 0], "vae": [seed_vae_id, 0],
             "tile_size": 512, "overlap": 128, "temporal_size": 4096, "temporal_overlap": 8,
@@ -4216,6 +4289,11 @@ def build_workflow(data: dict) -> dict:
             "force_uniform_tiles": True, "tiled_decode": vae_mode == "tiled", "batch_size": 1,
         }}
         image_ref = [ultimate_id, 0]
+
+    if post_mode != "off":
+        # 输出增强改变了像素尺寸，也改变了“成品来自哪一步”的语义。
+        artifact_stage = "upscale"
+        output_size = {"width": int(post_width), "height": int(post_height)}
 
     detailer = output_enhancement.get("faceDetailer") or {}
     detailer_enabled = bool(isinstance(detailer, dict) and detailer.get("enabled"))
@@ -4261,6 +4339,7 @@ def build_workflow(data: dict) -> dict:
             "tiled_decode": vae_mode == "tiled",
         }}
         image_ref = [detailer_id, 0]
+        artifact_stage = "face"
 
     def apply_limb_detailer(current_image: list, detector_model: str,
                             positive_suffix: str, negative_suffix: str) -> list:
@@ -4317,6 +4396,7 @@ def build_workflow(data: dict) -> dict:
             image_ref, HAND_DETECTOR_MODEL, hand_positive,
             hand_negative,
         )
+        artifact_stage = "hand"
     if limb_detailer_allowed and foot_detailer_enabled:
         normalized_positive = prompt.lower().replace("_", " ")
         toes_visible = any(token in normalized_positive for token in
@@ -4337,6 +4417,7 @@ def build_workflow(data: dict) -> dict:
             image_ref, FOOT_DETECTOR_MODEL, foot_positive,
             foot_negative,
         )
+        artifact_stage = "foot"
 
     if isinstance(auto_color, dict) and auto_color.get("enabled") and color_reference_ref:
         color_method = str(auto_color.get("method", "reinhard_lab") or "reinhard_lab")
@@ -4411,6 +4492,7 @@ def build_workflow(data: dict) -> dict:
             nodes[original_save_id] = {
                 "class_type": "SaveImage",
                 "inputs": {"filename_prefix": safe_generation_filename_prefix(data, "EasyPanel") + ("_RGB" if data.get("filenamePrefix") else ""), "images": image_ref},
+                "_meta": {"artifactStage": artifact_stage, "artifactRole": "final"},
             }
 
         detail_method = str(transparent.get("detailMethod", "GuidedFilter") or "GuidedFilter")
@@ -4441,8 +4523,28 @@ def build_workflow(data: dict) -> dict:
     filename_prefix = generation_filename_prefix(data)
     nodes[save_id] = {"class_type": "SaveImage", "inputs": {
         "filename_prefix": filename_prefix, "images": image_ref,
-    }}
-    return {"prompt": nodes, "client_id": "easy-panel"}
+    }, "_meta": {"artifactStage": artifact_stage, "artifactRole": "final"}}
+    plan = generation_plan({"prompt": nodes})
+    plan["outputStage"] = artifact_stage
+    plan["output"] = output_size
+    return {"prompt": nodes, "client_id": "easy-panel", "plan": plan}
+
+
+def comfy_prompt_body(workflow: dict) -> dict:
+    """提交给 ComfyUI 的请求体：只保留 prompt / client_id，不带面板自己的 plan。"""
+
+    built = workflow if isinstance(workflow, dict) else {}
+    return {key: value for key, value in built.items() if key in {"prompt", "client_id"}}
+
+
+def execution_plan(workflow: dict) -> dict:
+    """取 build_workflow 声明的计划；旧调用（只有 prompt）也能得到推导结果。"""
+
+    built = workflow if isinstance(workflow, dict) else {}
+    plan = built.get("plan")
+    if isinstance(plan, dict) and plan.get("samplerOrder") is not None:
+        return plan
+    return generation_plan(built)
 
 
 def upscale_model_choices() -> list[str]:
@@ -5123,7 +5225,8 @@ def snapshot_sampling_trace(payload: dict, compiled: dict | None = None) -> dict
     }
 
 
-def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: dict | None = None) -> dict:
+def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: dict | None = None,
+                               plan: dict | None = None) -> dict:
     clean = json.loads(json.dumps(data, ensure_ascii=False))
     compiled = compile_prompt(clean)
     compiled = {**compiled, "sampling": snapshot_sampling_trace(clean, compiled)}
@@ -5143,6 +5246,10 @@ def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: 
         "workflow": snapshot_workflow(source_request),
         "environment": snapshot_environment(clean),
     }
+    # 实际执行计划（由 workflow 推导）：锁定时记录“成品来自哪一步”，
+    # 完成回写时不再从参数反推。
+    if isinstance(plan, dict) and plan:
+        snapshot["plan"] = _snapshot_safe_value(plan, max_text=32768)
     items = load_snapshots()
     items.append(snapshot)
     write_snapshots(items)
@@ -5165,7 +5272,9 @@ def attach_snapshot_outputs(snapshot_id: str, outputs, base_outputs=None,
     if target is None:
         raise ValueError("找不到生成快照。")
     if not stage:
-        stage = generation_output_stage(target.get("payload") or {})
+        # 优先用提交时记录的实际计划（workflow builder 声明），再退回参数推导。
+        recorded = target.get("plan") if isinstance(target.get("plan"), dict) else {}
+        stage = str(recorded.get("outputStage") or "") or generation_output_stage(target.get("payload") or {})
     target["outputs"] = list(dict.fromkeys(names))[:16]
     target["comparisonOutputs"] = list(dict.fromkeys(comparison))[:16]
     write_snapshots(items)
@@ -6086,11 +6195,13 @@ class Handler(BaseHTTPRequestHandler):
                             "message": "发现完全相同的生成任务，已跳过。",
                         })
                         return
-                result = comfy_json("/prompt", "POST", build_workflow(payload))
+                workflow = build_workflow(payload)
+                plan = execution_plan(workflow)
+                result = comfy_json("/prompt", "POST", comfy_prompt_body(workflow))
                 prompt_id = str(result.get("prompt_id") or "")
                 if not re.fullmatch(r"[0-9a-fA-F-]{36}", prompt_id):
                     raise ValueError("ComfyUI 没有返回有效的任务编号。")
-                snapshot = create_generation_snapshot(payload, prompt_id, source_request=data)
+                snapshot = create_generation_snapshot(payload, prompt_id, source_request=data, plan=plan)
                 record_rpg_job(prompt_id, data, payload, snapshot["id"])
                 indexed = index_snapshot_best_effort(
                     snapshot,
@@ -6105,6 +6216,7 @@ class Handler(BaseHTTPRequestHandler):
                     "prompt_id": prompt_id,
                     "status": "queued",
                     "snapshot_id": snapshot["id"],
+                    "plan": plan,
                     "status_url": "/api/rpg/jobs/" + prompt_id,
                 }
                 if indexed.get("generation_id"):
@@ -6214,9 +6326,10 @@ class Handler(BaseHTTPRequestHandler):
                             for item in expanded]
                 submitted = []
                 for index, item in enumerate(prepared):
-                    result = comfy_json("/prompt", "POST", item["workflow"])
+                    result = comfy_json("/prompt", "POST", comfy_prompt_body(item["workflow"]))
                     prompt_id = result.get("prompt_id")
-                    snapshot = create_generation_snapshot(item["payload"], str(prompt_id or ""))
+                    plan = execution_plan(item["workflow"])
+                    snapshot = create_generation_snapshot(item["payload"], str(prompt_id or ""), plan=plan)
                     indexed = index_snapshot_best_effort(
                         snapshot,
                         source_request=item.get("payload") if isinstance(item.get("payload"), dict) else {},
@@ -6227,7 +6340,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "image_count": item["image_count"],
                                       "prompt_id": prompt_id, "snapshot_id": snapshot["id"],
                                       "label": snapshot["label"],
-                                      "plan": generation_plan(item["workflow"]),
+                                      "plan": plan,
                                       **({"generation_id": indexed["generation_id"]}
                                          if indexed.get("generation_id") else {})})
                 self.send_json({"jobs": submitted, "logical_tasks": len(jobs),
@@ -6251,8 +6364,9 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         return
                 workflow = build_workflow(data)
-                result = comfy_json("/prompt", "POST", workflow)
-                snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""))
+                plan = execution_plan(workflow)
+                result = comfy_json("/prompt", "POST", comfy_prompt_body(workflow))
+                snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""), plan=plan)
                 indexed = index_snapshot_best_effort(
                     snapshot,
                     source_request=data,
@@ -6261,7 +6375,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({
                     **result,
                     "snapshot_id": snapshot["id"],
-                    "plan": generation_plan(workflow),
+                    "plan": plan,
                     **({"generation_id": indexed["generation_id"]}
                        if indexed.get("generation_id") else {}),
                 })

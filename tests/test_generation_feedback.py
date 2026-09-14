@@ -1,9 +1,11 @@
-"""生成反馈测试：友好错误分类、阶段计划、接口与前端接线。"""
+"""生成反馈测试：友好错误分类、阶段计划、执行计划、接口与前端接线。"""
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import easy_panel
 from easy_panel_app import rpg_api
@@ -151,15 +153,92 @@ class GenerationPlanTests(unittest.TestCase):
 
     def test_plan_survives_empty_workflow(self):
         plan = easy_panel.generation_plan({})
-        self.assertEqual({"stages": {}, "samplers": {}, "samplerOrder": []}, plan)
+        self.assertEqual({}, plan["stages"])
+        self.assertEqual({}, plan["samplers"])
+        self.assertEqual([], plan["samplerOrder"])
+        self.assertEqual([], plan["detailers"])
+        self.assertEqual(0, plan["samplerCount"])
+        self.assertEqual(0, plan["detailerCount"])
+
+
+class ExecutionPlanTests(unittest.TestCase):
+    """执行计划必须由 workflow builder 产生，前端只做预览。"""
+
+    def test_plan_counts_detailers_separately_from_samplers(self):
+        data = base_payload(animaHighres={"enabled": True, "scale": 1.5,
+                                           "denoise": 0.25, "steps": 20},
+                            animaDetailRefine={"enabled": True, "mode": "balanced"},
+                            outputEnhancement={"mode": "off",
+                                               "faceDetailer": {"enabled": True}})
+        workflow = easy_panel.build_workflow(data)
+        plan = workflow["plan"]
+        # 首采 + 高清二采 + 细节重绘 = 3 次主采样；FaceDetailer 自带采样器，单独计数。
+        self.assertEqual(3, plan["samplerCount"])
+        self.assertEqual(1, plan["detailerCount"])
+        self.assertEqual(["首采采样", "高清二采", "细节重绘"],
+                         [plan["stages"][node] for node in plan["samplerOrder"]])
+        self.assertEqual(1, len(plan["detailers"]))
+        self.assertEqual("face", plan["outputStage"])
+        self.assertEqual({"width": 1248, "height": 1824}, plan["output"])
+        self.assertIn("局部重绘 ×1", easy_panel.generation_plan_summary(plan))
+
+    def test_plan_marks_highres_and_upscale_stages(self):
+        highres = easy_panel.build_workflow(base_payload(
+            animaHighres={"enabled": True, "scale": 1.5, "denoise": 0.25, "steps": 20}))
+        self.assertEqual("highres", highres["plan"]["outputStage"])
+        self.assertEqual({"width": 1248, "height": 1824}, highres["plan"]["output"])
+
+        upscale = easy_panel.build_workflow(base_payload(
+            "waiIllustriousSDXL_v170.safetensors", outputEnhancement={"mode": "anime6b"}))
+        self.assertEqual("upscale", upscale["plan"]["outputStage"])
+        self.assertEqual({"width": 1248, "height": 1824}, upscale["plan"]["output"])
+
+        base = easy_panel.build_workflow(base_payload("waiIllustriousSDXL_v170.safetensors"))
+        self.assertEqual("base", base["plan"]["outputStage"])
+
+    def test_saveimage_carries_stage_and_role(self):
+        data = base_payload(animaHighres={"enabled": True, "scale": 1.5,
+                                          "denoise": 0.25, "steps": 20})
+        nodes = easy_panel.build_workflow(data)["prompt"]
+        metas = [node.get("_meta") or {} for node in nodes.values()
+                 if node.get("class_type") == "SaveImage"]
+        self.assertIn({"artifactStage": "highres", "artifactRole": "final"}, metas)
+        self.assertIn({"artifactStage": "base", "artifactRole": "comparison"}, metas)
+
+    def test_plan_is_stripped_before_comfy_submit(self):
+        workflow = easy_panel.build_workflow(base_payload())
+        body = easy_panel.comfy_prompt_body(workflow)
+        self.assertEqual({"prompt", "client_id"}, set(body))
+        self.assertIn("plan", workflow)
+        self.assertEqual(workflow["prompt"], body["prompt"])
+        source = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
+        self.assertIn('comfy_json("/prompt", "POST", comfy_prompt_body(workflow))', source)
+        self.assertIn('"plan": plan,', source)
+
+    def test_snapshot_records_the_stage_from_the_plan(self):
+        with tempfile.TemporaryDirectory() as folder:
+            snapshot_file = Path(folder) / "generation_snapshots.json"
+            captured = {}
+            with patch.object(easy_panel, "SNAPSHOT_FILE", snapshot_file), \
+                 patch.object(easy_panel, "update_creative_index_status_best_effort",
+                              lambda snapshot_id, status: captured.update(status) or {}):
+                easy_panel.write_snapshots([{
+                    "id": "snap-plan", "outputs": [], "createdAt": 0,
+                    "payload": base_payload(outputEnhancement={"mode": "off"}),
+                    "plan": {"outputStage": "detail_refine"},
+                }])
+                easy_panel.attach_snapshot_outputs("snap-plan", ["EasyPanel_001_00001_.png"])
+        self.assertEqual("detail_refine", captured.get("stage"))
 
 
 class FeedbackWiringTests(unittest.TestCase):
     def test_backend_wires_friendly_history_and_plan(self):
         source = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
         self.assertIn("entry[\"friendlyError\"] = friendly_comfy_error(entry)", source)
-        self.assertIn("\"plan\": generation_plan(workflow)", source)
-        self.assertIn("\"plan\": generation_plan(item[\"workflow\"])", source)
+        self.assertIn("\"plan\": plan,", source)
+        self.assertIn("plan = execution_plan(workflow)", source)
+        self.assertIn("def execution_plan(", source)
+        self.assertIn("def comfy_prompt_body(", source)
         self.assertIn("def generation_plan(", source)
         self.assertIn("friendly_error_text(friendly)", source)
         self.assertIn("STAGE_LABELS", source)
@@ -175,7 +254,7 @@ class FeedbackWiringTests(unittest.TestCase):
         self.assertIn("当前：${stage}", panel)
 
         html = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("panel.js?v=68", html)
+        self.assertIn("panel.js?v=69", html)
 
     def test_stage_eta_and_chain_summary_are_wired(self):
         panel = (ROOT / "web/assets/js/panel.js").read_text(encoding="utf-8")
@@ -183,11 +262,18 @@ class FeedbackWiringTests(unittest.TestCase):
         self.assertIn("easyPanelStageTimingsV1", panel)
         self.assertIn("recordStageDuration(", panel)
         self.assertIn("本阶段预计还需", panel)
+        # ETA 必须按模型族 + 基分辨率分桶，否则 512 的历史会污染 2K 任务。
+        self.assertIn("function stageBucketKey()", panel)
+        self.assertIn("stageTimingKey(stage)", panel)
+        self.assertIn("window.showGenerationPlan?.(plan)", panel)
 
         chain = (ROOT / "web/assets/js/generation-chain.js").read_text(encoding="utf-8")
-        self.assertIn("执行链：", chain)
-        self.assertIn("预计 ${chain.samplers} 次采样", chain)
-        self.assertIn("refreshGenerationChain", chain)
+        self.assertIn("预览执行链：", chain)
+        self.assertIn("实际执行链：", chain)
+        self.assertIn("次主采样", chain)
+        self.assertIn("显存压力", chain)
+        self.assertIn("window.showGenerationPlan", chain)
+        self.assertIn("window.modelFamilyClient", chain)
 
         html = (ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="generationChainSummary"', html)

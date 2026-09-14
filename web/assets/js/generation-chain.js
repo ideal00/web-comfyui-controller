@@ -1,10 +1,11 @@
 /* 执行链摘要：在「生成图片」按钮上方说明这一张会走哪几步。
  *
- * 只读现有控件与能力契约，不参与提交：
- *   - 步骤与互斥关系来自 capabilities（highres_reconstruction / detail_refine /
- *     post_upscale / face_detailer…），不再按模型族写死；
- *   - 数值范围来自 profile.constraints（例如 highres_reconstruction.max_long_edge）；
- *   - 采样次数 / 显存级别由本脚本按步骤推算，只作为预期提示，不影响后端行为。
+ * 这里只是**预览**（根据当前 UI 状态估算，提交前给用户一个预期）；提交后
+ * panel.js 会把后端 `generation_plan()` 的实际计划交给本脚本，在下一行显示
+ * 「实际执行链」——两者不一致时以后端为准。
+ *
+ * 步骤与互斥关系来自 capabilities（highres_reconstruction / detail_refine /
+ * post_upscale / face_detailer…），数值范围来自 profile.constraints。
  */
 (function () {
   "use strict";
@@ -25,6 +26,9 @@
   }
 
   function family() {
+    if (typeof window.modelFamilyClient === "function") {
+      try { return String(window.modelFamilyClient() || ""); } catch (error) { /* 继续回退 */ }
+    }
     const current = profile();
     if (current && current.family) return String(current.family);
     const model = String(byId("model")?.value || "").toLowerCase();
@@ -128,30 +132,89 @@
 
     if (checked("img2imgEnabled")) items.unshift({ label: `整图重绘 denoise ${num("img2imgDenoise", 0.6).toFixed(2)}`, scale: 1 });
 
-    return { items, samplers, size, notes, current };
+    // 局部重绘（FaceDetailer 等）自带采样器，不能算进主采样次数。
+    return { items, samplers, detailers: detailers.length, size, notes, current };
   }
 
-  function vramLabel(samplers, size) {
+  function vramLabel(passes, size) {
     const megapixels = (size.width * size.height) / (1024 * 1024);
-    const score = samplers + (megapixels > 2.4 ? 1.5 : megapixels > 1.5 ? 0.75 : 0);
-    if (score >= 3.5) return "显存高";
-    if (score >= 2) return "显存较高";
-    return "显存常规";
+    const score = passes + (megapixels > 2.4 ? 1.5 : megapixels > 1.5 ? 0.75 : 0);
+    if (score >= 3.5) return "高";
+    if (score >= 2) return "较高";
+    return "常规";
+  }
+
+  function ensureLayout(box) {
+    if (box.dataset.chainLayout === "1") return;
+    const preview = document.createElement("div");
+    preview.id = "generationChainPreview";
+    const plan = document.createElement("div");
+    plan.id = "generationChainPlan";
+    plan.hidden = true;
+    box.replaceChildren(preview, plan);
+    box.hidden = false;
+    box.dataset.chainLayout = "1";
   }
 
   function render() {
     const box = byId("generationChainSummary");
     if (!box) return;
+    ensureLayout(box);
     const chain = buildChain();
     const steps = chain.items.map((item) => item.label).join(" → ");
-    const tail = `预计 ${chain.samplers} 次采样 · ${vramLabel(chain.samplers, chain.size)} · 最终约 ${chain.size.width}×${chain.size.height}`;
+    const detailers = chain.detailers ? ` + ${chain.detailers} 次局部重绘` : "";
+    const tail = `预计 ${chain.samplers} 次主采样${detailers} · 显存压力：${vramLabel(chain.samplers + chain.detailers, chain.size)}`
+      + ` · 最终约 ${chain.size.width}×${chain.size.height}`;
     const note = chain.notes.length ? `（${chain.notes.join("；")}）` : "";
-    const text = `执行链：${steps}｜${tail}${note}`;
-    if (box.textContent === text) return;
-    box.textContent = text;
-    box.title = text;
-    box.hidden = false;
+    const text = `预览执行链：${steps}｜${tail}${note}`;
+    const preview = byId("generationChainPreview") || box;
+    if (preview.textContent !== text) {
+      preview.textContent = text;
+      preview.title = text;
+    }
   }
+
+  // 后端返回的实际计划（提交后的唯一真相源）：覆盖参数推断出来的预览。
+  function planText(plan) {
+    const data = plan && typeof plan === "object" ? plan : {};
+    const stages = data.stages && typeof data.stages === "object" ? data.stages : {};
+    const order = Array.isArray(data.samplerOrder) ? data.samplerOrder : [];
+    const steps = data.samplers && typeof data.samplers === "object" ? data.samplers : {};
+    const items = order.map((nodeId) => {
+      const label = String(stages[String(nodeId)] || "采样");
+      const count = Number(steps[String(nodeId)]);
+      return Number.isFinite(count) && count > 0 ? `${label} ${count} 步` : label;
+    });
+    const detailerCount = Number(data.detailerCount) || 0;
+    if (detailerCount) items.push(`局部重绘 ×${detailerCount}`);
+    if (!items.length) return "";
+    const samplerCount = Number(data.samplerCount) || order.length;
+    const output = data.output && typeof data.output === "object" ? data.output : {};
+    const size = Number(output.width) && Number(output.height)
+      ? `${Number(output.width)}×${Number(output.height)}` : "";
+    const tail = [`实际 ${samplerCount} 次主采样${detailerCount ? ` + ${detailerCount} 次局部重绘` : ""}`,
+      size ? `计划输出 ${size}` : ""].filter(Boolean).join(" · ");
+    return `实际执行链：${items.join(" → ")}｜${tail}`;
+  }
+
+  window.showGenerationPlan = function (plan) {
+    const box = byId("generationChainSummary");
+    if (!box) return;
+    ensureLayout(box);
+    const node = byId("generationChainPlan");
+    const text = planText(plan);
+    if (!node || !text) return;
+    node.textContent = text;
+    node.title = text;
+    node.hidden = false;
+  };
+
+  window.clearGenerationPlan = function () {
+    const node = byId("generationChainPlan");
+    if (!node) return;
+    node.textContent = "";
+    node.hidden = true;
+  };
 
   window.refreshGenerationChain = render;
 

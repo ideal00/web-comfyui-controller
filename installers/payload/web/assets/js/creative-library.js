@@ -371,11 +371,26 @@
 
   function indexReportText(report) {
     if (!report || typeof report !== 'object') return '（没有拿到检查结果）';
-    return `作品 ${Number(report.generations || 0)} 条`
-      + ` · 导入 ${Number(report.imported_generations || 0)} 条`
-      + ` · 文件丢失 ${Number(report.missing_artifacts || 0)} 条`
-      + ` · 重复文件 ${Number(report.duplicate_total || 0)} 组`
-      + ` · 未登记图片 ${Number(report.orphan_total || 0)} 张`;
+    return [
+      `✓ 作品记录：${Number(report.generations || 0)} 条（其中导入 ${Number(report.imported_generations || 0)} 条）`,
+      `✓ 缺失图片：${Number(report.missing_artifacts || 0)} 条`,
+      `⏳ 待落盘：${Number(report.pending_artifacts || 0)} 条（刚生成完、文件还在写盘）`,
+      `⚠ 重复引用：${Number(report.duplicate_total || 0)} 组`,
+      `🆕 未登记图片：${Number(report.orphan_total || 0)} 张`,
+      report.truncated ? '（目录扫描已截断，只统计最近一批文件）' : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  function isPending(item) {
+    return asText(item && item.file_state).toLowerCase() === 'pending'
+      || Number(item && item.pending_artifacts) > 0;
+  }
+
+  function artifactStateText(artifact) {
+    const metadata = artifact && typeof artifact.metadata === 'object' && artifact.metadata ? artifact.metadata : {};
+    if (asText(metadata.file_state).toLowerCase() === 'pending') return '⏳ 文件保存中';
+    if (artifact && artifact.exists === false) return '文件缺失';
+    return '';
   }
 
   function showListView() {
@@ -415,7 +430,8 @@
       image.loading = 'lazy';
       parent.append(image);
     } else {
-      parent.append(createElement('span', 'creative-library-thumb-placeholder', '作品'));
+      parent.append(createElement('span', 'creative-library-thumb-placeholder',
+        isPending(item) ? '⏳ 保存中' : '作品'));
     }
   }
 
@@ -444,6 +460,7 @@
       heading.append(createElement('strong', '', asText(item.model) || '自动模型'));
       heading.append(createElement('small', '', formatTime(item.created_at)));
       if (item.favorite) heading.append(createElement('span', 'creative-library-star-mark', '★ 入选'));
+      if (isPending(item)) heading.append(createElement('span', 'creative-library-pending-mark', '⏳ 文件保存中'));
       const operation = createElement('span', 'creative-library-item-operation', `${operationLabel(item.operation)} · ${statusLabel(item.status)}`);
       const details = createElement('span', 'creative-library-item-details', `seed ${item.seed == null ? '?' : item.seed} · ${item.width || '?'}×${item.height || '?'}`);
       const markers = createElement('span', 'creative-library-item-markers');
@@ -843,7 +860,8 @@
       const row = createElement('div', 'creative-library-output-row');
       const source = state.imageUrls.get(imageKeyForArtifact(artifact.artifact_id));
       const base = isHiresBaseName(artifact.filename) ? '（首采对照，非成品）' : '';
-      const filename = `${asText(artifact.filename) || '未命名图片'}${base}${artifact.exists === false ? '（文件缺失）' : ''}`;
+      const stateText = artifactStateText(artifact);
+      const filename = `${asText(artifact.filename) || '未命名图片'}${base}${stateText ? `（${stateText}）` : ''}`;
       const name = createElement('span', 'creative-library-output-name', filename);
       row.append(name);
       if (source) appendSafeImageLink(row, source, '打开预览', 'creative-library-image-link snapshot-output');
@@ -1007,7 +1025,8 @@
       image.src = source;
       image.alt = `${asText(detail.model) || '作品'} 预览`;
       if (link) link.replaceChildren(image);
-    } else preview.append(createElement('span', 'creative-library-thumb-placeholder', '暂无预览'));
+    } else preview.append(createElement('span', 'creative-library-thumb-placeholder',
+      isPending(detail) ? '⏳ 文件保存中' : '暂无预览'));
     const copy = createElement('div', 'creative-library-detail-copy');
     copy.append(createElement('h3', '', asText(detail.model) || '自动模型'));
     appendMeta(copy, '操作 / 状态', `${operationLabel(detail.operation)} · ${statusLabel(detail.status)}`);
@@ -1327,8 +1346,14 @@
       const imported = Number((result.imported || {}).imported || 0);
       const pruned = Number((result.pruned || {}).pruned_generations || 0);
       const marked = Number((result.duplicates || {}).marked || 0);
-      const summary = `修复完成：新登记 ${imported} 条、清理丢失记录 ${pruned} 条、`
-        + `标记同名重复 ${marked} 条；${indexReportText(result.after)}`;
+      const skipped = Number((result.imported || {}).skipped || 0);
+      const pending = Number((result.after || {}).pending_artifacts || 0);
+      const summary = [
+        `修复完成：新登记 ${imported} 条、清理丢失记录 ${pruned} 条、标记同名重复 ${marked} 条${skipped ? `、跳过已删除文件 ${skipped} 张` : ''}。`,
+        pending ? `仍有 ${pending} 条文件在写盘（⏳ 保存中）：不会被当成丢失，稍后刷新即可。` : '',
+        '修复后：',
+        indexReportText(result.after),
+      ].filter(Boolean).join('\n');
       state.offset = 0;
       // loadList 会写“已读取 N 条作品”，所以刷新完成后再把修复结果写回通知栏。
       Promise.resolve(loadList()).then(() => showNotice(summary)).catch(() => showNotice(summary));

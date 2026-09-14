@@ -107,12 +107,13 @@ def merge_anima_detail_prompt(base_positive: str, params: dict) -> str:
 def build_anima_detail_refine(*, alloc, image_ref, model_ref, vae_ref, clip_ref,
                               positive_text: str, negative_text: str, params: dict,
                               cfg: float, sampler_name: str, scheduler: str,
-                              seed: int) -> tuple[dict, list]:
+                              seed: int, stage_label: str = "细节重绘") -> tuple[dict, list]:
     """同尺寸细节重绘；只输出成品，成品沿用主流程的 SaveImage。
 
     输入 image_ref 就是首采解码结果，所以尺寸天然与首采一致 —— 第一版不做任何
     放大或 Tile，保证「细节有没有增加」可以被单独判断。不再把首采图另存为 _base
     对照：用户只要最终结果，输出目录不堆积对照原图。
+    ``stage_label`` 写进节点 ``_meta``，供执行计划/作品库直接使用，不再靠下标推导。
     """
 
     if not params.get("enabled"):
@@ -132,7 +133,8 @@ def build_anima_detail_refine(*, alloc, image_ref, model_ref, vae_ref, clip_ref,
             "sampler_name": sampler_name, "scheduler": scheduler,
             "denoise": float(params["denoise"]), "model": model_ref,
             "positive": [positive_id, 0], "negative": [negative_id, 0],
-            "latent_image": [encode_id, 0]}},
+            "latent_image": [encode_id, 0]},
+            "_meta": {"stageLabel": str(stage_label or "细节重绘")}},
         decode_id: {"class_type": "VAEDecode", "inputs": {
             "samples": [sampler_id, 0], "vae": vae_ref}},
     }
