@@ -3930,7 +3930,7 @@ def build_workflow(data: dict) -> dict:
 
     # Anima 专属「细节重绘」：同尺寸、低 denoise 的 latent 细化，与 Illustrious 的
     # 二次采样（hires）是两套语义。它不放大、不加 Tile，只让 Anima 在已有结构上补
-    # 高频细节；首采图另存为 _base 对照，方便与细化结果做 A/B。
+    # 高频细节；只保留最终结果，不再另存首采对照图。
     anima_refine = normalize_anima_detail_refine(data)
     if anima_refine["enabled"]:
         if not anima:
@@ -3941,7 +3941,6 @@ def build_workflow(data: dict) -> dict:
             positive_text=merge_anima_detail_prompt(base_positive, anima_refine),
             negative_text=negative, params=anima_refine, cfg=cfg,
             sampler_name=sampler_name, scheduler=scheduler, seed=seed,
-            base_prefix=generation_filename_prefix(data, "_base"),
         )
         nodes.update(refine_nodes)
         image_ref = refine_ref

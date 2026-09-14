@@ -37,8 +37,11 @@ class LoraFavoritesTests(unittest.TestCase):
             "terms.every(term=>searchable.includes(term))",
             "function clearLoraSearch",
             "function loraFamilyVisible(family){return String(family||'general').toLocaleLowerCase()===promptFamilyClient()}",
-            "return favoritesOnly||loraFamilyVisible(m.family)",
-            "收藏不受模型族限制",
+            "function visibleFavoriteLoras",
+            "return loraFamilyVisible(m.family)",
+            "const favorites=visibleFavoriteLoras()",
+            "仅当前模型族",
+            "当前模型族没有收藏的 LoRA",
             "当前模型族 LoRA 分类",
             "renderLoraFolderOptions();refreshLoraSelects()",
         ):

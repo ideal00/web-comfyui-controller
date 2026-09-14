@@ -43,7 +43,7 @@
     block.innerHTML = `
       <summary>Anima 细节增强（同尺寸低温重绘）</summary>
       <div class="small">首采决定画什么、在哪里；细节增强只决定画得多细。它不放大、不改尺寸，和二采（放大 + 重绘）互不替代。</div>
-      <label class="switch" style="margin-top:6px"><input id="animaRefineEnabled" type="checkbox"><div><b>启用细节增强</b><div class="small">会多跑一次低重绘幅度的重采样，并保留首采对照图（可用于 A/B）。</div></div></label>
+      <label class="switch" style="margin-top:6px"><input id="animaRefineEnabled" type="checkbox"><div><b>启用细节增强</b><div class="small">会多跑一次低重绘幅度的重采样，只保留最终结果（不再另存对照图）。</div></div></label>
       <div id="animaRefineBody" style="display:none">
         <div class="field-title"><span>模式</span></div>
         <div class="anima-refine-modes">

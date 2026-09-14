@@ -144,13 +144,13 @@ class AnimaRefineWorkflowTests(unittest.TestCase):
         self.assertEqual(0, len(self.nodes_of(workflow, "ImageUpscaleWithModel")))
         self.assertEqual(0, len(self.nodes_of(workflow, "ImageScale")))
 
-    def test_enabled_saves_a_base_comparison_copy(self):
+    def test_enabled_saves_only_the_final_image(self):
         data = payload("anima-base-v1.0.safetensors")
         data["animaDetailRefine"] = {"enabled": True}
         nodes = self.build(data)
         saves = self.nodes_of(nodes, "SaveImage")
         prefixes = [node["inputs"]["filename_prefix"] for node in saves]
-        self.assertEqual(["EasyPanel_base", "EasyPanel"], prefixes)
+        self.assertEqual(["EasyPanel"], prefixes)
 
     def test_refine_prompt_appends_detail_terms_without_touching_the_snapshot(self):
         data = payload("anima-base-v1.0.safetensors")

@@ -106,24 +106,21 @@ def merge_anima_detail_prompt(base_positive: str, params: dict) -> str:
 
 def build_anima_detail_refine(*, alloc, image_ref, model_ref, vae_ref, clip_ref,
                               positive_text: str, negative_text: str, params: dict,
-                              cfg: float, sampler_name: str, scheduler: str, seed: int,
-                              base_prefix: str) -> tuple[dict, list]:
-    """同尺寸细节重绘；成品沿用主流程的 SaveImage。
+                              cfg: float, sampler_name: str, scheduler: str,
+                              seed: int) -> tuple[dict, list]:
+    """同尺寸细节重绘；只输出成品，成品沿用主流程的 SaveImage。
 
     输入 image_ref 就是首采解码结果，所以尺寸天然与首采一致 —— 第一版不做任何
-    放大或 Tile，保证「细节有没有增加」可以被单独判断。
+    放大或 Tile，保证「细节有没有增加」可以被单独判断。不再把首采图另存为 _base
+    对照：用户只要最终结果，输出目录不堆积对照原图。
     """
 
     if not params.get("enabled"):
         return {}, image_ref
     encode_id, positive_id, negative_id, sampler_id, decode_id = (alloc() for _ in range(5))
-    base_save_id = alloc()
     refine_seed = (int(seed) if params.get("seedMode") != "random"
                    else random.randint(0, 2**31 - 1))
     nodes: dict = {
-        # 首采图另存为 _base 对照：作品库代表图、手机端列表与预览画廊都会跳过它。
-        base_save_id: {"class_type": "SaveImage", "inputs": {
-            "filename_prefix": base_prefix, "images": image_ref}},
         encode_id: {"class_type": "VAEEncode", "inputs": {
             "pixels": image_ref, "vae": vae_ref}},
         positive_id: {"class_type": "CLIPTextEncode", "inputs": {
