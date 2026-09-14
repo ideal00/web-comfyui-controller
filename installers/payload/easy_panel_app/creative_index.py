@@ -420,6 +420,38 @@ def _is_comparison_artifact(item: Any) -> bool:
     return is_hires_base_filename(filename)
 
 
+def _file_key(subfolder: Any, filename: Any) -> str:
+    """作品的磁盘身份：``subfolder/filename``（输出目录内相对路径）。
+
+    导入扫描、跨作品重复检测、删除墓碑都用同一个键，避免同一张图产生两条记录。
+    """
+
+    sub = str(subfolder or "").replace("\\", "/").strip("/")
+    name = str(filename or "").replace("\\", "/").strip()
+    if not name or name in {".", ".."} or Path(name).name != name:
+        return ""
+    if ".." in PurePosixPath(name).parts:
+        return ""
+    return f"{sub}/{name}" if sub else name
+
+
+def _stat_file(root: Path, subfolder: str, filename: str) -> tuple[bool, int, int]:
+    """Return ``(exists, file_size, mtime_ms)``; traversal outside root reports missing."""
+
+    candidate = (root / Path(subfolder) / Path(filename).name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return (False, 0, 0)
+    if not candidate.is_file():
+        return (False, 0, 0)
+    try:
+        stat = candidate.stat()
+    except OSError:
+        return (False, 0, 0)
+    return (True, int(stat.st_size), int(stat.st_mtime * 1000))
+
+
 def _artifact_exists(row: sqlite3.Row) -> bool:
     metadata = _json_value(row["metadata_json"])
     return not (isinstance(metadata, Mapping) and metadata.get("exists") is False)
@@ -596,7 +628,7 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
             candidate.relative_to(root)
         except ValueError:
             return None, "图片路径超出输出目录，已跳过。"
-        exists = candidate.is_file()
+        exists, size, mtime = _stat_file(root, subfolder, filename)
         if not exists:
             return {
                 "filename": filename,
@@ -604,8 +636,9 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
                 "image_type": image_type,
                 "artifact_kind": kind,
                 "artifact_role": declared_role,
-                "metadata": {**safe_metadata, "exists": False},
+                "metadata": {**safe_metadata, "exists": False, "file_state": "missing"},
             }, f"图片不存在，已保留记录：{filename}"
+        safe_metadata.update({"file_state": "ready", "file_size": size, "file_mtime": mtime})
     safe_metadata["exists"] = exists
     return {
         "filename": filename,
@@ -734,6 +767,21 @@ class CreativeIndex:
         if rows:
             connection.executemany(
                 "INSERT OR REPLACE INTO purged_generations(generation_id, purged_at, reason) "
+                "VALUES(?, ?, ?)", rows)
+
+    def _mark_purged_files(self, connection: sqlite3.Connection, file_keys: Any,
+                           reason: str = "") -> None:
+        """按磁盘身份写墓碑：同名文件被删除后，输出扫描不会再把它导回来。"""
+
+        stamp = now_ms()
+        rows = []
+        for key in file_keys or ():
+            clean = str(key or "").strip()
+            if clean:
+                rows.append((clean, stamp, str(reason)[:80]))
+        if rows:
+            connection.executemany(
+                "INSERT OR REPLACE INTO purged_files(file_key, purged_at, reason) "
                 "VALUES(?, ?, ?)", rows)
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
@@ -1031,6 +1079,16 @@ class CreativeIndex:
             )
             """
         )
+        # 文件级墓碑：删除作品后，导入扫描不会再把同一张图建成新记录。
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS purged_files (
+                file_key TEXT PRIMARY KEY,
+                purged_at INTEGER NOT NULL DEFAULT 0,
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_created ON generations(created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_updated ON generations(updated_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_generations_prompt ON generations(prompt_id)")
@@ -1273,38 +1331,115 @@ class CreativeIndex:
                     (metadata_json, ref.get("artifact_role") or "", artifact_id),
                 )
             else:
-                artifact_id = _stable_artifact_id(generation_id, ref)
-                collision = connection.execute(
-                    """SELECT generation_id, filename, subfolder, image_type, artifact_kind
-                       FROM artifacts WHERE artifact_id = ?""",
-                    (artifact_id,),
+                # 同一张图只能属于一条作品：如果扫描导入先建了空壳记录，就把文件
+                # 移交给真实作品并删掉空壳；否则拒绝重复登记（避免作品库里两张一样的图）。
+                conflict = connection.execute(
+                    """SELECT artifact_id, generation_id FROM artifacts
+                       WHERE filename = ? AND subfolder = ? AND image_type = ? AND generation_id <> ?
+                       ORDER BY created_at ASC LIMIT 1""",
+                    (ref["filename"], ref["subfolder"], ref["image_type"], generation_id),
                 ).fetchone()
-                if collision:
-                    identity = (generation_id, ref["filename"], ref["subfolder"], ref["image_type"], ref["artifact_kind"])
-                    existing_identity = tuple(collision[column] for column in (
-                        "generation_id", "filename", "subfolder", "image_type", "artifact_kind",
-                    ))
-                    if existing_identity != identity:
-                        raise CreativeIndexError("artifact_id 稳定哈希冲突，已拒绝写入。")
-                connection.execute(
-                    """INSERT INTO artifacts(
-                           artifact_id, generation_id, filename, subfolder, image_type,
-                           artifact_kind, artifact_role, metadata_json, created_at
-                       ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        artifact_id,
+                adopted = ""
+                if conflict:
+                    # 只接手“导入扫描产生的空壳”：真实作品之间的同名（历史编号回退、
+                    # ComfyUI 覆写旧文件）保留原样，由 mark_duplicate_artifacts_missing()
+                    # 按“最新为准”统一标记，避免破坏既有修复语义。
+                    if self._adopt_imported_shell(
+                        connection,
+                        str(conflict["generation_id"]),
                         generation_id,
-                        ref["filename"],
-                        ref["subfolder"],
-                        ref["image_type"],
-                        ref["artifact_kind"],
-                        ref.get("artifact_role") or "",
-                        metadata_json,
-                        now_ms(),
-                    ),
-                )
+                        str(conflict["artifact_id"]),
+                        metadata_json=metadata_json,
+                        role=ref.get("artifact_role") or "",
+                    ):
+                        adopted = str(conflict["artifact_id"])
+                if adopted:
+                    artifact_id = adopted
+                else:
+                    artifact_id = _stable_artifact_id(generation_id, ref)
+                    collision = connection.execute(
+                        """SELECT generation_id, filename, subfolder, image_type, artifact_kind
+                           FROM artifacts WHERE artifact_id = ?""",
+                        (artifact_id,),
+                    ).fetchone()
+                    if collision:
+                        identity = (generation_id, ref["filename"], ref["subfolder"], ref["image_type"], ref["artifact_kind"])
+                        existing_identity = tuple(collision[column] for column in (
+                            "generation_id", "filename", "subfolder", "image_type", "artifact_kind",
+                        ))
+                        if existing_identity != identity:
+                            raise CreativeIndexError("artifact_id 稳定哈希冲突，已拒绝写入。")
+                    connection.execute(
+                        """INSERT INTO artifacts(
+                               artifact_id, generation_id, filename, subfolder, image_type,
+                               artifact_kind, artifact_role, metadata_json, created_at
+                           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            artifact_id,
+                            generation_id,
+                            ref["filename"],
+                            ref["subfolder"],
+                            ref["image_type"],
+                            ref["artifact_kind"],
+                            ref.get("artifact_role") or "",
+                            metadata_json,
+                            now_ms(),
+                        ),
+                    )
             artifact_ids.append(artifact_id)
         return artifact_ids
+
+    @staticmethod
+    def _adopt_imported_shell(
+        connection: sqlite3.Connection,
+        source_generation_id: str,
+        target_generation_id: str,
+        artifact_id: str,
+        *,
+        metadata_json: str,
+        role: str,
+    ) -> bool:
+        """把「输出扫描导入的空壳记录」的文件移交给真实作品。
+
+        仅当来源记录是 imported、且没有任何用户数据（收藏/评分/备注/收藏组/项目/
+        谱系）且只有这一个 artifact 时才会接手；迁移后删掉空壳行（先改归属再删，
+        否则 ON DELETE CASCADE 会把 artifact 一起带走）。
+        """
+
+        if not source_generation_id or source_generation_id == target_generation_id:
+            return False
+        row = connection.execute(
+            "SELECT operation, favorite, rating, note FROM generations WHERE generation_id = ?",
+            (source_generation_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if str(row["operation"] or "") != "imported":
+            return False
+        if _row_flag(row, "favorite") or _row_int(row, "rating") or _row_text(row, "note", 1).strip():
+            return False
+        for sql, params in (
+            ("SELECT 1 FROM generation_favorite_groups WHERE generation_id = ? LIMIT 1",
+             (source_generation_id,)),
+            ("SELECT 1 FROM project_items WHERE generation_id = ? LIMIT 1",
+             (source_generation_id,)),
+            ("SELECT 1 FROM derivations WHERE parent_generation_id = ? OR child_generation_id = ? LIMIT 1",
+             (source_generation_id, source_generation_id)),
+        ):
+            if connection.execute(sql, params).fetchone():
+                return False
+        count = connection.execute(
+            "SELECT COUNT(*) FROM artifacts WHERE generation_id = ?", (source_generation_id,)
+        ).fetchone()[0]
+        if int(count or 0) > 1:
+            return False
+        connection.execute(
+            "UPDATE artifacts SET generation_id = ?, metadata_json = ?, artifact_role = ? "
+            "WHERE artifact_id = ?",
+            (target_generation_id, metadata_json, role, artifact_id),
+        )
+        connection.execute("DELETE FROM generations WHERE generation_id = ?", (source_generation_id,))
+        return True
 
     @staticmethod
     def _insert_derivation(
@@ -1424,6 +1559,8 @@ class CreativeIndex:
             }
             purged = {str(row[0]) for row in connection.execute(
                 "SELECT generation_id FROM purged_generations")}
+            purged_files = {str(row[0]) for row in connection.execute(
+                "SELECT file_key FROM purged_files")}
         finally:
             connection.close()
 
@@ -1443,6 +1580,11 @@ class CreativeIndex:
         skipped = 0
         failed: list[str] = []
         for path, subfolder in candidates:
+            key = _file_key(subfolder, path.name)
+            if key and key in purged_files:
+                # 用户删过这张图：不再自动导回（文件重生成时文件名会变）。
+                skipped += 1
+                continue
             record = _comfy_record_from_png(path)
             if record is None:
                 skipped += 1
@@ -1455,6 +1597,13 @@ class CreativeIndex:
             artifact_id = hashlib.sha256(
                 f"artifact:{generation_id}:{path.name}".encode("utf-8")).hexdigest()[:32]
             created_at = int(path.stat().st_mtime * 1000)
+            exists, size, mtime = _stat_file(Path(str(root)).resolve(), subfolder, path.name)
+            artifact_metadata = {
+                "exists": exists,
+                "file_state": "ready" if exists else "missing",
+                "file_size": size,
+                "file_mtime": mtime,
+            }
             payload = {
                 "positivePrompt": record["positive"],
                 "negativePrompt": record["negative"],
@@ -1485,9 +1634,10 @@ class CreativeIndex:
                         """INSERT OR IGNORE INTO artifacts(
                                artifact_id, generation_id, filename, subfolder,
                                image_type, artifact_kind, artifact_role, metadata_json, created_at)
-                           VALUES(?, ?, ?, ?, 'output', 'output', ?, '{}', ?)""",
+                           VALUES(?, ?, ?, ?, 'output', 'output', ?, ?, ?)""",
                         (artifact_id, generation_id, path.name, subfolder,
-                         _artifact_role_for(path.name, "output", "output"), created_at),
+                         _artifact_role_for(path.name, "output", "output"),
+                         _json_text(artifact_metadata), created_at),
                     )
                     for position, lora in enumerate(record["loras"]):
                         conn.execute(
@@ -2007,20 +2157,19 @@ class CreativeIndex:
                 for artifact in artifacts:
                     filename = str(artifact["filename"] or "")
                     subfolder = str(artifact["subfolder"] or "").replace("\\", "/").strip("/")
-                    candidate = (root / Path(subfolder) / Path(filename).name).resolve()
-                    try:
-                        candidate.relative_to(root)
-                    except ValueError:
-                        candidate = root
-                    exists = candidate.is_file()
+                    exists, size, mtime = _stat_file(root, subfolder, filename)
                     exists_any = exists_any or exists
                     metadata = _json_value(artifact["metadata_json"])
                     if not isinstance(metadata, Mapping):
                         metadata = {}
                     else:
                         metadata = dict(metadata)
-                    if bool(metadata.get("exists")) != exists:
-                        metadata["exists"] = exists
+                    updates = {"exists": exists,
+                               "file_state": "ready" if exists else "missing"}
+                    if exists:
+                        updates.update({"file_size": size, "file_mtime": mtime})
+                    if any(metadata.get(key) != value for key, value in updates.items()):
+                        metadata.update(updates)
                         connection.execute(
                             "UPDATE artifacts SET metadata_json = ? WHERE artifact_id = ?",
                             (json.dumps(metadata, ensure_ascii=False), artifact["artifact_id"]),
@@ -2035,6 +2184,84 @@ class CreativeIndex:
             "pruned_generations": len(pruned),
             "refreshed_artifacts": refreshed,
         }
+
+    def index_report(self, output_root: Any, *, limit: int = 4000,
+                     prefix: str = "EasyPanel_") -> dict[str, Any]:
+        """作品库健康报告：缺失文件 / 重复文件 / 孤儿文件 / 导入记录。
+
+        只读：不改记录、不删文件。``limit`` 限制输出目录扫描量，超过时用
+        ``truncated`` 标记，避免几万张图把接口拖慢。
+        """
+
+        root = Path(str(output_root)).resolve()
+        scan_limit = max(1, min(20000, int(limit)))
+        with self._connection() as connection:
+            total = int(connection.execute("SELECT COUNT(*) FROM generations").fetchone()[0] or 0)
+            imported = int(connection.execute(
+                "SELECT COUNT(*) FROM generations WHERE operation = 'imported'").fetchone()[0] or 0)
+            missing_artifacts = 0
+            live_owners: dict[tuple[str, str], set[str]] = {}
+            for row in connection.execute(
+                    "SELECT filename, subfolder, generation_id, metadata_json FROM artifacts "
+                    "WHERE image_type = 'output' LIMIT 20000"):
+                metadata = _json_value(row["metadata_json"])
+                if isinstance(metadata, Mapping) and metadata.get("exists") is False:
+                    missing_artifacts += 1
+                    continue
+                key = (str(row["filename"] or ""), str(row["subfolder"] or ""))
+                live_owners.setdefault(key, set()).add(str(row["generation_id"]))
+            live_duplicates = sorted(
+                ((key, owners) for key, owners in live_owners.items() if len(owners) > 1),
+                key=lambda item: (-len(item[1]), item[0][0]))
+            recorded = {_file_key(sub, name) for name, sub in live_owners}
+        duplicates = [
+            {"file": _file_key(sub, name), "owners": len(owners)}
+            for (name, sub), owners in live_duplicates[:20]
+        ]
+        scanned_files = 0
+        orphan_files: list[str] = []
+        truncated = False
+        if root.is_dir():
+            for path in sorted(root.rglob("*.png")):
+                if prefix and not path.name.startswith(prefix):
+                    continue
+                scanned_files += 1
+                if scanned_files > scan_limit:
+                    truncated = True
+                    break
+                relative = path.relative_to(root)
+                subfolder = "" if str(relative.parent) == "." else relative.parent.as_posix()
+                key = _file_key(subfolder, path.name)
+                if key and key not in recorded:
+                    orphan_files.append(key)
+        return {
+            "generations": total,
+            "imported_generations": imported,
+            "missing_artifacts": missing_artifacts,
+            "duplicate_total": len(live_duplicates),
+            "duplicates": duplicates,
+            "orphan_total": len(orphan_files),
+            "orphan_sample": orphan_files[:20],
+            "scanned_files": min(scanned_files, scan_limit),
+            "truncated": truncated,
+            "output_root": str(root),
+        }
+
+    def repair_index(self, output_root: Any, *, limit: int = 400, max_import: int = 200,
+                     prefix: str = "EasyPanel_") -> dict[str, Any]:
+        """一键修复：报告 → 增量导入未登记的成品 → 清理丢失记录 → 同名重复标记。
+
+        同名重复沿用既有语义（最新为准，旧记录标缺失而不删行），因为旧图已被
+        ComfyUI 覆写，删除行会丢掉当时的生成参数。
+        """
+
+        before = self.index_report(output_root, prefix=prefix)
+        imported = self.import_output_images(output_root, prefix=prefix, limit=max_import)
+        pruned = self.prune_missing_outputs(output_root, limit=limit)
+        duplicates = self.mark_duplicate_artifacts_missing()
+        after = self.index_report(output_root, prefix=prefix)
+        return {"before": before, "imported": imported, "pruned": pruned,
+                "duplicates": duplicates, "after": after}
 
     def delete_generation(self, generation_id: Any, output_root: Any = None) -> dict[str, Any] | None:
         """Delete one generation record together with its recorded output files.
@@ -2092,6 +2319,12 @@ class CreativeIndex:
                     pass
         with self._write_transaction() as connection:
             self._mark_purged(connection, [wanted], "delete")
+            self._mark_purged_files(
+                connection,
+                [_file_key(subfolder, filename) for _a, image_type, filename, subfolder in targets
+                 if image_type == "output" and _file_key(subfolder, filename)],
+                "delete",
+            )
             cursor = connection.execute(
                 "DELETE FROM generations WHERE generation_id = ?", (wanted,)
             )
@@ -2196,6 +2429,12 @@ class CreativeIndex:
         deleted = 0
         with self._write_transaction() as connection:
             self._mark_purged(connection, targets, "purge:" + ",".join(wanted))
+            self._mark_purged_files(
+                connection,
+                [_file_key(subfolder, filename) for filename, subfolder in removable
+                 if _file_key(subfolder, filename)],
+                "purge:" + ",".join(wanted),
+            )
             for start in range(0, len(targets), 400):
                 piece = targets[start:start + 400]
                 marks = ",".join("?" for _ in piece)

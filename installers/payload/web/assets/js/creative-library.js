@@ -369,6 +369,15 @@
     node.className = `creative-library-notice${kind ? ` ${kind}` : ''}`;
   }
 
+  function indexReportText(report) {
+    if (!report || typeof report !== 'object') return '（没有拿到检查结果）';
+    return `作品 ${Number(report.generations || 0)} 条`
+      + ` · 导入 ${Number(report.imported_generations || 0)} 条`
+      + ` · 文件丢失 ${Number(report.missing_artifacts || 0)} 条`
+      + ` · 重复文件 ${Number(report.duplicate_total || 0)} 组`
+      + ` · 未登记图片 ${Number(report.orphan_total || 0)} 张`;
+  }
+
   function showListView() {
     const list = byId('creativeLibraryListView');
     const detail = byId('creativeLibraryDetailView');
@@ -1307,9 +1316,31 @@
     }
   }
 
+  async function repairLibrary() {
+    try {
+      const report = await postJson('/api/rpg/library/repair', state.token, { action: 'report' });
+      const confirmed = global.confirm(
+        `当前索引：\n${indexReportText(report)}\n\n现在执行修复？\n`
+        + '将：登记未入索引的成品图、清理记录已不存在文件的条目、合并重复引用的同一张图。不会删除仍存在的图片。');
+      if (!confirmed) return;
+      const result = await postJson('/api/rpg/library/repair', state.token, { action: 'repair' });
+      const imported = Number((result.imported || {}).imported || 0);
+      const pruned = Number((result.pruned || {}).pruned_generations || 0);
+      const marked = Number((result.duplicates || {}).marked || 0);
+      const summary = `修复完成：新登记 ${imported} 条、清理丢失记录 ${pruned} 条、`
+        + `标记同名重复 ${marked} 条；${indexReportText(result.after)}`;
+      state.offset = 0;
+      // loadList 会写“已读取 N 条作品”，所以刷新完成后再把修复结果写回通知栏。
+      Promise.resolve(loadList()).then(() => showNotice(summary)).catch(() => showNotice(summary));
+    } catch (error) {
+      showNotice('修复失败：' + asText(error && error.message), 'error');
+    }
+  }
+
   byId('creativeLibraryClose')?.addEventListener('click', closeDialog);
     byId('creativeLibraryRefresh')?.addEventListener('click', () => { state.offset = 0; void loadList(); });
     byId('creativeLibraryPurgeFailed')?.addEventListener('click', () => { void purgeFailedLibrary(); });
+    byId('creativeLibraryRepair')?.addEventListener('click', () => { void repairLibrary(); });
     byId('creativeLibraryAuth')?.addEventListener('submit', submitAuth);
     byId('creativeLibraryFilters')?.addEventListener('submit', applyFilters);
     byId('creativeLibraryPrevious')?.addEventListener('click', goPrevious);

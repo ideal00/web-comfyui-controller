@@ -927,6 +927,50 @@ def task_comfy_submit(item: dict) -> dict:
             "generation_id": indexed.get("generation_id", "")}
 
 
+def wait_for_output_files(images: Any, timeout: float = 2.0) -> bool:
+    """等输出文件真正落盘并稳定（两轮 size/mtime 一致）。
+
+    ComfyUI 的 ``/history`` 先于文件完全写完就可能被读到，慢盘或 SeedVR2/4K 这类
+    大图尤其明显；直接索引会得到 ``exists=false`` 的假“文件丢失”。这里最多等
+    ``timeout`` 秒（默认 2 秒，每 0.2 秒复查一次），超时也不报错。
+    """
+
+    entries: list[tuple[str, str]] = []
+    for image in images or []:
+        if isinstance(image, dict):
+            name = Path(str(image.get("filename") or "")).name
+            subfolder = str(image.get("subfolder") or "").replace("\\", "/").strip("/")
+        else:
+            name, subfolder = Path(str(image or "")).name, ""
+        if name:
+            entries.append((subfolder, name))
+    if not entries:
+        return False
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    previous: dict[tuple[str, str], tuple[int, int]] = {}
+    while True:
+        stable = True
+        for subfolder, name in entries:
+            path = OUTPUT / subfolder / name if subfolder else OUTPUT / name
+            try:
+                stat = path.stat()
+            except OSError:
+                stable = False
+                continue
+            if stat.st_size <= 0:
+                stable = False
+                continue
+            marker = (int(stat.st_size), int(stat.st_mtime_ns))
+            if previous.get((subfolder, name)) != marker:
+                stable = False
+            previous[(subfolder, name)] = marker
+        if stable:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
     """任务结束时回写快照输出与创作索引状态（失败不会影响后续任务）。"""
 
@@ -934,6 +978,9 @@ def task_queue_outputs(item: dict, status: str, payload: dict) -> None:
     if not snapshot_id:
         return
     images = (payload or {}).get("images") if isinstance((payload or {}).get("images"), list) else []
+    if status == "completed":
+        # 大图/慢盘上 ComfyUI history 先就绪、文件可能还在写：先确认尺寸稳定再入索引。
+        wait_for_output_files(images)
     split = split_hires_outputs(images)
     if status == "completed" and split["final"]:
         try:
@@ -1427,6 +1474,7 @@ def reconcile_creative_index_jobs(limit: int = CREATIVE_INDEX_RECONCILE_LIMIT) -
                 try:
                     split = split_hires_outputs(image_names)
                     if split["final"]:
+                        wait_for_output_files(status.get("images") or [])
                         attach_snapshot_outputs(snapshot_id, split["final"], base_outputs=split["base"])
                 except Exception:
                     pass
@@ -5715,7 +5763,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -5796,6 +5844,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({
                     "api_version": RPG_API_VERSION,
                     "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    **result,
+                })
+                return
+            if self.path == "/api/rpg/library/repair":
+                # 作品库健康检查与一键修复：扫描导入未登记成品、清理丢失记录、合并重复引用。
+                action = str(data.get("action") or "report").strip().casefold()
+                creative_index = get_creative_index()
+                ensure_creative_index_from_legacy_best_effort(creative_index)
+                if action == "repair":
+                    result = creative_index.repair_index(OUTPUT)
+                elif action == "report":
+                    result = creative_index.index_report(OUTPUT)
+                else:
+                    raise ValueError("未知的修复动作。")
+                self.send_json({
+                    "api_version": RPG_API_VERSION,
+                    "index_schema_version": CREATIVE_INDEX_SCHEMA_VERSION,
+                    "action": action,
                     **result,
                 })
                 return
