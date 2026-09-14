@@ -140,8 +140,8 @@
     block.className = "anima-highres-panel";
     block.innerHTML = `
       <summary>Anima 高清重建（放大 + 二采）</summary>
-      <div class="small">首采约 1MP 决定构图；高清重建先做 Anime6B 超分、缩放回目标倍率，再由 Anima 二采在更高分辨率上重建细节。与「细节增强」（同尺寸润色）互不替代；与输出增强（Anime6B 等）不能同时开启。</div>
-      <label class="switch" style="margin-top:6px"><input id="animaHighresEnabled" type="checkbox"><div><b>启用高清重建</b><div class="small">目标倍率 1.15–2.0×（推荐 1.25–1.5×）；作品库主作品=最终成品，首采对照图另行保存（文件名带 _base_，仅用于二采对照）。</div></div></label>
+      <div class="small">首采约 1MP 决定构图。<b>高清重建内部就包含 Anime6B 超分</b>：先用 Anime6B 放大、缩放回目标倍率，再由 Anima 二采在更高分辨率上重建细节。所以开高清重建时不需要（也不允许）再开「输出增强」的 Anime6B —— 那是放大两次；只有「只想放大、不做二采」时才改用输出增强。与「细节增强」（同尺寸润色）互不替代。</div>
+      <label class="switch" style="margin-top:6px"><input id="animaHighresEnabled" type="checkbox"><div><b>启用高清重建</b><div class="small">目标倍率 1.15–2.0×（推荐 1.25–1.5×）；Anime6B 超分已内含，开启后「输出增强」会置为关闭（避免重复放大）。作品库主作品=最终成品，首采对照图另行保存（文件名带 _base_，仅用于二采对照）。</div></div></label>
       <div id="animaHighresBody" style="display:none">
         <div class="field-title"><span>档位</span><span class="small">先选目的，再微调数字</span></div>
         <div class="hires-purpose-row anima-highres-presets">
@@ -184,7 +184,7 @@
       if (enabled && outputMode !== "off") {
         byId("animaHighresEnabled").checked = false;
         const status = byId("status");
-        if (status) status.textContent = "输出增强已开启：高清重建与输出增强不能同时使用，请先关闭输出增强。";
+        if (status) status.textContent = "输出增强已开启：高清重建内部已包含 Anime6B 超分，再开会重复放大；已保持高清重建关闭。若要纯放大（不做二采），就用输出增强。";
       }
       window.animaHighresRefresh();
     });
@@ -193,7 +193,7 @@
       if (mode !== "off" && byId("animaHighresEnabled")?.checked === true) {
         byId("animaHighresEnabled").checked = false;
         const status = byId("status");
-        if (status) status.textContent = "已关闭 Anima 高清重建：与输出增强互斥（避免重复放大与显存溢出）。";
+        if (status) status.textContent = "已关闭 Anima 高清重建：它内部已包含 Anime6B 超分，与输出增强重复放大；本次按「输出增强」执行。需要 Anime6B + 二采时请只开高清重建。";
         window.animaHighresRefresh();
       }
     });
@@ -357,11 +357,11 @@
       ? `请求 ${state.scale}×，受长边上限 ${maxLongEdge} 限制，实际约 ${effectiveScale.toFixed(2)}×`
       : `按 ${state.scale}× 执行`;
     lines.push(`预计输出 ${width}×${height}（${clampNote}）· 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise}。`);
-    lines.push(`超分模型：${String(allowedUpscalers()[0] || FALLBACK_LIMITS.upscalers[0]).replace(".pth", "")}（已锁定）`);
+    lines.push(`超分模型：${String(allowedUpscalers()[0] || FALLBACK_LIMITS.upscalers[0]).replace(".pth", "")}（高清重建内部完成，无需再开输出增强）`);
     if (!state.enabled) lines.length = 1;
     const outputMode = String(byId("outputEnhancementMode")?.value || "off");
     if (state.enabled && outputMode !== "off") {
-      lines.push("⚠ 输出增强已开启：两者互斥（开启高清重建会自动关闭输出增强）。");
+      lines.push("⚠ 输出增强已开启：高清重建内部已含 Anime6B 超分，两者重复放大；开启高清重建会自动关闭输出增强。");
     }
     if (state.enabled && byId("animaRefineEnabled")?.checked === true) {
       lines.push("⚠ 细节增强也已开启：本次将执行「首采 → 高清二采 → 细节重绘」共 3 次采样，耗时与显存显著增加。");

@@ -2449,7 +2449,8 @@ def anima_preflight(data: dict) -> dict:
         warnings.append(
             f"已启用高清重建：{upscaler} 放大后缩放到约 {spec['targetWidth']}×{spec['targetHeight']}"
             f"（请求 {spec['scale']}×，实际 {effective:.2f}×），再由 Anima 二采重建细节；"
-            "预计耗时与显存占用显著增加，8GB 显存建议 1.25–1.5×；与输出增强（Anime6B 等）不能同时开启。")
+            "预计耗时与显存占用显著增加，8GB 显存建议 1.25–1.5×。"
+            "高清重建内部已含 Anime6B 超分，因此与「输出增强」不能同时开启：想只放大不重绘时改用输出增强。")
     return {"isAnima": True, "errors": errors, "warnings": warnings,
             "prompt": compiled["positive"], "negative": compiled["negative"],
             "compiled": compiled}
@@ -4208,7 +4209,9 @@ def build_workflow(data: dict) -> dict:
     if post_mode not in {"off", "anime6b", "seedvr2", "ultimate"}:
         raise ValueError("未知的输出增强模式。")
     if hires_enabled and post_mode != "off":
-        raise ValueError("高清二次采样与输出超分不能同时开启；请选择其中一种，避免重复放大和显存溢出。")
+        raise ValueError(
+            "高清二次采样与输出超分不能同时开启；Anima 高清重建内部已包含 Anime6B 超分（放大后二采重建），"
+            "再开输出增强会重复放大、也更容易显存溢出 —— 只想纯放大（不重绘）时才用输出增强。")
     if repair and post_mode != "off":
         raise ValueError("局部修复不能同时执行整图输出超分；请先完成修复，再把结果作为底图放大。")
     post_scale = bounded(output_enhancement.get("scale"), 1.5, 1.1, 4.0, integer=False)

@@ -198,9 +198,9 @@
           <div class="small" style="margin-top:6px">Tiled 会同时用于普通 img2img 的 VAE Encode 和最终 Decode；局部修复仍使用专用 Inpaint 编码节点。</div>
         </div>
         <hr style="border:0;border-top:1px solid var(--line);margin:12px 0">
-        <div class="field-title"><span>输出增强工作流</span>${help("生成完成后只选择一种整图增强；与高清二次采样、局部修复互斥。默认关闭用于基线对比。")}</div>
+        <div class="field-title"><span>输出增强工作流</span>${help("生成完成后只选择一种整图增强；与高清二次采样、局部修复互斥。注意：Anima 高清重建内部已含 Anime6B 超分，所以开了高清重建时这里要留空（二者重复放大）；默认关闭用于基线对比。")}</div>
         <div class="two">
-          <div><div class="field-title"><span>整图增强</span>${help("Anime6B 适合动漫锐线；SeedVR2 更保守地修复细节；Ultimate 会分块扩散重绘，质量高但最慢。")}</div><select id="outputEnhancementMode" onchange="outputEnhancementChanged()"><option value="off">关闭（推荐基线）</option><option value="anime6b">Anime6B 后处理超分</option><option value="seedvr2">SeedVR2 生成式超分</option><option value="ultimate">Ultimate SD Upscale（SDXL）</option></select></div>
+          <div><div class="field-title"><span>整图增强</span>${help("Anime6B 是纯放大（不重绘，适合动漫锐线）；SeedVR2 更保守地修复细节；Ultimate 会分块扩散重绘，质量高但最慢。想动画 + 超分一起要用人话：开「Anima 高清重建」即可，它内含 Anime6B。")}</div><select id="outputEnhancementMode" onchange="outputEnhancementChanged()"><option value="off">关闭（推荐基线）</option><option value="anime6b">Anime6B 后处理超分（纯放大，不重绘）</option><option value="seedvr2">SeedVR2 生成式超分</option><option value="ultimate">Ultimate SD Upscale（SDXL）</option></select></div>
           <div><div class="field-title"><span>输出倍率</span>${help("输出边长倍率。Anime6B/Ultimate 推荐 1.5×；SeedVR2 推荐 1.25×。倍率越高越吃显存，也越容易改变原图细节。")}</div><input id="outputEnhancementScale" type="number" min="1.1" max="4" step="0.05" value="1.5"></div>
         </div>
         <div id="outputEnhancementRecommendation" class="small" style="margin-top:6px">${OUTPUT_DEFAULTS.off.note}</div>

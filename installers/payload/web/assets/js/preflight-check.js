@@ -169,7 +169,7 @@
     const mode = text(payload.illustriousMode) || 'precision';
     const enhancement = payload.outputEnhancement && typeof payload.outputEnhancement === 'object' ? payload.outputEnhancement : {};
     if (mode === 'hires' && text(enhancement.mode) && text(enhancement.mode) !== 'off') {
-      items.push({ level: 'error', label: '二采 / 超分冲突', detail: '高清二次采样与输出超分不能同时开启，请二选一。' });
+      items.push({ level: 'error', label: '二采 / 超分冲突', detail: '高清二次采样（含 Anima 高清重建）内部已包含超分放大，与「输出增强」不能同时开启，否则会放大两次；要 Anime6B + 二采就只开高清重建，要纯放大就只开输出增强。' });
     }
     if (mode === 'hires') {
       const lock = payload.hiresCompositionLock !== false;
