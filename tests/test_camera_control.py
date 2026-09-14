@@ -154,7 +154,8 @@ class FrontendWiringTests(unittest.TestCase):
     def test_script_covers_payload_restore_and_preview(self):
         script = (PROJECT_DIR / "web" / "assets" / "js" / "camera-control.js").read_text(encoding="utf-8")
         for needle in ("cameraControl", "/api/camera-prompt", "restorePayloadToPanel",
-                       "promptCompilePayload", "相机机位控制", "cameraControlHint", "wrapPromptEditorChanged"):
+                       "promptCompilePayload", "相机机位控制", "cameraControlHint", "cameraControlSummary",
+                       "cameraControlStage", "bindCameraStage", "wrapPromptEditorChanged"):
             self.assertIn(needle, script)
 
     def test_backend_registers_endpoint_and_hook(self):

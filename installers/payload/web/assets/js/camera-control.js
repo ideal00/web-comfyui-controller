@@ -39,7 +39,7 @@
     block.className = "camera-control-panel";
     block.innerHTML = `
       <summary>机位控制（BSK 相机：左右 / 上下 / 前后 / 翻滚）</summary>
-      <div class="small">滑杆折算成加权相机词（from left / eye-level / close-up …），生成时并入正向提示词。
+      <div class="small">滑杆只改「提示词」：下面的机位词框和右侧「最终提示词」会马上变；<b>图片要重新生成才会变</b>。
         机位本身不会凭空生效——需要同时挂载配套的「相机机位控制（BSK）」LoRA（权重 0.6–1.0）。</div>
       <label class="switch" style="margin-top:6px"><input id="cameraControlEnabled" type="checkbox"><div><b>启用机位控制</b><div class="small">关闭时滑杆值不会进入提示词。</div></div></label>
       <div id="cameraControlBody" style="display:none">
@@ -51,6 +51,8 @@
               <div class="small">${escapeHtml(axis.hint)}</div>
             </div>`).join("")}
         </div>
+        <canvas id="cameraControlStage" style="width:100%;height:190px;display:block;border-radius:6px;background:rgba(127,127,127,.10);touch-action:none;cursor:grab"></canvas>
+        <div class="small">舞台可拖：左右 = 环绕（X）、上下 = 俯仰（Y）；双击归位。</div>
         <div id="cameraControlPresets">
           ${PRESETS.map((group) => `
             <div class="field-title" style="margin-top:6px"><span>${escapeHtml(group.title)}</span></div>
@@ -59,8 +61,11 @@
                 `<button type="button" class="secondary" onclick="cameraControlSetPreset('${key}', ${value})">${escapeHtml(label)}</button>`).join("")}
             </div>`).join("")}
         </div>
-        <div class="field-title" style="margin-top:8px"><span>将写入的机位词</span></div>
-        <div id="cameraControlPreviewValue" class="small" style="word-break:break-all">（未启用）</div>
+        <div class="field-title" style="margin-top:8px"><span>将写入的机位词（实时）</span></div>
+        <div id="cameraControlPreviewBox" style="border:1px solid rgba(127,127,127,.45);border-radius:6px;padding:6px 8px;background:rgba(127,127,127,.10)">
+          <div id="cameraControlSummary" style="font-weight:600">当前：—</div>
+          <div id="cameraControlPreviewValue" class="small" style="word-break:break-all">（未启用）</div>
+        </div>
         <div id="cameraControlHint" class="small"></div>
         <div class="two" style="margin-top:8px">
           <div><div class="field-title"><span>机位 LoRA 权重</span></div><input id="cameraControlLoraWeight" type="number" min="0.1" max="1.5" step="0.05" value="0.8"></div>
@@ -73,6 +78,7 @@
     AXES.forEach((axis) => {
       byId("cameraControl_" + axis.key)?.addEventListener("input", cameraControlRefresh);
     });
+    bindCameraStage();
     window.cameraControlSyncVisibility();
     cameraControlRefresh();
   }
@@ -139,6 +145,153 @@
     }
   };
 
+  // ---------- 实时 3D 舞台（透视轨道 + 可拖拽相机 + 视线） ----------
+  const STAGE = { dragging: false, lastX: 0, lastY: 0 };
+
+  function setSlider(key, value) {
+    const input = byId("cameraControl_" + key);
+    if (input) input.value = String(Math.max(-1, Math.min(1, value)).toFixed(2));
+  }
+
+  function drawCameraStage() {
+    const canvas = byId("cameraControlStage");
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(220, Math.round(rect.width) || 480);
+    const h = Math.max(150, Math.round(rect.height) || 190);
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const state = window.cameraControlState();
+    const cx = w / 2;
+    const cy = h * 0.60;
+    const baseR = Math.min(w * 0.32, h * 0.62);
+    const radius = baseR * (1 - state.z * 0.45);
+    const rx = radius;
+    const ry = radius * 0.42;
+    const az = state.x * Math.PI;
+
+    // 轨道 + 地面参考轴
+    ctx.save();
+    ctx.strokeStyle = "rgba(150,150,150,.55)";
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(150,150,150,.28)";
+    ctx.beginPath(); ctx.moveTo(cx - baseR, cy); ctx.lineTo(cx + baseR, cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - ry); ctx.lineTo(cx, cy + ry); ctx.stroke();
+    ctx.restore();
+
+    // 被摄体
+    const subjY = cy - Math.min(24, ry * 0.35);
+    const sphere = ctx.createRadialGradient(cx - 5, subjY - 7, 2, cx, subjY, 17);
+    sphere.addColorStop(0, "#d7dde3");
+    sphere.addColorStop(1, "#5b636c");
+    ctx.fillStyle = sphere;
+    ctx.beginPath(); ctx.arc(cx, subjY, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(170,175,180,.9)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("人物", cx, cy + ry + 20);
+
+    // 相机位置（方位 → 椭圆上，高度 → 屏幕 Y，距离 → 轨道半径）
+    const mx = cx + rx * Math.sin(az);
+    const my = cy + ry * Math.cos(az) - state.y * h * 0.34;
+
+    // 视线 + 高度参考线
+    ctx.strokeStyle = "rgba(74,163,255,.6)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(cx, subjY); ctx.stroke();
+    ctx.strokeStyle = "rgba(74,163,255,.3)";
+    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx, cy + ry * Math.cos(az)); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 相机标记（随 Roll 旋转）
+    ctx.save();
+    ctx.translate(mx, my);
+    ctx.rotate(state.roll * Math.PI * 0.28);
+    ctx.fillStyle = "#4aa3ff";
+    ctx.strokeStyle = "rgba(0,0,0,.35)";
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") ctx.roundRect(-13, -9, 26, 18, 4);
+    else ctx.rect(-13, -9, 26, 18);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#0b1220";
+    ctx.beginPath(); ctx.arc(0, 0, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.9)";
+    ctx.beginPath(); ctx.arc(-1.5, -1.5, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function bindCameraStage() {
+    const canvas = byId("cameraControlStage");
+    if (!canvas || canvas.__cameraControlBound) return;
+    canvas.__cameraControlBound = true;
+    canvas.addEventListener("pointerdown", (event) => {
+      if (byId("cameraControlEnabled") && !byId("cameraControlEnabled").checked) {
+        byId("cameraControlEnabled").checked = true;
+      }
+      STAGE.dragging = true;
+      STAGE.lastX = event.clientX;
+      STAGE.lastY = event.clientY;
+      canvas.style.cursor = "grabbing";
+      try { canvas.setPointerCapture(event.pointerId); } catch (error) { /* 忽略 */ }
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!STAGE.dragging) return;
+      const dx = event.clientX - STAGE.lastX;
+      const dy = event.clientY - STAGE.lastY;
+      STAGE.lastX = event.clientX;
+      STAGE.lastY = event.clientY;
+      setSlider("x", Number(byId("cameraControl_x")?.value || 0) + dx * 0.006);
+      setSlider("y", Number(byId("cameraControl_y")?.value || 0) - dy * 0.006);
+      cameraControlRefresh();
+    });
+    const stopDrag = (event) => {
+      STAGE.dragging = false;
+      canvas.style.cursor = "grab";
+      try { canvas.releasePointerCapture(event.pointerId); } catch (error) { /* 忽略 */ }
+    };
+    canvas.addEventListener("pointerup", stopDrag);
+    canvas.addEventListener("pointercancel", stopDrag);
+    canvas.addEventListener("dblclick", () => window.cameraControlReset());
+    window.addEventListener("resize", drawCameraStage);
+  }
+
+  function directionLabel(x) {
+    // 与后端归一化后 “谁占大头” 一致：|<0.25| 正面、0.25–0.75 左右、>0.75 背面。
+    if (Math.abs(x) >= 0.75) return "背面";
+    if (x >= 0.25) return "左机位";
+    if (x <= -0.25) return "右机位";
+    return "正面";
+  }
+
+  function elevationLabel(y) {
+    if (y > 0.7) return "鸟瞰";
+    if (y > 0.2) return "俯视";
+    if (y >= 0) return "平视";
+    if (y >= -0.7) return "仰视";
+    return "正下";
+  }
+
+  function distanceLabel(z) {
+    if (z > 0.7) return "特写";
+    if (z > 0.2) return "近景";
+    if (z >= -0.2) return "中景";
+    if (z >= -0.7) return "全身";
+    return "远景";
+  }
+
   function cameraControlRefresh() {
     const state = window.cameraControlState();
     const body = byId("cameraControlBody");
@@ -147,6 +300,14 @@
       const label = byId("cameraControlValue_" + key);
       if (label) label.textContent = Number(state[key]).toFixed(2);
     });
+    const summary = byId("cameraControlSummary");
+    if (summary) {
+      summary.textContent = state.enabled
+        ? `当前：${directionLabel(state.x)} · ${elevationLabel(state.y)} · ${distanceLabel(state.z)}`
+          + (Math.abs(state.roll) >= 0.15 ? " · 倾斜" : "")
+        : "当前：未启用";
+    }
+    drawCameraStage();
     updateCameraControlHint();
     if (window.promptEditorChanged) window.promptEditorChanged();
     scheduleCameraPreview();
