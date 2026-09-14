@@ -36,6 +36,41 @@
   };
 
   let scope = "auto";
+  // 上一次已知的模型族。select 的 value 在下拉 change 之前就已经更新，所以不能
+  // 用“进入 modelChanged 时的族”当切换前的族，只能自己累计。
+  let lastKnownFamily = null;
+
+  // 按族隔离 #hires*：进入 Anima 前先记住非 Anima 用户的二采设置，离开时恢复，
+  // 避免 Anima 档位（1.5× / 0.25 / 4.8）残留到 Illustrious / SDXL 的二采控件里。
+  const HIRES_FIELD_IDS = ["hiresScale", "hiresDenoise", "hiresSteps", "hiresCfg"];
+  const HIRES_STASH_KEY = "easyPanelHiresStashV1";
+
+  function readHiresFields() {
+    const out = {};
+    HIRES_FIELD_IDS.forEach((id) => { const field = byId(id); if (field) out[id] = String(field.value); });
+    return out;
+  }
+
+  function writeHiresFields(values) {
+    if (!values || typeof values !== "object") return;
+    HIRES_FIELD_IDS.forEach((id) => {
+      const value = values[id];
+      if (value == null || value === "") return;
+      const field = byId(id);
+      if (field) field.value = String(value);
+    });
+  }
+
+  function loadHiresStash() {
+    try { return JSON.parse(sessionStorage.getItem(HIRES_STASH_KEY) || "null"); } catch (error) { return null; }
+  }
+
+  function saveHiresStash(value) {
+    try {
+      if (value) sessionStorage.setItem(HIRES_STASH_KEY, JSON.stringify(value));
+      else sessionStorage.removeItem(HIRES_STASH_KEY);
+    } catch (error) { /* 隐私模式忽略 */ }
+  }
 
   function escapeHtml(value) {
     const node = document.createElement("span");
@@ -57,7 +92,7 @@
     block.innerHTML = `
       <summary>Anima 高清重建（放大 + 二采）</summary>
       <div class="small">首采约 1MP 决定构图；高清重建先做 Anime6B 超分、缩放回目标倍率，再由 Anima 二采在更高分辨率上重建细节。与「细节增强」（同尺寸润色）互不替代；与输出增强（Anime6B 等）不能同时开启。</div>
-      <label class="switch" style="margin-top:6px"><input id="animaHighresEnabled" type="checkbox"><div><b>启用高清重建</b><div class="small">目标倍率 1.25–2.0×；只保留最终成品（首采对照图仍会另存，用于与二采结果对比）。</div></div></label>
+      <label class="switch" style="margin-top:6px"><input id="animaHighresEnabled" type="checkbox"><div><b>启用高清重建</b><div class="small">目标倍率 1.15–2.0×（推荐 1.25–1.5×）；作品库主作品=最终成品，首采对照图另行保存（文件名带 _base_，仅用于二采对照）。</div></div></label>
       <div id="animaHighresBody" style="display:none">
         <div class="field-title"><span>档位</span><span class="small">先选目的，再微调数字</span></div>
         <div class="hires-purpose-row anima-highres-presets">
@@ -93,6 +128,26 @@
       byId(id)?.addEventListener("input", animaHighresRefresh);
       byId(id)?.addEventListener("change", animaHighresRefresh);
     });
+    // 与输出增强互斥：提前拦截，避免提交后才被后端拒绝。
+    byId("animaHighresEnabled")?.addEventListener("change", () => {
+      const enabled = byId("animaHighresEnabled").checked === true;
+      const outputMode = String(byId("outputEnhancementMode")?.value || "off");
+      if (enabled && outputMode !== "off") {
+        byId("animaHighresEnabled").checked = false;
+        const status = byId("status");
+        if (status) status.textContent = "输出增强已开启：高清重建与输出增强不能同时使用，请先关闭输出增强。";
+      }
+      window.animaHighresRefresh();
+    });
+    byId("outputEnhancementMode")?.addEventListener("change", () => {
+      const mode = String(byId("outputEnhancementMode")?.value || "off");
+      if (mode !== "off" && byId("animaHighresEnabled")?.checked === true) {
+        byId("animaHighresEnabled").checked = false;
+        const status = byId("status");
+        if (status) status.textContent = "已关闭 Anima 高清重建：与输出增强互斥（避免重复放大与显存溢出）。";
+        window.animaHighresRefresh();
+      }
+    });
     window.animaHighresApplyPreset("recommended", true);
     window.animaHighresScopeChanged(true);
     const panel = byId("animaHighresPanel");
@@ -101,10 +156,25 @@
   }
 
   function modelFamily() {
+    // 单一真相源：后端 /api/models 的 samplingProfiles[model].family。
+    try {
+      const profile = window.currentSamplingProfile ? window.currentSamplingProfile() : null;
+      if (profile && profile.family) return String(profile.family);
+    } catch (error) { /* 回退到旧的文件名嗅探，仅在 catalog 未就绪时使用 */ }
     const model = String(byId("model")?.value || "").toLowerCase();
     if (model.includes("krea")) return "krea2";
     if (model.includes("anima")) return "anima";
     return "sdxl";
+  }
+
+  // 能力契约（capabilities.highres_reconstruction）优先；catalog 未就绪时默认允许。
+  function highresCapable() {
+    try {
+      const profile = window.currentSamplingProfile ? window.currentSamplingProfile() : null;
+      const caps = (profile && profile.capabilities) || null;
+      if (caps) return caps.highres_reconstruction !== false && caps.anima_highres !== false;
+    } catch (error) { /* 回退 */ }
+    return true;
   }
 
   function profileHires() {
@@ -231,11 +301,19 @@
     }
     const preset = PRESETS[state.preset];
     lines.push(preset ? preset.note : "");
-    lines.push(`预计输出 ${width}×${height}${limited ? `（已按长边上限 ${maxLongEdge} 收窄）` : ""} · 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise}。`);
+    const effectiveScale = (baseWidth || 864) > 0 ? width / (baseWidth || 864) : state.scale;
+    const clampNote = limited
+      ? `请求 ${state.scale}×，受长边上限 ${maxLongEdge} 限制，实际约 ${effectiveScale.toFixed(2)}×`
+      : `按 ${state.scale}× 执行`;
+    lines.push(`预计输出 ${width}×${height}（${clampNote}）· 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise}。`);
+    lines.push(`超分模型：${String(profileHires().upscaler || "RealESRGAN_x4plus_anime_6B.pth").replace(".pth", "")}（已锁定）`);
     if (!state.enabled) lines.length = 1;
     const outputMode = String(byId("outputEnhancementMode")?.value || "off");
     if (state.enabled && outputMode !== "off") {
-      lines.push("⚠ 输出增强已开启：高清重建与输出增强不能同时使用，请关闭其中一项。");
+      lines.push("⚠ 输出增强已开启：两者互斥（开启高清重建会自动关闭输出增强）。");
+    }
+    if (state.enabled && byId("animaRefineEnabled")?.checked === true) {
+      lines.push("⚠ 细节增强也已开启：本次将执行「首采 → 高清二采 → 细节重绘」共 3 次采样，耗时与显存显著增加。");
     }
     if (state.enabled && width * height > 2600 * 1300) {
       lines.push("⚠ 目标尺寸较大：8GB 显存会明显变慢，必要时把倍率降到 1.25×。");
@@ -246,7 +324,7 @@
   window.animaHighresSyncVisibility = function () {
     const panel = byId("animaHighresPanel");
     if (!panel) return;
-    const isAnima = modelFamily() === "anima";
+    const isAnima = modelFamily() === "anima" && highresCapable();
     panel.hidden = !isAnima;
     if (!isAnima) {
       if (byId("animaHighresEnabled")) byId("animaHighresEnabled").checked = false;
@@ -307,7 +385,23 @@
     const original = window.modelChanged;
     if (typeof original !== "function" || original.__animaHighresWrapped) return;
     const wrapped = function (...args) {
+      const before = readHiresFields();
       const result = original.apply(this, args);
+      const family = modelFamily();
+      const previous = lastKnownFamily;
+      if (previous !== null && previous !== family) {
+        if (family === "anima" && previous !== "anima") {
+          // 进入 Anima 前，先把用户为非 Anima 模型调过的二采设置存起来。
+          if (!loadHiresStash()) saveHiresStash(before);
+        } else if (family !== "anima" && previous === "anima") {
+          const stash = loadHiresStash();
+          if (stash) {
+            writeHiresFields(stash);
+            saveHiresStash(null);
+          }
+        }
+      }
+      lastKnownFamily = family;
       window.animaHighresSyncVisibility();
       pullFromHiresControls();
       window.animaHighresRefresh();

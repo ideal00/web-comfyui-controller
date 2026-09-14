@@ -1190,6 +1190,8 @@ def update_creative_index_status_best_effort(snapshot_id: str, status: dict) -> 
             snapshot_id,
             status=status.get("status", "unknown"),
             images=status.get("images") if isinstance(status.get("images"), list) else (),
+            comparison_images=(status.get("comparisonImages")
+                               if isinstance(status.get("comparisonImages"), list) else ()),
             output_root=OUTPUT,
         ) or {}
     except Exception:
@@ -1208,6 +1210,8 @@ def update_creative_index_job_status_best_effort(job: dict, status: dict) -> dic
             snapshot_id=str(job.get("snapshot_id") or ""),
             status=status.get("status", "unknown"),
             images=status.get("images") if isinstance(status.get("images"), list) else (),
+            comparison_images=(status.get("comparisonImages")
+                               if isinstance(status.get("comparisonImages"), list) else ()),
             output_root=OUTPUT,
         ) or {}
     except Exception:
@@ -2222,8 +2226,9 @@ def anima_preflight(data: dict) -> dict:
     warnings: list[str] = list(compiled["warnings"])
     if not is_anima_model(model):
         return {"isAnima": False, "errors": errors, "warnings": warnings}
-    for path, label in ((COMFY_MODELS / "text_encoders" / ANIMA_TEXT_ENCODER, "Qwen 文本编码器"),
-                        (COMFY_MODELS / "vae" / ANIMA_VAE, "Qwen Image VAE")):
+    components = model_sampling_profile(model).get("components") or {}
+    for path, label in ((COMFY_MODELS / "text_encoders" / str(components.get("text_encoder") or ANIMA_TEXT_ENCODER), "Qwen 文本编码器"),
+                        (COMFY_MODELS / "vae" / str(components.get("vae") or ANIMA_VAE), "Qwen Image VAE")):
         if not path.is_file():
             errors.append(f"缺少 {label}：{path.name}")
     if (data.get("pose") or {}).get("enabled"):
@@ -2251,12 +2256,15 @@ def anima_preflight(data: dict) -> dict:
         warnings.append("Anima Base 通常建议 CFG 约 4–5；当前 CFG 为 " + str(cfg) + "。")
     highres = data.get("animaHighres") if isinstance(data.get("animaHighres"), dict) else {}
     if highres.get("enabled"):
-        scale = bounded(highres.get("scale"), 1.5, 1.15, 2.0, integer=False)
-        target_w = max(8, int(width * scale / 8 + 0.5) * 8)
-        target_h = max(8, int(height * scale / 8 + 0.5) * 8)
+        profile = model_sampling_profile(model)
+        spec = normalize_anima_highres(data, profile.get("hires") or {}, width, height,
+                                       bounded(data.get("cfg"), 4.8, 1, 15, integer=False))
+        upscaler = str(spec.get("upscaler") or HIRES_UPSCALE_MODEL).replace(".pth", "")
+        effective = spec["targetWidth"] / max(1, width)
         warnings.append(
-            f"已启用高清重建：放大到约 {target_w}×{target_h} 后再二采（Anime6B → VAEEncode → 二采）；"
-            "耗时约为单次生成的 2 倍，8GB 显存建议用 1.25–1.5×；与输出增强（Anime6B 等）不能同时开启。")
+            f"已启用高清重建：{upscaler} 放大后缩放到约 {spec['targetWidth']}×{spec['targetHeight']}"
+            f"（请求 {spec['scale']}×，实际 {effective:.2f}×），再由 Anima 二采重建细节；"
+            "预计耗时与显存占用显著增加，8GB 显存建议 1.25–1.5×；与输出增强（Anime6B 等）不能同时开启。")
     return {"isAnima": True, "errors": errors, "warnings": warnings,
             "prompt": compiled["positive"], "negative": compiled["negative"],
             "compiled": compiled}
@@ -2270,10 +2278,16 @@ def krea2_preflight(data: dict) -> dict:
     warnings: list[str] = list(compiled["warnings"])
     if not is_krea2_model(model):
         return {"isKrea2": False, "errors": errors, "warnings": warnings}
-    if not (COMFY_MODELS / "text_encoders" / KREA2_TEXT_ENCODER).is_file():
-        errors.append(f"缺少 Krea 2 文本编码器：请下载 Qwen3-VL-4B 并保存为 models\\text_encoders\\{KREA2_TEXT_ENCODER}。")
-    if not (COMFY_MODELS / "vae" / KREA2_VAE).is_file():
-        errors.append(f"缺少 VAE：{KREA2_VAE}")
+    profile = model_sampling_profile(model)
+    components = profile.get("components") or {}
+    text_encoder = str(components.get("text_encoder") or KREA2_TEXT_ENCODER)
+    vae_name = str(components.get("vae") or KREA2_VAE)
+    if not (COMFY_MODELS / "text_encoders" / text_encoder).is_file():
+        errors.append(f"缺少 Krea 2 文本编码器：请下载 Qwen3-VL-4B 并保存为 models\\text_encoders\\{text_encoder}。")
+    if not (COMFY_MODELS / "vae" / vae_name).is_file():
+        errors.append(f"缺少 VAE：{vae_name}")
+    if not (profile.get("capabilities") or {}).get("negative_prompt", True):
+        warnings.append("该模型为免引导蒸馏（CFG≈1）：不支持负面提示词，负面词不会参与生成。")
     width = bounded(data.get("width"), 832, 512, 2560)
     height = bounded(data.get("height"), 1216, 512, 2560)
     if width * height > 1_250_000:
@@ -2995,12 +3009,15 @@ def build_workflow(data: dict) -> dict:
     model = str(data.get("model", ""))
     if not model:
         raise ValueError("请选择基础模型。")
-    anima = is_anima_model(model)
-    krea2 = is_krea2_model(model)
-    illustrious = (not anima and not krea2) and is_illustrious_model(model)
-    illustrious_profile = illustrious_sampling_settings(model) if illustrious else None
     sampling_profile = model_sampling_profile(model)
-    if not anima and not krea2:
+    family = str(sampling_profile.get("family") or "sdxl")
+    capabilities = sampling_profile.get("capabilities") or {}
+    components = sampling_profile.get("components") or {}
+    model_label = str(sampling_profile.get("label") or model)
+    anima = family == "anima"
+    krea2 = family == "krea2"
+    illustrious = family == "illustrious"
+    if str(components.get("loader") or "checkpoint") == "checkpoint":
         issue = checkpoint_issue(model)
         if issue:
             raise ValueError(issue + "请选择 WAI、Milmu、Spectacular 或 Gock So 等完整模型。")
@@ -3030,10 +3047,9 @@ def build_workflow(data: dict) -> dict:
     width -= width % alignment
     height -= height % alignment
     regions = normalized_regions(data)
-    if regions and (anima or krea2):
-        family_name = "Anima" if anima else "Krea 2"
-        raise ValueError(f"{family_name} 暂不支持区域提示词；请切回 SDXL / Illustrious，或关闭多人分区。")
-    regional_mode = bool(regions and not anima and not krea2)
+    if regions and not capabilities.get("regional_prompting"):
+        raise ValueError(f"{model_label} 暂不支持区域提示词；请换用支持分区的模型，或关闭多人分区。")
+    regional_mode = bool(regions and capabilities.get("regional_prompting"))
     if regional_mode and not compiled.get("overridden"):
         negative = regional_negative_prompt(negative, regions)
     bound_lora_names = {region["lora"] for region in regions if region["lora"]}
@@ -3052,25 +3068,19 @@ def build_workflow(data: dict) -> dict:
     seed_value = data.get("seed", -1)
     seed = random.randrange(1, 2**63 - 1) if str(seed_value) in {"", "-1", "random"} else bounded(seed_value, 1, 0, 2**63 - 1)
 
-    if anima:
-        # This mirrors ComfyUI's official Anima Base v1 template.  The model is
-        # a diffusion-model file and must not be sent through CheckpointLoaderSimple.
+    if str(components.get("loader") or "checkpoint") == "unet":
+        # Anima / Krea 2 等 DiT：加载器、文本编码器与 VAE 全部由 profile.components
+        # 决定，派生模型（如自带不同 VAE / encoder 的新 Anima）可直接覆盖，不必改代码。
+        text_encoder = str(components.get("text_encoder") or "") or (
+            KREA2_TEXT_ENCODER if krea2 else ANIMA_TEXT_ENCODER)
+        clip_type = str(components.get("clip_type") or "") or (
+            "krea2" if krea2 else "stable_diffusion")
+        vae_name = str(components.get("vae") or "") or ANIMA_VAE
         nodes: dict[str, dict] = {
             "1": {"class_type": "UNETLoader", "inputs": {"unet_name": model, "weight_dtype": "default"}},
-            "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": ANIMA_TEXT_ENCODER,
-                                                          "type": "stable_diffusion"}},
-            "3": {"class_type": "VAELoader", "inputs": {"vae_name": ANIMA_VAE}},
-        }
-        model_ref, clip_ref, vae_ref = ["1", 0], ["2", 0], ["3", 0]
-        next_id = 4
-    elif krea2:
-        # Krea 2 is a single-stream MMDiT UNet; it uses a Qwen3-VL-4B text encoder
-        # (CLIPLoader type "krea2") and a Qwen-family VAE.
-        nodes = {
-            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": model, "weight_dtype": "default"}},
-            "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": KREA2_TEXT_ENCODER,
-                                                            "type": "krea2"}},
-            "3": {"class_type": "VAELoader", "inputs": {"vae_name": KREA2_VAE}},
+            "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": text_encoder,
+                                                              "type": clip_type}},
+            "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae_name}},
         }
         model_ref, clip_ref, vae_ref = ["1", 0], ["2", 0], ["3", 0]
         next_id = 4
@@ -3085,7 +3095,7 @@ def build_workflow(data: dict) -> dict:
         next_id += 1
         return node_id
 
-    if illustrious_profile and illustrious_profile["prediction"] == "v_prediction":
+    if sampling_profile.get("prediction") == "v_prediction":
         sampling_id = alloc()
         nodes[sampling_id] = {
             "class_type": "ModelSamplingDiscrete",
@@ -3106,9 +3116,9 @@ def build_workflow(data: dict) -> dict:
             continue
         weight = bounded(lora.get("weight"), 0.7, 0, 1.5, integer=False)
         node_id = alloc()
-        if anima or krea2:
-            # Official Anima/Krea 2 LoRAs are model-only; applying them to the
-            # text encoder is neither required nor compatible.
+        if str(capabilities.get("lora_loader") or "full") == "model_only":
+            # DiT 系模型（Anima / Krea 2 等）的 LoRA 只作用于 model，文本编码器
+            # 不参与；按能力契约选择 LoraLoaderModelOnly，新增家族不再改这里。
             nodes[node_id] = {"class_type": "LoraLoaderModelOnly", "inputs": {
                 "model": model_ref, "lora_name": comfy_name, "strength_model": weight,
             }}
@@ -3146,7 +3156,7 @@ def build_workflow(data: dict) -> dict:
         model_ref = [enhance_id, 0]
     elif enhancement_mode == "cfg_rescale":
         if not capabilities.get("cfg_rescale"):
-            raise ValueError("CFG Rescale 仅对当前识别到的 v-pred 模型开放。")
+            raise ValueError(f"{model_label} 未开放 CFG Rescale（仅对 v-pred 且 profile 声明支持的模型开放）。")
         enhance_id = alloc()
         nodes[enhance_id] = {
             "class_type": "RescaleCFG",
@@ -3200,9 +3210,13 @@ def build_workflow(data: dict) -> dict:
         model_ref = [guide_id, 0]
 
     base_positive = regional_global_prompt(data, compiled, bound_lora_names) if regional_mode else prompt
+    # 能力契约：negative_prompt=False 的模型（如 Krea 2 Turbo 免引导）不再构造
+    # 真实负面 conditioning，避免“UI 说不支持、执行链却仍在塞负面词”的不一致。
+    supports_negative = bool(capabilities.get("negative_prompt", True))
+    negative_text = negative if supports_negative else ""
     positive_id, negative_id = alloc(), alloc()
     nodes[positive_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": base_positive, "clip": clip_ref}}
-    nodes[negative_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative, "clip": clip_ref}}
+    nodes[negative_id] = {"class_type": "CLIPTextEncode", "inputs": {"text": negative_text, "clip": clip_ref}}
     negative_ref = [negative_id, 0]
 
     # Each character gets a feathered mask conditioning. A bound character LoRA
@@ -3279,8 +3293,9 @@ def build_workflow(data: dict) -> dict:
     # removes the cut-out edge while leaving the unmasked background intact.
     route1 = data.get("route1") or {}
     if isinstance(route1, dict) and route1.get("enabled"):
-        if anima or krea2:
-            raise ValueError("路线1的 Xinsir OpenPose / Depth ControlNet 仅支持 SDXL / Illustrious 模型。")
+        if not (capabilities.get("controlnet_pose") and capabilities.get("controlnet_depth")):
+            raise ValueError("路线1 需要 OpenPose + Depth ControlNet，当前 Xinsir ControlNet 仅支持 SDXL；"
+                             f"{model_label} 未开放这两项能力。")
         if regional_mode:
             raise ValueError("路线1暂不与多人区域提示词同时使用，请先关闭多人分区。")
         image_name = validate_input_image(str(route1.get("image", "") or ""))
@@ -3704,8 +3719,8 @@ def build_workflow(data: dict) -> dict:
 
     pose = data.get("pose") or {}
     if pose.get("enabled"):
-        if anima or krea2:
-            raise ValueError("当前安装的 Xinsir OpenPose ControlNet 仅适用于 SDXL，不能与 Anima / Krea 2 一起使用。")
+        if not capabilities.get("controlnet_pose"):
+            raise ValueError(f"{model_label} 未开放 OpenPose ControlNet 能力（当前安装的 ControlNet 仅适用于 SDXL）。")
         controlnet = str(pose.get("controlnet", ""))
         if not controlnet:
             raise ValueError("请选择 OpenPose ControlNet。")
@@ -3762,8 +3777,8 @@ def build_workflow(data: dict) -> dict:
     if not isinstance(depth, dict):
         raise ValueError("Depth 空间控制设置格式无效。")
     if depth.get("enabled"):
-        if anima or krea2:
-            raise ValueError("当前 Xinsir Depth ControlNet 仅支持 SDXL / Illustrious，不能用于 Anima / Krea 2。")
+        if not capabilities.get("controlnet_depth"):
+            raise ValueError(f"Depth ControlNet 未对 {model_label} 开放（当前 Xinsir Depth 仅适用于 SDXL / Illustrious）。")
         depth_image = validate_input_image(str(depth.get("image", "") or ""))
         depth_controlnet = str(depth.get("controlnet", "") or "").strip()
         if not depth_controlnet:
@@ -3813,16 +3828,18 @@ def build_workflow(data: dict) -> dict:
     # Anima「高清重建」复用同一条 Hires 链（Anime6B → 缩放 → VAEEncode → 二采），
     # 但由 animaHighres.enabled 触发、参数按 Anima profile 约束（denoise 0.20–0.30、
     # 倍率 1.15–2.0、长边上限 2560），不套用 Illustrious 的「二采目的」上限。
+    highres_capable = bool(capabilities.get("highres_reconstruction")
+                           or capabilities.get("anima_highres"))
     anima_highres = None
-    if anima:
+    if highres_capable:
         anima_highres = normalize_anima_highres(
             data, sampling_profile.get("hires") or {},
             sampling_width, sampling_height, cfg)
     hires_requested = (
-        bool(anima_highres and anima_highres["enabled"]) if anima
+        bool(anima_highres and anima_highres["enabled"]) if highres_capable
         else str(data.get("illustriousMode", "precision")) == "hires"
     )
-    hires_enabled = bool(capabilities.get("hires_fix")) and not krea2 and hires_requested
+    hires_enabled = bool(capabilities.get("hires_fix")) and hires_requested
     if hires_enabled:
         hires_defaults = sampling_profile.get("hires") or {}
         if anima and anima_highres:
@@ -3968,8 +3985,8 @@ def build_workflow(data: dict) -> dict:
     # 高频细节；只保留最终结果，不再另存首采对照图。
     anima_refine = normalize_anima_detail_refine(data)
     if anima_refine["enabled"]:
-        if not anima:
-            raise ValueError("细节增强只对 Anima 模型开放；其他模型请用高清二次采样或同图清晰版。")
+        if not capabilities.get("detail_refine"):
+            raise ValueError(f"细节增强只对 Anima 模型开放；{model_label} 可以改用高清二次采样或输出增强。")
         refine_nodes, refine_ref = build_anima_detail_refine(
             alloc=alloc, image_ref=image_ref, model_ref=model_ref, vae_ref=vae_ref,
             clip_ref=clip_ref,
@@ -4052,8 +4069,8 @@ def build_workflow(data: dict) -> dict:
         }}
         image_ref = [seed_post_id, 0]
     elif post_mode == "ultimate":
-        if anima or krea2:
-            raise ValueError("Ultimate SD Upscale 仅对 SDXL / Illustrious 开放；Anima / Krea 2 请使用后处理超分。")
+        if not capabilities.get("ultimate_upscale"):
+            raise ValueError(f"{model_label} 未开放 Ultimate SD Upscale；请改用后处理超分（Anime6B / SeedVR2）。")
         loader_id, ultimate_id = alloc(), alloc()
         nodes[loader_id] = {"class_type": "UpscaleModelLoader",
                             "inputs": {"model_name": HIRES_UPSCALE_MODEL}}
@@ -4082,7 +4099,9 @@ def build_workflow(data: dict) -> dict:
         raise ValueError("手脚修复设置格式无效。")
     hand_detailer_enabled = bool(limb_detailer.get("hands"))
     foot_detailer_enabled = bool(limb_detailer.get("feet"))
-    limb_detailer_allowed = not krea2 and not regional_mode and not repair
+    limb_detailer_allowed = ((bool(capabilities.get("hand_detailer"))
+                              or bool(capabilities.get("foot_detailer")))
+                             and not regional_mode and not repair)
     auto_color = output_enhancement.get("colorMatch") or {}
     if (isinstance(auto_color, dict) and auto_color.get("enabled")
             and color_reference_ref is None
@@ -4090,8 +4109,8 @@ def build_workflow(data: dict) -> dict:
                                       and (hand_detailer_enabled or foot_detailer_enabled)))):
         color_reference_ref = image_ref
     if detailer_enabled:
-        if krea2:
-            raise ValueError("Krea 2 Turbo 不启用 FaceDetailer；请使用参考图或后处理超分保持五官。")
+        if not capabilities.get("face_detailer"):
+            raise ValueError(f"{model_label} 未开放 FaceDetailer；请使用参考图或后处理超分保持五官。")
         if regional_mode:
             raise ValueError("多人分区不能自动运行单路 FaceDetailer；请生成后使用局部修复逐人处理。")
         detector_id, detailer_id = alloc(), alloc()
@@ -4728,7 +4747,33 @@ def _snapshot_enhancements(payload: dict, request_generation: dict) -> dict:
                 "animaHighres", "animaDetailRefine"):
         raw = _snapshot_value(payload, request_generation, key)
         result[key] = _snapshot_safe_mapping(raw, allowed_nested)
+    _attach_highres_executed(payload, result)
     return result
+
+
+def _attach_highres_executed(payload: dict, result: dict) -> None:
+    """把「实际执行的高清参数」写进快照（请求倍率 ≠ 实际倍率时尤其重要）。"""
+    raw = result.get("animaHighres")
+    if not isinstance(raw, dict) or not raw.get("enabled"):
+        return
+    if not isinstance(payload, dict):
+        return
+    try:
+        width = int(float(payload.get("width") or 864))
+        height = int(float(payload.get("height") or 1152))
+        request = dict(payload)
+        request["animaHighres"] = raw
+        spec = normalize_anima_highres(request, {}, width, height, payload.get("cfg"))
+    except Exception:
+        return
+    raw.update({
+        "requestedScale": spec["scale"],
+        "effectiveScale": round(spec["targetWidth"] / max(1, width), 3),
+        "targetWidth": spec["targetWidth"],
+        "targetHeight": spec["targetHeight"],
+        "maxLongEdge": spec["maxLongEdge"],
+        "upscaler": spec["upscaler"] or HIRES_UPSCALE_MODEL,
+    })
 
 
 def build_snapshot_source(data: dict, source_request: dict | None = None, compiled: dict | None = None) -> dict:

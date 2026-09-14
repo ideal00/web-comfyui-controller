@@ -388,6 +388,38 @@ def is_hires_base_filename(value: Any) -> bool:
     return HIRES_BASE_FILE_MARKER in Path(str(value or "")).name
 
 
+#: artifact 角色：作品库只把 'final' 当主图，'comparison' 是首采对照图，
+#: 'intermediate' 是流程中间产物；文件名推断只作为 legacy 回退。
+ARTIFACT_ROLE_FINAL = "final"
+ARTIFACT_ROLE_COMPARISON = "comparison"
+ARTIFACT_ROLE_INTERMEDIATE = "intermediate"
+ARTIFACT_ROLE_VALUES = (ARTIFACT_ROLE_FINAL, ARTIFACT_ROLE_COMPARISON, ARTIFACT_ROLE_INTERMEDIATE)
+
+
+def _artifact_role_for(filename: str, image_type: str, kind: str) -> str:
+    """Derive the artifact role; explicit values win in ``normalize_artifact_ref``."""
+
+    if kind != "output" or image_type != "output":
+        return ARTIFACT_ROLE_INTERMEDIATE if image_type == "output" else ""
+    return ARTIFACT_ROLE_COMPARISON if is_hires_base_filename(filename) else ARTIFACT_ROLE_FINAL
+
+
+def _is_comparison_artifact(item: Any) -> bool:
+    """首采对照图（不是成品）：角色优先，文件名只做旧数据回退。"""
+
+    try:
+        role = str(item["artifact_role"] or "")
+    except (IndexError, KeyError, TypeError):
+        role = ""
+    if role:
+        return role == ARTIFACT_ROLE_COMPARISON
+    try:
+        filename = item["filename"]
+    except (IndexError, KeyError, TypeError):
+        filename = ""
+    return is_hires_base_filename(filename)
+
+
 def _artifact_exists(row: sqlite3.Row) -> bool:
     metadata = _json_value(row["metadata_json"])
     return not (isinstance(metadata, Mapping) and metadata.get("exists") is False)
@@ -413,6 +445,10 @@ def _preview_artifact_row(connection: sqlite3.Connection, generation_id: str) ->
             (generation_id,),
         ).fetchall()
     usable = [row for row in rows if _artifact_exists(row)]
+    # 角色优先：显式 artifact_role='final' 才是主作品，不再只靠文件名和时间猜。
+    for row in usable:
+        if _row_text(row, "artifact_role", 32) == ARTIFACT_ROLE_FINAL:
+            return row
     for row in usable:
         if not is_hires_base_filename(row["filename"]):
             return row
@@ -526,12 +562,14 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
         image_type = str(raw.get("type") or raw.get("image_type") or "output").strip()
         kind = str(raw.get("artifact_kind") or raw.get("kind") or "output").strip().casefold()
         metadata = raw.get("metadata") if isinstance(raw.get("metadata"), Mapping) else {}
+        declared_role = str(raw.get("artifact_role") or raw.get("role") or "").strip().casefold()
     else:
         filename = str(raw or "").strip()
         subfolder = ""
         image_type = "output"
         kind = "output"
         metadata = {}
+        declared_role = ""
     filename = filename.replace("\\", "/")
     if not filename or Path(filename).name != filename or filename in {".", ".."}:
         return None, "图片文件名包含路径或为空，已跳过。"
@@ -548,6 +586,8 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
     safe_metadata = sanitize_json_value(metadata)
     if not isinstance(safe_metadata, dict):
         safe_metadata = {}
+    if declared_role not in ARTIFACT_ROLE_VALUES:
+        declared_role = _artifact_role_for(filename, image_type, kind)
     exists: bool | None = True
     if output_root is not None:
         root = Path(output_root).resolve()
@@ -563,6 +603,7 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
                 "subfolder": subfolder,
                 "image_type": image_type,
                 "artifact_kind": kind,
+                "artifact_role": declared_role,
                 "metadata": {**safe_metadata, "exists": False},
             }, f"图片不存在，已保留记录：{filename}"
     safe_metadata["exists"] = exists
@@ -571,6 +612,7 @@ def normalize_artifact_ref(raw: Any, output_root: Path | None = None) -> tuple[d
         "subfolder": subfolder,
         "image_type": image_type,
         "artifact_kind": kind,
+        "artifact_role": declared_role,
         "metadata": safe_metadata,
     }, None
 
@@ -741,6 +783,7 @@ class CreativeIndex:
         retryable.
         """
 
+        added: list[tuple[str, str]] = []
         expected: dict[str, dict[str, str]] = {
             "generations": {
                 "snapshot_id": "TEXT",
@@ -778,6 +821,7 @@ class CreativeIndex:
                 "subfolder": "TEXT NOT NULL DEFAULT ''",
                 "image_type": "TEXT NOT NULL DEFAULT 'output'",
                 "artifact_kind": "TEXT NOT NULL DEFAULT 'output'",
+                "artifact_role": "TEXT NOT NULL DEFAULT ''",
                 "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
                 "created_at": "INTEGER NOT NULL DEFAULT 0",
             },
@@ -817,6 +861,15 @@ class CreativeIndex:
             for name, declaration in columns.items():
                 if name not in actual:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+                    added.append((table, name))
+        if ("artifacts", "artifact_role") in added:
+            # 旧库回填角色：_base_ 文件是首采对照图，其余输出当作成品。
+            connection.execute(
+                "UPDATE artifacts SET artifact_role = CASE "
+                "WHEN filename LIKE '%\\_base\\_%' ESCAPE '\\' THEN 'comparison' "
+                "ELSE 'final' END "
+                "WHERE image_type = 'output' AND artifact_kind = 'output' AND artifact_role = ''"
+            )
 
     @staticmethod
     def _create_schema_v1(connection: sqlite3.Connection) -> None:
@@ -862,6 +915,7 @@ class CreativeIndex:
                 subfolder TEXT NOT NULL DEFAULT '',
                 image_type TEXT NOT NULL DEFAULT 'output',
                 artifact_kind TEXT NOT NULL DEFAULT 'output',
+                artifact_role TEXT NOT NULL DEFAULT '',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at INTEGER NOT NULL,
                 UNIQUE(generation_id, filename, subfolder, image_type, artifact_kind)
@@ -1215,8 +1269,8 @@ class CreativeIndex:
             if existing:
                 artifact_id = str(existing[0])
                 connection.execute(
-                    "UPDATE artifacts SET metadata_json = ? WHERE artifact_id = ?",
-                    (metadata_json, artifact_id),
+                    "UPDATE artifacts SET metadata_json = ?, artifact_role = ? WHERE artifact_id = ?",
+                    (metadata_json, ref.get("artifact_role") or "", artifact_id),
                 )
             else:
                 artifact_id = _stable_artifact_id(generation_id, ref)
@@ -1235,8 +1289,8 @@ class CreativeIndex:
                 connection.execute(
                     """INSERT INTO artifacts(
                            artifact_id, generation_id, filename, subfolder, image_type,
-                           artifact_kind, metadata_json, created_at
-                       ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                           artifact_kind, artifact_role, metadata_json, created_at
+                       ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         artifact_id,
                         generation_id,
@@ -1244,6 +1298,7 @@ class CreativeIndex:
                         ref["subfolder"],
                         ref["image_type"],
                         ref["artifact_kind"],
+                        ref.get("artifact_role") or "",
                         metadata_json,
                         now_ms(),
                     ),
@@ -1413,7 +1468,7 @@ class CreativeIndex:
                                generation_id, prompt_id, request_id, operation, status,
                                created_at, updated_at, model, seed, width, height,
                                input_json, compiled_json, fingerprint)
-                           VALUES(?, '', '', 'imported', 'success', ?, ?, ?, ?, ?, ?, ?, ?, '')""",
+                           VALUES(?, '', '', 'imported', 'completed', ?, ?, ?, ?, ?, ?, ?, ?, '')""",
                         (
                             generation_id,
                             created_at,
@@ -1429,9 +1484,10 @@ class CreativeIndex:
                     conn.execute(
                         """INSERT OR IGNORE INTO artifacts(
                                artifact_id, generation_id, filename, subfolder,
-                               image_type, artifact_kind, metadata_json, created_at)
-                           VALUES(?, ?, ?, ?, 'output', 'output', '{}', ?)""",
-                        (artifact_id, generation_id, path.name, subfolder, created_at),
+                               image_type, artifact_kind, artifact_role, metadata_json, created_at)
+                           VALUES(?, ?, ?, ?, 'output', 'output', ?, '{}', ?)""",
+                        (artifact_id, generation_id, path.name, subfolder,
+                         _artifact_role_for(path.name, "output", "output"), created_at),
                     )
                     for position, lora in enumerate(record["loras"]):
                         conn.execute(
@@ -1571,6 +1627,7 @@ class CreativeIndex:
         *,
         status: Any,
         images: Sequence[Any] = (),
+        comparison_images: Sequence[Any] = (),
         output_root: str | Path | None = None,
     ) -> dict[str, Any] | None:
         wanted = _safe_text(snapshot_id, 128)
@@ -1596,6 +1653,14 @@ class CreativeIndex:
                 output_path,
                 warnings=warnings,
             )
+            # 首采对照图也登记，但角色是 comparison：它不参与作品数量、也不会抢代表图。
+            self._upsert_artifacts(
+                connection,
+                str(row["generation_id"]),
+                list(comparison_images),
+                output_path,
+                warnings=warnings,
+            )
             latest = connection.execute(
                 "SELECT * FROM generations WHERE generation_id = ?", (row["generation_id"],)
             ).fetchone()
@@ -1613,6 +1678,7 @@ class CreativeIndex:
         snapshot_id: Any = "",
         status: Any = "unknown",
         images: Sequence[Any] = (),
+        comparison_images: Sequence[Any] = (),
         output_root: str | Path | None = None,
     ) -> dict[str, Any] | None:
         wanted_snapshot = _safe_text(snapshot_id, 128)
@@ -1645,6 +1711,13 @@ class CreativeIndex:
                 connection,
                 str(row["generation_id"]),
                 list(images),
+                output_path,
+                warnings=warnings,
+            )
+            self._upsert_artifacts(
+                connection,
+                str(row["generation_id"]),
+                list(comparison_images),
                 output_path,
                 warnings=warnings,
             )
@@ -1694,14 +1767,13 @@ class CreativeIndex:
         if row is None:
             return {}
         generation_id = str(row["generation_id"])
-        # 高清二采的首采对照图（<前缀>_base_*.png）不是成品：数量与列表都不计入，
-        # 否则作品库里会同时出现“原图”和成品，看起来像重复生成。
+        # 高清二采的首采对照图（artifact_role='comparison'）不是成品：数量与列表
+        # 都不计入，否则作品库里会同时出现“原图”和成品，看起来像重复生成。
         artifact_rows = connection.execute(
-            "SELECT filename FROM artifacts WHERE generation_id = ?", (generation_id,)
+            "SELECT filename, artifact_role FROM artifacts WHERE generation_id = ?",
+            (generation_id,),
         ).fetchall()
-        artifact_count = sum(
-            1 for item in artifact_rows if not is_hires_base_filename(item["filename"])
-        )
+        artifact_count = sum(1 for item in artifact_rows if not _is_comparison_artifact(item))
         parent_count = connection.execute(
             "SELECT COUNT(*) FROM derivations WHERE child_generation_id = ?", (generation_id,)
         ).fetchone()[0]
@@ -1766,6 +1838,7 @@ class CreativeIndex:
             "subfolder": str(row["subfolder"] or ""),
             "type": str(row["image_type"] or "output"),
             "kind": str(row["artifact_kind"] or "output"),
+            "role": _row_text(row, "artifact_role", 32),
             "exists": exists,
             "metadata": metadata,
             "url": artifact_url(str(row["filename"]), str(row["subfolder"] or ""), str(row["image_type"] or "output"))
@@ -1805,9 +1878,10 @@ class CreativeIndex:
                 (wanted,),
             ).fetchall()
             # 旧记录里曾把二采的首采图一并存下来：默认不再返回给作品库，
+            # 角色优先（comparison），旧记录没有角色时回退文件名。
             # 需要核对时可用 include_hires_base=True 取回（数据本身不删）。
             every_artifact = [self._artifact_from_row(item) for item in artifacts]
-            visible = [item for item in every_artifact if not is_hires_base_filename(item["filename"])]
+            visible = [item for item in every_artifact if not _is_comparison_artifact(item)]
             hires_base_count = len(every_artifact) - len(visible)
             preview_row = _preview_artifact_row(connection, wanted)
             snapshot = _json_value(row["snapshot_json"])

@@ -132,16 +132,31 @@
   }
 
   function modelFamily() {
+    // 单一真相源：后端 /api/models 的 samplingProfiles[model].family。
+    try {
+      const profile = window.currentSamplingProfile ? window.currentSamplingProfile() : null;
+      if (profile && profile.family) return String(profile.family);
+    } catch (error) { /* 回退到旧的文件名嗅探，仅在 catalog 未就绪时使用 */ }
     const model = String(byId("model")?.value || "").toLowerCase();
     if (model.includes("krea")) return "krea2";
     if (model.includes("anima")) return "anima";
     return "sdxl";
   }
 
+  // 能力契约（capabilities.detail_refine）优先；catalog 未就绪时默认允许。
+  function refineCapable() {
+    try {
+      const profile = window.currentSamplingProfile ? window.currentSamplingProfile() : null;
+      const caps = (profile && profile.capabilities) || null;
+      if (caps) return caps.detail_refine !== false;
+    } catch (error) { /* 回退 */ }
+    return true;
+  }
+
   window.animaRefineSyncVisibility = function () {
     const panel = byId("animaRefinePanel");
     if (!panel) return;
-    const isAnima = modelFamily() === "anima";
+    const isAnima = modelFamily() === "anima" && refineCapable();
     panel.hidden = !isAnima;
     if (!isAnima && byId("animaRefineEnabled")) byId("animaRefineEnabled").checked = false;
   };
