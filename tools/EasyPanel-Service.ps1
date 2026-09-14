@@ -171,7 +171,13 @@ function Test-ExpectedProcess([pscustomobject]$Snapshot, [pscustomobject]$Config
     if (-not (Test-SamePath $Snapshot.ExecutablePath $Config.Python)) { return $false }
     $command = $Snapshot.CommandLine
     if ($Role -eq "Panel") {
-        return ($command -match [regex]::Escape($Config.PanelScript))
+        # Accept both absolute and relative launches of easy_panel.py. The checks
+        # above already proved the process runs this workspace's python.exe, so a
+        # bare "easy_panel.py" must not be treated as an unrelated port occupant
+        # (regression: a manually started panel made the one-click scripts refuse
+        # to start or stop until the stray process was killed).
+        return (($command -match [regex]::Escape($Config.PanelScript)) -or
+                ($command -match '(?i)(^|[\\/\s"])easy_panel\.py([\s"]|$)'))
     }
     $mainMarker = ($command -match [regex]::Escape($Config.ComfyScript)) -or
                   ($command -match '(?i)(^|[\\/\s])ComfyUI[\\/]main\.py([\s"]|$)')
