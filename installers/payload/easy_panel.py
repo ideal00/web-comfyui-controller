@@ -35,6 +35,7 @@ if str(PROJECT_DIR) not in sys.path:
     # move into ``easy_panel_app``.
     sys.path.insert(0, str(PROJECT_DIR))
 
+from easy_panel_app.anima_highres import normalize_anima_highres
 from easy_panel_app.anima_refine import (
     REFINE_MODE_LABELS,
     build_anima_detail_refine,
@@ -2248,6 +2249,14 @@ def anima_preflight(data: dict) -> dict:
         warnings.append("Anima Base 通常建议 20–50 步；当前步数为 " + str(steps) + "。")
     if not 3.5 <= cfg <= 5.5:
         warnings.append("Anima Base 通常建议 CFG 约 4–5；当前 CFG 为 " + str(cfg) + "。")
+    highres = data.get("animaHighres") if isinstance(data.get("animaHighres"), dict) else {}
+    if highres.get("enabled"):
+        scale = bounded(highres.get("scale"), 1.5, 1.15, 2.0, integer=False)
+        target_w = max(8, int(width * scale / 8 + 0.5) * 8)
+        target_h = max(8, int(height * scale / 8 + 0.5) * 8)
+        warnings.append(
+            f"已启用高清重建：放大到约 {target_w}×{target_h} 后再二采（Anime6B → VAEEncode → 二采）；"
+            "耗时约为单次生成的 2 倍，8GB 显存建议用 1.25–1.5×；与输出增强（Anime6B 等）不能同时开启。")
     return {"isAnima": True, "errors": errors, "warnings": warnings,
             "prompt": compiled["positive"], "negative": compiled["negative"],
             "compiled": compiled}
@@ -3801,22 +3810,39 @@ def build_workflow(data: dict) -> dict:
 
     sample_ref = [sampler_id, 0]
     color_reference_ref = None
-    hires_enabled = bool(capabilities.get("hires_fix")) and not anima and not krea2 and (
-        str(data.get("illustriousMode", "precision")) == "hires"
+    # Anima「高清重建」复用同一条 Hires 链（Anime6B → 缩放 → VAEEncode → 二采），
+    # 但由 animaHighres.enabled 触发、参数按 Anima profile 约束（denoise 0.20–0.30、
+    # 倍率 1.15–2.0、长边上限 2560），不套用 Illustrious 的「二采目的」上限。
+    anima_highres = None
+    if anima:
+        anima_highres = normalize_anima_highres(
+            data, sampling_profile.get("hires") or {},
+            sampling_width, sampling_height, cfg)
+    hires_requested = (
+        bool(anima_highres and anima_highres["enabled"]) if anima
+        else str(data.get("illustriousMode", "precision")) == "hires"
     )
+    hires_enabled = bool(capabilities.get("hires_fix")) and not krea2 and hires_requested
     if hires_enabled:
         hires_defaults = sampling_profile.get("hires") or {}
-        scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25),
-                        1.0, 8.0, integer=False)
-        hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.25),
-                                0.05, 1.0, integer=False)
-        # 二采目的本身就是约束：保留首采 ≤0.23 / 增强细节 ≤0.26 / 局部重绘 ≤0.35。
-        # 构图锁只是提示“优先保持首采构图”，上限仍然由目的决定；API 与手机端同样受限。
-        purpose_cap = hires_purpose_cap(data)
-        if hires_denoise > purpose_cap:
-            hires_denoise = purpose_cap
-        hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 1, 150)
-        hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 5.0), 1, 30, integer=False)
+        if anima and anima_highres:
+            scale = anima_highres["scale"]
+            hires_denoise = anima_highres["denoise"]
+            hires_steps = anima_highres["steps"]
+            hires_cfg = anima_highres["cfg"]
+        else:
+            scale = bounded(data.get("hiresScale"), hires_defaults.get("scale", 1.25),
+                            1.0, 8.0, integer=False)
+            hires_denoise = bounded(data.get("hiresDenoise"), hires_defaults.get("denoise", 0.25),
+                                    0.05, 1.0, integer=False)
+            # 二采目的本身就是约束：保留首采 ≤0.23 / 增强细节 ≤0.26 / 局部重绘 ≤0.35。
+            # 构图锁只是提示“优先保持首采构图”，上限仍然由目的决定；API 与手机端同样受限。
+            purpose_cap = hires_purpose_cap(data)
+            if hires_denoise > purpose_cap:
+                hires_denoise = purpose_cap
+            hires_steps = bounded(data.get("hiresSteps"), hires_defaults.get("steps", 20), 1, 150)
+            hires_cfg = bounded(data.get("hiresCfg"), hires_defaults.get("cfg", 5.0), 1, 30, integer=False)
+        hires_upscaler = str(hires_defaults.get("upscaler") or "").strip() or HIRES_UPSCALE_MODEL
         hires_sampler = str(hires_defaults.get("sampler", "auto") or "auto")
         hires_scheduler = str(hires_defaults.get("scheduler", "auto") or "auto")
         requested_hires_sampler = str(data.get("hiresSampler", "") or "").strip()
@@ -3854,8 +3880,17 @@ def build_workflow(data: dict) -> dict:
             hires_negative_ref = [hires_negative_id, 0]
         # Match JavaScript Math.round used by the size preview. Python round()
         # uses bankers' rounding and disagrees at exact .5 boundaries.
-        hires_width = max(8, int(sampling_width * scale / 8 + 0.5) * 8)
-        hires_height = max(8, int(sampling_height * scale / 8 + 0.5) * 8)
+        if anima and anima_highres:
+            hires_width, hires_height = anima_highres["targetWidth"], anima_highres["targetHeight"]
+        else:
+            hires_width = max(8, int(sampling_width * scale / 8 + 0.5) * 8)
+            hires_height = max(8, int(sampling_height * scale / 8 + 0.5) * 8)
+            # 可选的长边上限（profile 提供时生效）：超出时按比例缩回再 8 对齐。
+            max_long_edge = int(hires_defaults.get("max_long_edge") or 0)
+            if max_long_edge > 0 and max(hires_width, hires_height) > max_long_edge:
+                ratio = max_long_edge / max(hires_width, hires_height)
+                hires_width = max(8, int(hires_width * ratio / 8 + 0.5) * 8)
+                hires_height = max(8, int(hires_height * ratio / 8 + 0.5) * 8)
         base_decode_id, upscale_loader_id, model_upscale_id, resize_id, hires_encode_id, hires_sampler_id = (
             alloc(), alloc(), alloc(), alloc(), alloc(), alloc()
         )
@@ -3883,7 +3918,7 @@ def build_workflow(data: dict) -> dict:
         }}
         nodes[upscale_loader_id] = {
             "class_type": "UpscaleModelLoader",
-            "inputs": {"model_name": HIRES_UPSCALE_MODEL},
+            "inputs": {"model_name": hires_upscaler},
         }
         nodes[model_upscale_id] = {
             "class_type": "ImageUpscaleWithModel",
@@ -4668,7 +4703,8 @@ def _snapshot_vae(payload: dict, request_generation: dict) -> dict:
 def _snapshot_enhancements(payload: dict, request_generation: dict) -> dict:
     hires = {}
     for key in ("illustriousMode", "hiresScale", "hiresDenoise", "hiresSteps", "hiresCfg",
-                "hiresSampler", "hiresScheduler"):
+                "hiresSampler", "hiresScheduler", "hiresPromptMode", "hiresPositive",
+                "hiresNegative", "hiresCompositionLock"):
         value = _snapshot_value(payload, request_generation, key)
         if value is not None and value != "":
             cleaned = _snapshot_scalar(value)
@@ -4688,7 +4724,8 @@ def _snapshot_enhancements(payload: dict, request_generation: dict) -> dict:
         "detailErode", "detailDilate", "maxMegapixels", "method",
     }
     for key in ("repair", "img2img", "pose", "depth", "colorCorrection", "outputEnhancement",
-                "modelEnhancement", "transparentBackground", "guidance"):
+                "modelEnhancement", "transparentBackground", "guidance",
+                "animaHighres", "animaDetailRefine"):
         raw = _snapshot_value(payload, request_generation, key)
         result[key] = _snapshot_safe_mapping(raw, allowed_nested)
     return result

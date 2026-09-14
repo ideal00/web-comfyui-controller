@@ -495,7 +495,8 @@ def build_rpg_payload(request: Mapping[str, Any], model_catalog: Optional[Mappin
     for key in ("steps", "cfg", "sampler", "scheduler"):
         if key not in payload:
             payload[key] = quality[key]
-    for key in ("vae", "modelEnhancement", "transparentBackground", "colorCorrection", "outputEnhancement"):
+    for key in ("vae", "modelEnhancement", "transparentBackground", "colorCorrection", "outputEnhancement",
+                "animaHighres"):
         value = generation.get(key)
         if isinstance(value, Mapping):
             payload[key] = dict(value)

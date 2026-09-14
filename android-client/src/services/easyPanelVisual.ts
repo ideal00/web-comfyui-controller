@@ -79,6 +79,8 @@ export interface VisualGenerationSettings {
   outputEnhancement?: Record<string, unknown>
   /** Anima 专属细节重绘（同尺寸低 denoise）；与二采互不替代。 */
   animaDetailRefine?: Record<string, unknown>
+  /** Anima 高清重建（Anime6B 放大 + 二采）：{ enabled, scale, denoise, steps, cfg }。 */
+  animaHighres?: Record<string, unknown>
   repair?: Record<string, unknown>
   img2img?: Record<string, unknown>
   pose?: Record<string, unknown>

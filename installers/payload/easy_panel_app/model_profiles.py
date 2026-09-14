@@ -28,6 +28,23 @@ DEFAULT_HIRES = {
     "sampler": "auto",
     "scheduler": "auto",
 }
+# Anima 的高清重建不是普通 SDXL Hires：倍率 1.15–2.0、denoise 0.20–0.30（默认
+# 1.5× / 0.25），长边上限 2560，超分模型固定 Anime6B。数值取自成熟的 Anima
+# 工作流（EasyUseAnima ≈1.25×/0.29、AnimaFlow ≈1.5×/0.25）。
+ANIMA_HIGHRES_DEFAULTS = {
+    "scale": 1.50,
+    "min_scale": 1.15,
+    "max_scale": 2.0,
+    "denoise": 0.25,
+    "min_denoise": 0.20,
+    "max_denoise": 0.30,
+    "steps": 20,
+    "cfg": 4.8,
+    "sampler": "auto",
+    "scheduler": "auto",
+    "max_long_edge": 2560,
+    "upscaler": "RealESRGAN_x4plus_anime_6B.pth",
+}
 DEFAULT_FREEU = {
     "key": "sdxl_official",
     "label": "官方 SDXL / ComfyUI V2",
@@ -179,7 +196,7 @@ def model_sampling_profile(model_name: str) -> dict:
     capabilities.update(profile.get("capabilities") or {})
     if family == "anima":
         capabilities.update({"prompt_mode": "hybrid", "regional_prompting": False,
-                             "hires_fix": False, "freeu_v2": False})
+                             "hires_fix": True, "anima_highres": True, "freeu_v2": False})
     if family == "krea2":
         capabilities.update({"freeu_v2": False, "cfg_rescale": False})
     resolution = copy.deepcopy(profile.get("resolution") or DEFAULT_RESOLUTION)
@@ -197,7 +214,10 @@ def model_sampling_profile(model_name: str) -> dict:
         "locked": bool(profile.get("locked", False)),
         "prediction": prediction,
         "zsnr": bool(profile.get("zsnr", False)),
-        "hires": copy.deepcopy(profile.get("hires") or DEFAULT_HIRES),
+        "hires": copy.deepcopy(
+            profile.get("hires")
+            or (ANIMA_HIGHRES_DEFAULTS if family == "anima" else DEFAULT_HIRES)
+        ),
         "freeu": copy.deepcopy(profile.get("freeu") or DEFAULT_FREEU),
         "resolution": resolution,
         "capabilities": capabilities,
