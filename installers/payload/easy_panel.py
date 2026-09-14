@@ -6202,7 +6202,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r"[0-9a-fA-F-]{36}", prompt_id):
                     raise ValueError("ComfyUI 没有返回有效的任务编号。")
                 snapshot = create_generation_snapshot(payload, prompt_id, source_request=data, plan=plan)
-                record_rpg_job(prompt_id, data, payload, snapshot["id"])
+                record_rpg_job(prompt_id, data, payload, snapshot["id"], plan=plan)
                 indexed = index_snapshot_best_effort(
                     snapshot,
                     source_request=data,

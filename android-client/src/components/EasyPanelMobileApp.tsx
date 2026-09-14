@@ -10,6 +10,7 @@ import { EasyPanelProjectCenter } from './EasyPanelProjectCenter'
 import { attachEasyPanelPendingDerivation, buildEasyPanelControllerRequest, createEasyPanelControllerRequestId } from '../lib/easyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
 import { getEasyPanelPromptInstruction } from '../services/easyPanelVisual'
+import { artifactStageLabel, artifactState, artifactStateText, generationIsPending, PENDING_ARTIFACT_TEXT } from '../lib/easyPanelPlan'
 import type { EasyPanelGenerationArtifact, EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
 
 /** 常用长宽比预设（与电脑端尺寸下拉保持一致）。 */
@@ -657,7 +658,16 @@ export default function EasyPanelMobileApp() {
             <strong>你的下一张图会出现在这里</strong>
             <span>填写提示词后点击底部按钮开始生成。</span>
           </div>}
-          {controller.error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{controller.error}</span></div>}
+          {controller.executionPlanText && <p className="epm-plan-line" role="status">
+            <GitBranch size={13} />
+            <span>{controller.executionPlanText}</span>
+          </p>}
+          {controller.error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{controller.error}</span>
+            {controller.errorTechnical && <details className="epm-error-detail">
+              <summary>技术详情</summary>
+              <pre>{controller.errorTechnical}</pre>
+            </details>}
+          </div>}
           {controller.image && <div className="epm-result-actions">
             <button type="button" className="epm-secondary-button" onClick={() => void controller.downloadCurrent()} disabled={controller.downloadLoading}>
               {controller.downloadLoading ? <LoaderCircle size={16} className="epm-spin" /> : <Download size={16} />}
@@ -984,6 +994,10 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
                 <div className="epm-library-item-heading"><strong>{item.model || '自动模型'}</strong><small>{formatLibraryTime(item.created_at)}</small></div>
                 <span>{libraryOperationLabel(item.operation)} · {libraryStatusLabel(item.status)} · seed {item.seed == null ? '?' : String(item.seed)}</span>
                 <small>{item.width || '?'}×{item.height || '?'} · {item.artifact_count} 个输出 · 父 {item.parent_count} / 子 {item.child_count}</small>
+                {(artifactStageLabel(item.stage) || generationIsPending(item)) && <small className="epm-library-item-stage">
+                  {artifactStageLabel(item.stage) ? `产物：${artifactStageLabel(item.stage)}` : ''}
+                  {generationIsPending(item) ? `${artifactStageLabel(item.stage) ? ' · ' : ''}${PENDING_ARTIFACT_TEXT}` : ''}
+                </small>}
                 {Boolean(item.groups?.length) && <div className="epm-library-item-groups">
                   {(item.groups ?? []).slice(0, 4).map((group) => <span key={group.group_id}>{group.name}</span>)}
                   {(item.groups ?? []).length > 4 && <span>+{(item.groups ?? []).length - 4}</span>}
@@ -1075,14 +1089,18 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
         </div>
       </div>
       <div className="epm-library-detail-grid">
-        {previewArtifact ? <button type="button" className="epm-library-detail-preview" onClick={() => onPreview(previewArtifact)} aria-label="点击查看原图">
+        {previewArtifact ? <button type="button" className="epm-library-detail-preview" onClick={() => onPreview(previewArtifact)} disabled={artifactState(previewArtifact) !== 'ready'} aria-label="点击查看原图">
           {thumbnailSource ? <img src={thumbnailSource} alt="作品缩略图，点击查看原图" /> : <ImageIcon size={34} />}
-          <span>{previewLoading === previewArtifact.artifact_id ? <LoaderCircle size={13} className="epm-spin" /> : <Maximize2 size={13} />}点击查看原图</span>
-        </button> : <div className="epm-library-detail-preview"><ImageIcon size={34} /></div>}
+          <span>{artifactState(previewArtifact) === 'ready'
+            ? <>{previewLoading === previewArtifact.artifact_id ? <LoaderCircle size={13} className="epm-spin" /> : <Maximize2 size={13} />}点击查看原图</>
+            : artifactStateText(previewArtifact)}</span>
+        </button> : <div className="epm-library-detail-preview"><ImageIcon size={34} />{generationIsPending(detail) && <span className="epm-library-pending-note">{PENDING_ARTIFACT_TEXT}</span>}</div>}
         <div className="epm-library-detail-copy">
           <h3>{detail.model || '自动模型'}</h3>
           <p>{formatLibraryTime(detail.created_at)} · seed {detail.seed == null ? '?' : String(detail.seed)}</p>
           <p>{detail.width || '?'}×{detail.height || '?'} · {detail.quality || '自定义'} · {detail.lora_count} 个 LoRA</p>
+          {artifactStageLabel(detail.stage) && <p>产物来源：{artifactStageLabel(detail.stage)}</p>}
+          {generationIsPending(detail) && <p className="epm-library-pending-note">{PENDING_ARTIFACT_TEXT}（生成刚完成，稍后刷新即可）</p>}
           <p className="epm-library-id">作品 ID：{detail.generation_id}</p>
         </div>
       </div>
@@ -1176,8 +1194,8 @@ function LibraryDetail({ detail, lineage, thumbnailSource, downloadLoading, prev
         <h3><ImageIcon size={16} />输出文件</h3>
         {detail.artifacts.length ? <div className="epm-library-artifact-list">
           {detail.artifacts.map((artifact) => <div className="epm-library-artifact" key={artifact.artifact_id}>
-            <span>{artifact.filename}{isHiresBaseArtifact(artifact.filename) ? '（首采对照，非成品）' : ''}{artifact.exists === false ? '（文件缺失）' : ''}</span>
-            <button type="button" className="epm-quiet-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={artifact.exists === false || !artifact.url || Boolean(downloadLoading)}>
+            <span>{artifact.filename}{isHiresBaseArtifact(artifact.filename) ? '（首采对照，非成品）' : ''}{artifactStateText(artifact) ? `（${artifactStateText(artifact)}）` : ''}{artifactStageLabel(artifact.stage) ? ` · ${artifactStageLabel(artifact.stage)}` : ''}</span>
+            <button type="button" className="epm-quiet-button epm-inline-button" onClick={() => onDownload(artifact)} disabled={artifactState(artifact) !== 'ready' || !artifact.url || Boolean(downloadLoading)}>
               {downloadLoading === artifact.artifact_id ? <LoaderCircle size={14} className="epm-spin" /> : <Download size={14} />}下载
             </button>
           </div>)}

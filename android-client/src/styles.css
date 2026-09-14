@@ -6402,3 +6402,12 @@ textarea:focus-visible {
 .epm-size-presets .epm-chip{display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1.15}
 .epm-size-presets .epm-chip small{opacity:.66;font-size:10px}
 
+
+/* 执行链 / 友好错误 / 作品库待落盘（与电脑端一致的口径） */
+.epm-plan-line { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; padding: 8px 10px; border: 1px dashed rgba(211,171,97,.4); border-radius: 10px; background: rgba(211,171,97,.08); color: #e4d3ab; font-size: 12px; line-height: 1.45; }
+.epm-plan-line svg { flex: 0 0 auto; margin-top: 2px; }
+.epm-error-detail { margin-top: 6px; width: 100%; }
+.epm-error-detail summary { cursor: pointer; font-size: 12px; opacity: .85; }
+.epm-error-detail pre { margin: 6px 0 0; padding: 8px; border-radius: 8px; background: rgba(0,0,0,.35); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; }
+.epm-library-item-stage { color: #b8c7d9; }
+.epm-library-pending-note { color: #9ccfff; }

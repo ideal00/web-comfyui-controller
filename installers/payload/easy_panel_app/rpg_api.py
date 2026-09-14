@@ -505,7 +505,8 @@ def build_rpg_payload(request: Mapping[str, Any], model_catalog: Optional[Mappin
 
 
 def record_rpg_job(prompt_id: str, request: Mapping[str, Any], payload: Mapping[str, Any],
-                   snapshot_id: str = "") -> Dict[str, Any]:
+                   snapshot_id: str = "",
+                   plan: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     client = dict(request.get("client") or {}) if isinstance(request.get("client"), Mapping) else {}
     request_id = _safe_id(client.get("requestId") or request.get("requestId"), "")
     entry = {
@@ -519,6 +520,10 @@ def record_rpg_job(prompt_id: str, request: Mapping[str, Any], payload: Mapping[
         "character_loras": _deep_copy(payload.get("characterLoras") or []),
         "style_loras": _deep_copy(payload.get("styleLoras") or []),
     }
+    # 实际执行计划（由 workflow 推导）跟着任务走：手机端恢复任务 / 查看运行中任务时
+    # 仍能显示执行链，不需要重新提交一次才能拿到。
+    if isinstance(plan, Mapping) and plan:
+        entry["plan"] = _deep_copy(plan)
     with _RPG_LOCK:
         rows = _load_rpg_jobs_unlocked()
         rows = [row for row in rows if row.get("prompt_id") != prompt_id]
@@ -581,6 +586,10 @@ def history_to_rpg_status(prompt_id: str, history: Mapping[str, Any]) -> Dict[st
         "images": [],
         "meta": metadata,
     }
+    # 手机端直接展示结构化计划（与桌面端同一份数据）。
+    recorded_plan = metadata.get("plan") if isinstance(metadata.get("plan"), Mapping) else None
+    if recorded_plan:
+        result["plan"] = dict(recorded_plan)
     if not isinstance(job, Mapping):
         return result
     status = job.get("status") if isinstance(job.get("status"), Mapping) else {}

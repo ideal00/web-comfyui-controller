@@ -234,8 +234,14 @@ class TaskQueue:
                     item["finished_at"] = _now_ms()
                 for key, value in fields.items():
                     if key in {"prompt_id", "snapshot_id", "generation_id", "error",
-                               "duplicate_of", "label", "selected", "experiment_value"}:
-                        item[key] = value if not isinstance(value, str) else _compact(value, 400)
+                               "duplicate_of", "label", "selected", "experiment_value",
+                               "plan"}:
+                        if isinstance(value, str):
+                            item[key] = _compact(value, 400)
+                        elif key == "plan" and not isinstance(value, dict):
+                            continue
+                        else:
+                            item[key] = value
                 self._save()
                 return dict(item)
         return None
@@ -400,6 +406,7 @@ class TaskQueueRunner:
                         prompt_id=str(result.get("prompt_id") or ""),
                         snapshot_id=str(result.get("snapshot_id") or ""),
                         generation_id=str(result.get("generation_id") or ""),
+                        plan=result.get("plan") if isinstance(result.get("plan"), dict) else None,
                         error="")
         if self.on_status:
             self.on_status(self.queue.get(str(item["id"])) or item, RUNNING, result)

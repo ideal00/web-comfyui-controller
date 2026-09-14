@@ -41,6 +41,12 @@ export interface EasyPanelGenerationSummary {
   thumbnail_url?: string | null
   /** 代表图（列表缩略图与详情大图共用同一张；二采时不会是首采图）。 */
   primary_artifact_id?: string | null
+  /** 成品来自哪一步（base / highres / detail_refine / face / hand / foot / upscale）。 */
+  stage?: string
+  /** 仍在写盘的产物数量；大于 0 时列表要显示“文件保存中”。 */
+  pending_artifacts?: number
+  /** pending / ready 聚合状态（服务端给出，客户端不再自己统计）。 */
+  file_state?: string
   /** 入选（最佳版本）标记；只是作品标记，不影响任何生成参数。 */
   favorite?: boolean
   /** 0–5 星人工评分。 */
@@ -69,6 +75,10 @@ export interface EasyPanelGenerationArtifact {
   subfolder: string
   type: string
   kind: string
+  /** final / comparison / intermediate；首采对照图不是成品。 */
+  role?: string
+  /** 该产物来自哪一步（见 lib/easyPanelPlan 的 artifact_stage 映射）。 */
+  stage?: string
   exists?: boolean | null
   metadata: Record<string, unknown>
   url?: string | null

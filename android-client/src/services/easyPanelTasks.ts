@@ -1,6 +1,7 @@
 /** 面板批量任务队列 + 重复任务检测（移动端，走 /api/rpg/* 入口）。 */
 
 import { jsonRequest, type EasyPanelVisualConfig } from './easyPanelVisual'
+import type { EasyPanelExecutionPlan } from '../lib/easyPanelPlan'
 
 export type EasyPanelTaskStatus =
   | 'pending'
@@ -37,6 +38,8 @@ export interface EasyPanelTaskItem {
   snapshot_id: string
   generation_id: string
   error: string
+  /** 投递时电脑端返回的实际执行计划（workflow 推导），排队 / 运行时都能看。 */
+  plan?: EasyPanelExecutionPlan
   created_at: number
   started_at: number
   finished_at: number

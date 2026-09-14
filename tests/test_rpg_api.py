@@ -303,6 +303,37 @@ class RpgApiTests(unittest.TestCase):
         with patch.object(rpg_api, "_load_rpg_jobs_unlocked", return_value=rows):
             self.assertEqual("new", rpg_api.find_rpg_job_by_request_id("scene_1")["prompt_id"])
 
+    def test_job_record_and_status_carry_the_execution_plan(self):
+        """手机端恢复任务 / 查看运行中任务时也要能显示执行链。"""
+
+        prompt_id = "12345678-1234-1234-1234-123456789abc"
+        plan = {
+            "stages": {"1": "首采采样", "2": "高清二采"},
+            "samplers": {"1": 24, "2": 20},
+            "samplerOrder": ["1", "2"],
+            "detailers": [],
+            "samplerCount": 2,
+            "detailerCount": 0,
+            "outputStage": "highres",
+            "output": {"width": 1152, "height": 1728},
+        }
+        with patch.object(rpg_api, "_load_rpg_jobs_unlocked", return_value=[]), \
+             patch.object(rpg_api, "_atomic_json_write"):
+            entry = rpg_api.record_rpg_job(prompt_id, {}, {"model": "wai"}, "snap-1", plan=plan)
+        self.assertEqual("highres", entry["plan"]["outputStage"])
+        self.assertEqual(2, entry["plan"]["samplerCount"])
+
+        history = {prompt_id: {"outputs": {}, "status": {"status_str": "success"}}}
+        with patch.object(rpg_api, "find_rpg_job", return_value=entry):
+            status = rpg_api.history_to_rpg_status(prompt_id, history)
+        self.assertEqual("highres", status["plan"]["outputStage"])
+        self.assertEqual({"width": 1152, "height": 1728}, status["plan"]["output"])
+
+        # 旧任务没有计划字段时不能凭空造一份。
+        with patch.object(rpg_api, "find_rpg_job", return_value={"model": "wai"}):
+            legacy = rpg_api.history_to_rpg_status(prompt_id, history)
+        self.assertNotIn("plan", legacy)
+
     def test_token_is_optional_normally_and_enforced_when_configured(self):
         with patch.dict(os.environ, {"EASY_PANEL_RPG_TOKEN": ""}):
             self.assertTrue(rpg_api.check_rpg_token("anything"))

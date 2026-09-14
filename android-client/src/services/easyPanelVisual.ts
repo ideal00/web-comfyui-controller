@@ -1,5 +1,7 @@
 /** RPGBox -> ComfyUI Easy Panel mobile visual client (API v2). */
 
+import type { EasyPanelExecutionPlan } from '../lib/easyPanelPlan'
+
 export interface EasyPanelVisualConfig {
   baseUrl: string
   token: string
@@ -118,8 +120,49 @@ export interface VisualJobStatus {
   status: 'queued' | 'running' | 'completed' | 'error'
   images: VisualImageRef[]
   error?: unknown
+  /** 友好错误（电脑端 generation_errors 提供）：标题 / 原因 / 建议 / 技术细节。 */
+  error_detail?: EasyPanelFriendlyError
+  /** 提交时返回的实际执行计划（workflow 推导，不是客户端估算）。 */
+  plan?: EasyPanelExecutionPlan
   deduplicated?: boolean
   status_url?: string
+}
+
+export interface EasyPanelFriendlyError {
+  code?: string
+  confidence?: string
+  title?: string
+  reason?: string
+  solutions?: string[]
+  technical?: string
+}
+
+/**
+ * 生成失败的用户可读文案：标题 + 原因 + 建议；`code` / `confidence` 这类
+ * 内部术语只放进 `technical`，由界面折叠在「技术详情」里。
+ */
+export function friendlyErrorText(detail: unknown, fallback = ''): { message: string; technical: string } {
+  const value = detail && typeof detail === 'object' && !Array.isArray(detail)
+    ? detail as EasyPanelFriendlyError
+    : undefined
+  const title = String(value?.title ?? '').trim()
+  const reason = String(value?.reason ?? '').trim()
+  const solutions = Array.isArray(value?.solutions)
+    ? value?.solutions.map((item) => String(item ?? '').trim()).filter(Boolean).slice(0, 3) ?? []
+    : []
+  const parts: string[] = []
+  if (title || reason) parts.push([title, reason].filter(Boolean).join('：'))
+  if (solutions.length) parts.push(`建议：${solutions.join('；')}`)
+  const code = String(value?.code ?? '').trim()
+  const confidence = String(value?.confidence ?? '').trim()
+  const technicalParts: string[] = []
+  const technical = String(value?.technical ?? '').trim()
+  if (technical) technicalParts.push(technical)
+  if (code) technicalParts.push(`分类：${code}${confidence ? `（置信度 ${confidence}）` : ''}`)
+  return {
+    message: parts.join(' ') || fallback.trim(),
+    technical: technicalParts.join('\n'),
+  }
 }
 
 export interface EasyPanelPing {

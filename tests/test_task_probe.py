@@ -123,6 +123,22 @@ class QueueRunnerUnknownStatusTests(unittest.TestCase):
                 self.assertEqual("waiting", runner.tick())
             self.assertEqual(RUNNING, queue.snapshot()["items"][0]["status"])
 
+    def test_submitted_plan_is_kept_on_the_queue_item(self):
+        """手机端任务中心也要能显示执行链，所以计划随任务保存。"""
+
+        plan = {"samplerOrder": ["1"], "samplers": {"1": 24}, "samplerCount": 1,
+                "detailerCount": 0, "outputStage": "highres"}
+        with tempfile.TemporaryDirectory() as folder:
+            queue = self.queue(folder)
+            queue.add([{"label": "A", "payload": {"model": "m", "seed": "1", "prompt": "x"}}])
+            runner = TaskQueueRunner(
+                queue, submit=lambda item: {"prompt_id": "pid-1", "plan": plan},
+                probe=lambda _pid: ("running", {}), poll_seconds=0.0, clock=FakeClock())
+            self.assertEqual("submitted", runner.tick())
+            item = queue.snapshot()["items"][0]
+            self.assertEqual("highres", item["plan"]["outputStage"])
+            self.assertEqual(24, item["plan"]["samplers"]["1"])
+
     def test_running_status_resets_missing_counter(self):
         with tempfile.TemporaryDirectory() as folder:
             queue = self.queue(folder)

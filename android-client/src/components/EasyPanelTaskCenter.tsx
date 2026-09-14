@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { EasyPanelWorkspace } from '../hooks/useEasyPanelWorkspace'
 import { taskStatusLabel } from '../services/easyPanelTasks'
 import type { EasyPanelTaskItem } from '../services/easyPanelTasks'
+import { executionPlanText } from '../lib/easyPanelPlan'
 
 interface TaskCenterProps {
   workspace: EasyPanelWorkspace
@@ -93,6 +94,7 @@ export function EasyPanelTaskCenter({ workspace, onClose }: TaskCenterProps) {
               <div className="epm-task-item-meta">
                 <span className={`epm-task-badge is-${item.status}`}>{taskStatusLabel(item.status)}</span>
                 {item.experiment_value ? <span className="epm-hint">{item.experiment_value}</span> : null}
+                {item.plan ? <span className="epm-hint">{executionPlanText(item.plan)}</span> : null}
                 {item.error ? <span className="epm-task-error">{item.error}</span> : null}
               </div>
             </article>

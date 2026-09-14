@@ -24,6 +24,7 @@ import {
   blobToBase64,
   downloadVisualImage,
   EasyPanelHttpError,
+  friendlyErrorText,
   getEasyPanelCapabilities,
   getEasyPanelModels,
   normalizeEasyPanelBaseUrl,
@@ -34,6 +35,7 @@ import {
   type EasyPanelVisualConfig,
   type VisualJobStatus,
 } from '../services/easyPanelVisual'
+import { executionPlanText, type EasyPanelExecutionPlan } from '../lib/easyPanelPlan'
 import {
   createEasyPanelFavoriteGroup,
   deleteEasyPanelFavoriteGroup,
@@ -84,12 +86,18 @@ export interface EasyPanelController {
   status: EasyPanelControllerStatus
   statusLabel: string
   job?: VisualJobStatus
+  /** 本次提交的实际执行计划（电脑端 workflow 推导）。 */
+  jobPlan?: EasyPanelExecutionPlan
+  /** 执行链一句话描述；无计划时为空字符串。 */
+  executionPlanText: string
   image?: EasyPanelControllerImage
   imageSource: string
   models: string[]
   capabilities: Record<string, unknown> | null
   connectionMessage: string
   error: string
+  /** 失败详情（含 code/confidence），只在「技术详情」里展开。 */
+  errorTechnical: string
   pendingJob?: PendingEasyPanelJob
   modelsLoading: boolean
   modelsMessage: string
@@ -198,6 +206,9 @@ export function useEasyPanelController(): EasyPanelController {
   const [libraryDownloadLoading, setLibraryDownloadLoading] = useState('')
   const [libraryDownloadMessage, setLibraryDownloadMessage] = useState('')
   const [pendingDerivation, setPendingDerivation] = useState<EasyPanelPendingDerivationContext>()
+  // 提交时电脑端返回的实际执行计划（workflow 推导）；失败时保留友好错误的技术详情。
+  const [jobPlan, setJobPlan] = useState<EasyPanelExecutionPlan>()
+  const [errorTechnical, setErrorTechnical] = useState('')
   const stateRef = useRef(state)
   const activeRef = useRef(false)
   const hydratedRecoveryRef = useRef(false)
@@ -988,17 +999,28 @@ export function useEasyPanelController(): EasyPanelController {
 
   const followJob = useCallback(async (initial: VisualJobStatus, pending: PendingEasyPanelJob) => {
     setJob(initial)
+    // 计划来自电脑端（提交返回或作业状态），恢复任务 / 排队时也能显示。
+    if (initial.plan) setJobPlan(initial.plan)
     if (initial.status === 'completed') {
       await saveCompleted(initial)
       return
     }
-    if (initial.status === 'error') throw new Error(formatJobError(initial.error))
+    if (initial.status === 'error') {
+      const failure = friendlyErrorText(initial.error_detail, formatJobError(initial.error))
+      setErrorTechnical(failure.technical)
+      throw new Error(failure.message)
+    }
     setStatus(initial.status === 'running' ? 'running' : 'queued')
     const completed = await waitForVisualJob(config, initial, abortRef.current?.signal, (next) => {
       setJob(next)
+      if (next.plan) setJobPlan(next.plan)
       setStatus(next.status === 'running' ? 'running' : next.status === 'queued' ? 'queued' : next.status === 'error' ? 'error' : 'saving')
     })
-    if (completed.status === 'error') throw new Error(formatJobError(completed.error))
+    if (completed.status === 'error') {
+      const failure = friendlyErrorText(completed.error_detail, formatJobError(completed.error))
+      setErrorTechnical(failure.technical)
+      throw new Error(failure.message)
+    }
     await saveCompleted(completed)
     if (stateRef.current.pendingJob?.requestId === pending.requestId) {
       commitState({ ...stateRef.current, pendingJob: undefined })
@@ -1080,6 +1102,8 @@ export function useEasyPanelController(): EasyPanelController {
     abortRef.current = new AbortController()
     setStatus('submitting')
     setJob(undefined)
+    setJobPlan(undefined)
+    setErrorTechnical('')
     setError('')
     try {
       const initial = await submitVisualJob({ ...config, baseUrl: normalizedUrl }, request)
@@ -1168,12 +1192,15 @@ export function useEasyPanelController(): EasyPanelController {
     status,
     statusLabel: controllerStatusLabel(status),
     job,
+    jobPlan,
+    executionPlanText: executionPlanText(jobPlan),
     image: state.image,
     imageSource: state.image ? portraitSource(state.image.uri) : '',
     models,
     capabilities,
     connectionMessage,
     error,
+    errorTechnical,
     pendingJob: state.pendingJob,
     modelsLoading,
     modelsMessage,
