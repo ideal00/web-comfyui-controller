@@ -157,7 +157,7 @@ class AnimaHighresWorkflowTests(unittest.TestCase):
         # 首采对照图与成品各一个 SaveImage。
         saves = self.nodes_of(workflow, "SaveImage")
         prefixes = [node["inputs"]["filename_prefix"] for node in saves]
-        self.assertEqual(["EasyPanel_base", "EasyPanel"], prefixes)
+        self.assertEqual(["EasyPanel_aux/EasyPanel_base", "EasyPanel"], prefixes)
 
     def test_disabled_keeps_single_sampler(self):
         data = payload("anima-base-v1.0.safetensors")

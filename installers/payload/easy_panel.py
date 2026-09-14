@@ -3100,7 +3100,7 @@ def build_pose_preview_workflow(data: dict) -> dict:
                 "kps": ["1", 0], "render_body": True, "render_hand": True, "render_face": True,
                 "scale_stick_for_xinsr_cn": "enable",
             }},
-            "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": "EasyPanelPose", "images": ["2", 0]}},
+            "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": AUX_OUTPUT_SUBFOLDER + "/EasyPanelPose", "images": ["2", 0]}},
         }
         return {"prompt": nodes, "client_id": "easy-panel-pose-preview"}
     pose_image = validate_input_image(data.get("image", ""))
@@ -3163,8 +3163,32 @@ def build_pose_preview_workflow(data: dict) -> dict:
                 },
             }
         image_ref = ["2", 0]
-    nodes["3"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": "EasyPanelPose", "images": image_ref}}
+    nodes["3"] = {"class_type": "SaveImage", "inputs": {"filename_prefix": AUX_OUTPUT_SUBFOLDER + "/EasyPanelPose", "images": image_ref}}
     return {"prompt": nodes, "client_id": "easy-panel-pose-preview"}
+
+
+# 辅助图（机位快速预览、高清首采对照等）统一落在这个子目录：作品库扫描会跳过它，
+# 主输出仍然放在输出根目录。
+AUX_OUTPUT_SUBFOLDER = "EasyPanel_aux"
+
+
+def safe_output_subfolder(value):
+    """把 subfolder 参数解析成 OUTPUT 下的安全目录（越界 / 非法返回 None）。"""
+
+    raw = str(value or "").replace("\\", "/").strip("/")
+    if not raw:
+        return None
+    parts = raw.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    candidate = OUTPUT
+    for part in parts:
+        candidate = candidate / part
+    try:
+        candidate.resolve().relative_to(OUTPUT.resolve())
+    except ValueError:
+        return None
+    return candidate
 
 
 def safe_generation_filename_prefix(data: dict, default: str = "EasyPanel") -> str:
@@ -3180,7 +3204,8 @@ def generation_filename_prefix(data: dict, suffix: str = "") -> str:
     """Return the SaveImage prefix shared by every output of one job.
 
     ``suffix`` is kept for callers that need a distinct prefix (older builds
-    saved the hi-res first pass as ``<prefix>_base``).
+    saved the hi-res first pass as ``<prefix>_base``).  ``auxiliaryOutput``
+    为真的任务（机位快速预览等）会落进 ``EasyPanel_aux`` 子目录。
     """
     transparent = data.get("transparentBackground") or {}
     transparent_mode = (str(transparent.get("mode", "off") or "off")
@@ -3189,7 +3214,18 @@ def generation_filename_prefix(data: dict, suffix: str = "") -> str:
     prefix = safe_generation_filename_prefix(data, default_prefix)
     if transparent_mode != "off" and data.get("filenamePrefix"):
         prefix += "_Transparent"
+    if data.get("auxiliaryOutput") and not prefix.startswith(AUX_OUTPUT_SUBFOLDER + "/"):
+        prefix = AUX_OUTPUT_SUBFOLDER + "/" + prefix
     return prefix + suffix
+
+
+def auxiliary_generation_prefix(data: dict, suffix: str = "") -> str:
+    """辅助图（对照 / 预览）：保证落在 EasyPanel_aux 子目录，便于作品库跳过。"""
+
+    prefix = generation_filename_prefix(data, suffix)
+    if prefix.startswith(AUX_OUTPUT_SUBFOLDER + "/"):
+        return prefix
+    return AUX_OUTPUT_SUBFOLDER + "/" + prefix
 
 
 def unique_generation_prefix(data: dict) -> str:
@@ -4136,11 +4172,11 @@ def build_workflow(data: dict) -> dict:
                 "samples": sample_ref, "vae": vae_ref,
             }}
         color_reference_ref = [base_decode_id, 0]
-        # 首采图另存为 _base 对照文件：作品库代表图、手机端结果列表和预览画廊都会
-        # 跳过 _base_，所以它不会当成成品展示，只用于「首采 vs 二采」局部对照。
+        # 首采图另存为 _base 对照文件，放进 EasyPanel_aux 子目录：作品库扫描会跳过
+        # 整个子目录，它只用于「首采 vs 二采」局部对照。
         base_save_id = alloc()
         nodes[base_save_id] = {"class_type": "SaveImage", "inputs": {
-            "filename_prefix": generation_filename_prefix(data, "_base"),
+            "filename_prefix": auxiliary_generation_prefix(data, "_base"),
             "images": [base_decode_id, 0],
         }, "_meta": {"artifactStage": "base", "artifactRole": "comparison"}}
         nodes[upscale_loader_id] = {
@@ -5966,9 +6002,18 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/tasks":
                 self.send_json(task_queue_snapshot())
             elif parsed.path == "/output":
-                name = urllib.parse.parse_qs(parsed.query).get("name", [""])[0]
+                query = urllib.parse.parse_qs(parsed.query)
+                name = query.get("name", [""])[0]
+                subfolder = query.get("subfolder", [""])[0]
+                if "/" in name or "\\" in name:
+                    # 允许 name 直接带相对路径（EasyPanel_aux/xxx.png）。
+                    folder_part, _, base_part = name.replace("\\", "/").rpartition("/")
+                    if folder_part and not subfolder:
+                        subfolder = folder_part
+                    name = base_part
                 safe_name = Path(name).name
-                file = OUTPUT / safe_name
+                folder = safe_output_subfolder(subfolder) if subfolder else None
+                file = (folder / safe_name) if folder else OUTPUT / safe_name
                 if safe_name != name or not file.is_file():
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
@@ -6392,6 +6437,10 @@ class Handler(BaseHTTPRequestHandler):
                 workflow = build_workflow(data)
                 plan = execution_plan(workflow)
                 result = comfy_json("/prompt", "POST", comfy_prompt_body(workflow))
+                if data.get("auxiliaryOutput"):
+                    # 辅助图（机位快速预览等）：只提交并返回计划，不建快照、不进作品库。
+                    self.send_json({**result, "plan": plan, "auxiliary": True})
+                    return
                 snapshot = create_generation_snapshot(data, str(result.get("prompt_id") or ""), plan=plan)
                 indexed = index_snapshot_best_effort(
                     snapshot,

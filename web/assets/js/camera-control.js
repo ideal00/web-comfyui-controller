@@ -77,7 +77,7 @@
         </div>
         <div id="cameraControlStatus" class="small"></div>
         <div class="field-title" style="margin-top:8px"><span>快速预览（松手自动出图）</span></div>
-        <label class="switch"><input id="cameraControlAutoPreview" type="checkbox"><div><b>拖动结束后自动跑一张预览图</b><div class="small">停止拖动约 1.5 秒后，按当前机位跑一张低步数图（同一 Seed 便于对比，只跑首采）；会占用算力，图片按 <code>EasyPanel_camPreview</code> 前缀保存，可在作品库删除。</div></div></label>
+        <label class="switch"><input id="cameraControlAutoPreview" type="checkbox"><div><b>拖动结束后自动跑一张预览图</b><div class="small">停止拖动约 1.5 秒后，按当前机位跑一张低步数图（同一 Seed 便于对比，只跑首采）；会占用算力，图片存到 <code>output/EasyPanel_aux</code> 子目录，不会进作品库。</div></div></label>
         <div class="two" style="margin-top:6px">
           <div><div class="field-title"><span>预览步数</span></div><input id="cameraControlPreviewSteps" type="number" min="4" max="30" step="1" value="8"></div>
           <div><div class="field-title"><span>手动</span></div><div class="actions"><button type="button" class="secondary" onclick="cameraControlQuickPreview(true)">立即预览</button></div></div>
@@ -353,7 +353,9 @@
           : Math.floor(Math.random() * 2 ** 31);
       }
       data.seed = quickPreviewSeed;
-      data.filenamePrefix = "EasyPanel_camPreview";
+      data.filenamePrefix = "camPreview";
+      // 落进 output/EasyPanel_aux 子目录：作品库与“最近输出”列表都会跳过。
+      data.auxiliaryOutput = true;
       // 预览只跑首采：关掉高清/细节增强/输出增强，避免每次拖动排长链。
       if (data.hires && typeof data.hires === "object") data.hires = { ...data.hires, enabled: false };
       delete data.animaHighres;

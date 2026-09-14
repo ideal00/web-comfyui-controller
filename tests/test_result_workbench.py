@@ -52,8 +52,9 @@ class ResultWorkbenchTests(unittest.TestCase):
 
     def test_hires_saves_the_first_pass_for_comparison_only(self):
         backend = (ROOT / "easy_panel.py").read_text(encoding="utf-8")
-        # 首采图只作为 _base 对照文件保留；作品库/手机端/画廊都按该标记跳过它。
-        self.assertIn('generation_filename_prefix(data, "_base")', backend)
+        # 首采图只作为 _base 对照文件保留，并且放进 EasyPanel_aux 子目录；
+        # 作品库扫描与手机端/画廊都按该标记跳过它。
+        self.assertIn('auxiliary_generation_prefix(data, "_base")', backend)
         self.assertIn("只用于「首采 vs 二采」局部对照", backend)
         index = (ROOT / "easy_panel_app/creative_index.py").read_text(encoding="utf-8")
         self.assertIn("HIRES_BASE_FILE_MARKER", index)

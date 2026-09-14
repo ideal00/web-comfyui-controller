@@ -311,11 +311,11 @@ class SamplingProfileTests(unittest.TestCase):
         data.update({"illustriousMode": "hires", "hiresScale": 1.2})
         nodes = self.build(data)
         saves = self.nodes_of(nodes, "SaveImage")
-        # 二采保存两张：_base 只用来做「首采 vs 二采」局部对照（作品库/手机端/画廊会跳过它），
-        # 成品图才是交付用的。
+        # 二采保存两张：_base 只用来做「首采 vs 二采」局部对照，并且放进 EasyPanel_aux
+        # 子目录（作品库/手机端/画廊/最近输出都会跳过），成品图才是交付用的。
         self.assertEqual(2, len(saves))
         prefixes = [node["inputs"]["filename_prefix"] for node in saves]
-        self.assertEqual(["EasyPanel_base", "EasyPanel"], prefixes)
+        self.assertEqual(["EasyPanel_aux/EasyPanel_base", "EasyPanel"], prefixes)
         # 首采解码仍作为二采与调色取色的内部输入。
         self.assertTrue(any(node.get("class_type") == "VAEDecode" for node in nodes.values()))
 

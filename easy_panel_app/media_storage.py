@@ -277,6 +277,10 @@ def save_inpaint_upload(content_type: str, body: bytes) -> dict:
     return {"image": image_name, "mask": mask_name}
 
 
+#: 辅助图（对照 / 预览）目录：不进“最近输出”与图生图候选。
+AUX_OUTPUT_SUBFOLDER = "EasyPanel_aux"
+
+
 def list_output_images(limit: int = 80) -> list[dict]:
     if not OUTPUT.is_dir():
         return []
@@ -290,6 +294,9 @@ def list_output_images(limit: int = 80) -> list[dict]:
             continue
         # 高清二采的首采对照图不是成品，不能出现在“最近输出”与图生图候选里。
         if "_base_" in file.name:
+            continue
+        # 机位预览等辅助图在 EasyPanel_aux 子目录里，同样不是成品。
+        if AUX_OUTPUT_SUBFOLDER in file.parts:
             continue
         try:
             mtime = int(file.stat().st_mtime)

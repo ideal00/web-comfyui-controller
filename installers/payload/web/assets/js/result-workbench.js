@@ -34,6 +34,12 @@
   ];
 
   const isBaseImage = (image) => image && String(image.filename || "").includes(HIRES_BASE_MARKER);
+  // 对照 / 预览图在 EasyPanel_aux 子目录：URL 必须带上 subfolder，否则 /output 找不到。
+  const outputUrl = (image) => {
+    const name = encodeURIComponent((image && image.filename) || "");
+    const subfolder = image && image.subfolder ? "&subfolder=" + encodeURIComponent(image.subfolder) : "";
+    return "/output?name=" + name + subfolder;
+  };
 
   // One generic mechanism: every "只改一项" swaps exactly one prompt section.
   const SECTION_SWAP = {
@@ -516,11 +522,11 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
       <div class="hc-head"><b>首采 / 二采对照</b><button class="secondary" type="button" data-compare-close>关闭</button></div>
       <div class="hc-grid">
         <figure><figcaption>首采（决定构图）</figcaption>
-          <img alt="首采结果" data-role="base" src="/output?name=${encodeURIComponent(base.filename)}">
+          <img alt="首采结果" data-role="base" src="${outputUrl(base)}">
           <span class="small" data-role="baseSize">${esc(parameters.size.split(" → ")[0])}</span>
           <span class="small">Seed ${esc(parameters.seed)}</span></figure>
         <figure><figcaption>二采（补细节）</figcaption>
-          <img alt="二采结果" data-role="final" src="/output?name=${encodeURIComponent(final.filename)}">
+          <img alt="二采结果" data-role="final" src="${outputUrl(final)}">
           <span class="small" data-role="finalSize">${esc(parameters.size.split(" → ")[1] || "")}</span>
           <span class="small">Seed ${esc(parameters.seed)}</span></figure>
       </div>
@@ -545,8 +551,8 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     });
     const state = { dialog, baseImage: null, finalImage: null };
     Promise.all([
-      loadCompareImage("/output?name=" + encodeURIComponent(base.filename)),
-      loadCompareImage("/output?name=" + encodeURIComponent(final.filename)),
+      loadCompareImage(outputUrl(base)),
+      loadCompareImage(outputUrl(final)),
     ]).then(([baseImage, finalImage]) => {
       state.baseImage = baseImage;
       state.finalImage = finalImage;

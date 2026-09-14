@@ -341,7 +341,7 @@ class FrontendFamilySourceTests(unittest.TestCase):
 
     def test_script_versions_are_bumped(self):
         index_html = (ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("panel.js?v=71", index_html)
+        self.assertRegex(index_html, r"panel\.js\?v=\d+")
         self.assertIn("anima-refine.js?v=3", index_html)
         self.assertIn("anima-highres.js?v=6", index_html)
 

@@ -38,6 +38,8 @@ DEFAULT_PROJECT_SECTIONS = ("基准角色", "日常服装", "战斗服装", "废
 PROJECT_LINK_KINDS = ("lora", "preset", "experiment", "favorite_group")
 # 高清二采会把首采图另存为 <前缀>_base_*.png；它只是对照用途，不能当作品代表图。
 HIRES_BASE_FILE_MARKER = "_base_"
+# 辅助图（对照 / 机位快速预览）子目录：作品库扫描与导入一律跳过。
+AUX_SUBFOLDER_PREFIX = "EasyPanel_aux"
 MAX_OFFSET = 1_000_000
 MAX_LINEAGE_NODES = 100
 MAX_SNAPSHOT_TEXT = 2_000_000
@@ -386,6 +388,13 @@ def is_hires_base_filename(value: Any) -> bool:
     """True for the first-pass hires image (``<prefix>_base_00001_.png``)."""
 
     return HIRES_BASE_FILE_MARKER in Path(str(value or "")).name
+
+
+def is_aux_subfolder(value: Any) -> bool:
+    """辅助图目录（``EasyPanel_aux``）下的文件不进作品库。"""
+
+    parts = [part for part in str(value or "").replace("\\", "/").split("/") if part]
+    return AUX_SUBFOLDER_PREFIX in parts
 
 
 #: artifact 角色：作品库只把 'final' 当主图，'comparison' 是首采对照图，
@@ -1610,6 +1619,9 @@ class CreativeIndex:
                 continue
             relative = path.relative_to(root)
             subfolder = "" if str(relative.parent) == "." else relative.parent.as_posix()
+            if is_aux_subfolder(subfolder):
+                # EasyPanel_aux 里是首采对照 / 机位预览这类辅助图，不当作品入库。
+                continue
             if (path.name, subfolder) in known:
                 continue
             candidates.append((path, subfolder))
@@ -2313,12 +2325,14 @@ class CreativeIndex:
             for path in sorted(root.rglob("*.png")):
                 if prefix and not path.name.startswith(prefix):
                     continue
+                relative = path.relative_to(root)
+                subfolder = "" if str(relative.parent) == "." else relative.parent.as_posix()
+                if is_aux_subfolder(subfolder):
+                    continue
                 scanned_files += 1
                 if scanned_files > scan_limit:
                     truncated = True
                     break
-                relative = path.relative_to(root)
-                subfolder = "" if str(relative.parent) == "." else relative.parent.as_posix()
                 key = _file_key(subfolder, path.name)
                 if key and key not in recorded:
                     orphan_files.append(key)

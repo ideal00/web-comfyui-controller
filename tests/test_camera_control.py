@@ -156,7 +156,7 @@ class FrontendWiringTests(unittest.TestCase):
         for needle in ("cameraControl", "/api/camera-prompt", "restorePayloadToPanel",
                        "promptCompilePayload", "相机机位控制", "cameraControlHint", "cameraControlSummary",
                        "cameraControlStage", "bindCameraStage", "wrapPromptEditorChanged",
-                       "cameraControlAutoPreview", "cameraControlQuickPreview", "EasyPanel_camPreview"):
+                       "cameraControlAutoPreview", "cameraControlQuickPreview", "auxiliaryOutput"):
             self.assertIn(needle, script)
 
     def test_backend_registers_endpoint_and_hook(self):
