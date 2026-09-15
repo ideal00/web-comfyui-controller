@@ -54,7 +54,7 @@ class SamplingProfileTests(unittest.TestCase):
             "spectacularAnimeILXL_10.safetensors": (24, 7.0, "euler_ancestral", "beta"),
             "milmuAnimeIllustriousXL_vPred01.safetensors": (30, 6.0, "euler", "normal"),
             "gockSoAnimeLoveSong_gocksoanimeLoveSong.safetensors": (30, 7.0, "dpmpp_2m_sde", "karras"),
-            "anima-base-v1.0.safetensors": (34, 4.8, "er_sde", "simple"),
+            "anima-base-v1.0.safetensors": (30, 4.8, "er_sde", "simple"),
             "krea2TurboOfficialComfy_krea2TurboFp8.safetensors": (8, 1.0, "euler", "simple"),
             "reedXXXIllustrious_v150.safetensors": (30, 7.0, "euler_ancestral", "normal"),
             "plantMilkModelSuite_walnut.safetensors": (28, 3.0, "euler", "normal"),
