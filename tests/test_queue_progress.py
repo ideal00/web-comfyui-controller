@@ -63,6 +63,9 @@ class QueueProgressBridgeTests(unittest.TestCase):
         self.assertIn("stats.finished>=stats.total", self.bridge)
         self.assertIn("finishGenerationProgress(stats.error===0", self.bridge)
         self.assertIn("queueBridgeStop()", self.bridge)
+        # 旧的队列轮询用全局计数写结束语（会把历史任务算进去），要改写成本次统计。
+        self.assertIn("queueBridgeRestateSummary(summary)", self.bridge)
+        self.assertIn("/^队列结束：完成/", self.bridge)
 
     def test_payload_copy_matches(self):
         payload = (PROJECT_DIR / "installers/payload/web/assets/js/panel.js").read_bytes()
@@ -71,7 +74,7 @@ class QueueProgressBridgeTests(unittest.TestCase):
     def test_index_html_caches_bust_new_panel_js(self):
         for page in (PROJECT_DIR / "index.html", PROJECT_DIR / "installers/payload/index.html"):
             content = page.read_text(encoding="utf-8")
-            self.assertIn("panel.js?v=74", content)
+            self.assertIn("panel.js?v=75", content)
 
 
 class TaskQueueSnapshotContractTests(unittest.TestCase):

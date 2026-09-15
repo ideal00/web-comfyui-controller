@@ -71,5 +71,41 @@ class StudioLayoutTests(unittest.TestCase):
         self.assertIn("String($('size')?.value||'864x1152')", self.javascript)
 
 
+class SizePresetTests(unittest.TestCase):
+    """比例档位：9:16 / 16:9 / 21:9 的新尺寸在电脑端与手机端保持一致。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pages = [
+            (ROOT / "index.html").read_text(encoding="utf-8"),
+            (ROOT / "installers/payload/index.html").read_text(encoding="utf-8"),
+        ]
+        cls.mobile = (ROOT / "android-client/src/components/EasyPanelMobileApp.tsx").read_text(encoding="utf-8")
+
+    def test_portrait_9_16_sizes_available(self):
+        for html in self.pages:
+            self.assertIn('value="832x1472">长竖图 832 × 1472（9:16）', html)
+
+    def test_landscape_16_9_and_21_9_sizes_available(self):
+        for html in self.pages:
+            self.assertIn('value="1472x832">宽幅横图 1472 × 832（16:9）', html)
+            self.assertIn('value="1344x576">宽银幕横图 1344 × 576（21:9）', html)
+
+    def test_mobile_size_presets_keep_the_same_ratios(self):
+        for marker in (
+            "{ label: '9:16 长竖', width: 832, height: 1472 }",
+            "{ label: '16:9 宽幅', width: 1472, height: 832 }",
+            "{ label: '21:9', width: 1344, height: 576 }",
+        ):
+            self.assertIn(marker, self.mobile)
+
+    def test_new_sizes_stay_inside_backend_limits(self):
+        # 8 对齐 + Anima 长边上限 1536（1472/1344 都放得下），避免选了又被后端钳制。
+        for width, height in ((832, 1472), (1472, 832), (1344, 576)):
+            self.assertEqual(0, width % 8, width)
+            self.assertEqual(0, height % 8, height)
+            self.assertLessEqual(max(width, height), 1536)
+
+
 if __name__ == "__main__":
     unittest.main()

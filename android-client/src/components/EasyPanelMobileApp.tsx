@@ -20,13 +20,16 @@ const SIZE_PRESETS: Array<{ label: string; width: number; height: number }> = [
   { label: '3:4', width: 864, height: 1152 },
   { label: '2:3', width: 832, height: 1216 },
   { label: '9:16', width: 720, height: 1280 },
+  { label: '9:16 长竖', width: 832, height: 1472 },
   { label: '1:2 长竖', width: 768, height: 1536 },
   { label: '9:21 超长', width: 720, height: 1680 },
   { label: '4:3', width: 1152, height: 864 },
   { label: '3:2', width: 1216, height: 832 },
   { label: '16:9', width: 1280, height: 720 },
+  { label: '16:9 宽幅', width: 1472, height: 832 },
   { label: '2:1 超宽', width: 1536, height: 768 },
   { label: '21:9 宽银幕', width: 1680, height: 720 },
+  { label: '21:9', width: 1344, height: 576 },
 ]
 
 export default function EasyPanelMobileApp() {
