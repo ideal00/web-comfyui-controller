@@ -202,6 +202,13 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
   }
 
   function hiresSummary(data) {
+    const anima = data.animaHighres && typeof data.animaHighres === "object" ? data.animaHighres : null;
+    if (anima && anima.enabled === true) {
+      const label = typeof window.animaHighresPresetLabel === "function"
+        ? window.animaHighresPresetLabel(anima.preset) : "";
+      const name = label ? `「${label}」` : "";
+      return `二采：Anima 高清重建${name} ${text(anima.scale, "1.5")}× / denoise ${text(anima.denoise, "0.28")} / ${text(anima.steps, "24")} 步 / CFG ${text(anima.cfg, "4.2")} · ${text(anima.sampler, "auto")} + ${text(anima.scheduler, "auto")}`;
+    }
     if (text(data.illustriousMode, "precision") !== "hires") return "二采：未启用";
     const mode = text(data.hiresPromptMode, "append");
     const label = mode === "inherit" ? "继承首采" : mode === "append" ? "追加补充" : "完全独立";

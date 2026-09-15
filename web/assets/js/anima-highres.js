@@ -14,14 +14,19 @@
 
   const byId = (id) => document.getElementById(id);
 
-  // 与后端 ANIMA_HIGHRES_PRESETS 保持一致。
+  // 与后端 easy_panel_app/anima_highres.py::ANIMA_HIGHRES_PRESETS 保持一致：
+  // 细节 = DPM++ 2M SDE GPU / SGM Uniform（默认）；保真 = ER-SDE / SGM Uniform；
+  // 纹理 = ER-SDE / beta57（低噪声纹理，需 RES4LYF 节点）。
   const PRESETS = {
-    conservative: { label: "保守", scale: 1.25, denoise: 0.25, steps: 19,
-                    note: "尽量不改首采；LoRA 测试、角色一致性对比用。" },
-    recommended: { label: "推荐", scale: 1.50, denoise: 0.25, steps: 20,
-                   note: "正式出图的默认档：补发丝、服装褶皱与镜头细节。" },
-    strong: { label: "强化", scale: 1.50, denoise: 0.29, steps: 24,
-              note: "发丝、饰品、背景纹理多的图；更接近结构重绘。" },
+    detail: { label: "二采·细节", scale: 1.50, denoise: 0.28, steps: 24, cfg: 4.2,
+              sampler: "dpmpp_2m_sde_gpu", scheduler: "sgm_uniform",
+              note: "⭐ 二采默认：DPM++ 2M SDE GPU / SGM Uniform，20–30 步、CFG 4.0–4.5、denoise 0.20–0.35；补发丝、褶皱与材质细节。" },
+    fidelity: { label: "二采·保真", scale: 1.50, denoise: 0.24, steps: 24, cfg: 4.2,
+                sampler: "er_sde", scheduler: "sgm_uniform",
+                note: "保真：ER-SDE / SGM Uniform，denoise 0.20–0.30；最贴首采，只提清晰度与稳定度。" },
+    texture: { label: "二采·纹理", scale: 1.50, denoise: 0.26, steps: 24, cfg: 4.2,
+               sampler: "er_sde", scheduler: "beta57",
+               note: "纹理：ER-SDE / beta57（alpha 0.5 / beta 0.7），denoise 0.20–0.30；更强调低噪声纹理。需要 RES4LYF 节点提供 beta57。" },
   };
   const DETAIL_TERMS =
     "fine individual hair strands, refined fabric folds, detailed clothing texture, " +
@@ -70,6 +75,28 @@
     return FALLBACK_LIMITS.upscalers;
   }
 
+  // 二采采样器/调度器下拉：选项从主采样器下拉复制（主下拉由 initSamplerOptions 建），
+  // 另加一个「自动（按档位预设）」。选完会写回 #hiresSampler / #hiresScheduler。
+  function refreshHighresOptions() {
+    [["animaHighresSampler", "sampler"], ["animaHighresScheduler", "scheduler"]].forEach(([targetId, sourceId]) => {
+      const target = byId(targetId);
+      const source = byId(sourceId);
+      if (!target || !source || !source.options.length) return;
+      const current = String(target.value || "auto");
+      const options = Array.from(source.options).filter((option) => option.value !== "auto")
+        .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.textContent)}</option>`).join("");
+      target.innerHTML = '<option value="auto">自动（按档位预设）</option>' + options;
+      target.value = Array.from(target.options).some((option) => option.value === current) ? current : "auto";
+    });
+  }
+
+  // beta57 是 RES4LYF 注入的调度器；主下拉里没有它说明节点没装/没重启。
+  function schedulerAvailable(name) {
+    const source = byId("scheduler");
+    if (!source) return true;
+    return Array.from(source.options).some((option) => option.value === String(name));
+  }
+
   // 把契约里的范围写回输入框（换模型 / 重启面板后立即生效，不再硬编码 min/max）。
   function applyConstraintRanges() {
     const limits = rangeLimits();
@@ -91,7 +118,8 @@
 
   // 按族隔离 #hires*：进入 Anima 前先记住非 Anima 用户的二采设置，离开时恢复，
   // 避免 Anima 档位（1.5× / 0.25 / 4.8）残留到 Illustrious / SDXL 的二采控件里。
-  const HIRES_FIELD_IDS = ["hiresScale", "hiresDenoise", "hiresSteps", "hiresCfg"];
+  const HIRES_FIELD_IDS = ["hiresScale", "hiresDenoise", "hiresSteps", "hiresCfg",
+                          "hiresSampler", "hiresScheduler"];
   const HIRES_STASH_KEY = "easyPanelHiresStashV1";
 
   function readHiresFields() {
@@ -153,8 +181,12 @@
           <div><div class="field-title"><span>二采重绘幅度</span></div><input id="animaHighresDenoise" type="number" min="0.2" max="0.3" step="0.01" value="0.25"></div>
         </div>
         <div class="two" style="margin-top:8px">
-          <div><div class="field-title"><span>二采步数</span></div><input id="animaHighresSteps" type="number" min="6" max="40" step="1" value="20"></div>
-          <div><div class="field-title"><span>二采 CFG</span></div><input id="animaHighresCfg" type="number" min="1" max="10" step="0.1" value="4.8"></div>
+          <div><div class="field-title"><span>二采步数</span></div><input id="animaHighresSteps" type="number" min="6" max="40" step="1" value="24"></div>
+          <div><div class="field-title"><span>二采 CFG</span></div><input id="animaHighresCfg" type="number" min="1" max="10" step="0.1" value="4.2"></div>
+        </div>
+        <div class="two" style="margin-top:8px">
+          <div><div class="field-title"><span>二采采样器</span><span class="small">可单独指定，不再固定 ER-SDE</span></div><select id="animaHighresSampler" onchange="animaHighresRefresh()"></select></div>
+          <div><div class="field-title"><span>二采调度器</span><span class="small">beta57 需 RES4LYF 节点</span></div><select id="animaHighresScheduler" onchange="animaHighresRefresh()"></select></div>
         </div>
         <div class="field-title" style="margin-top:8px"><span>高清重建提示词</span></div>
         <select id="animaHighresScope" onchange="animaHighresScopeChanged()">
@@ -198,10 +230,11 @@
         window.animaHighresRefresh();
       }
     });
-    window.animaHighresApplyPreset("recommended", true);
+    window.animaHighresApplyPreset("detail", true);
     window.animaHighresScopeChanged(true);
     const panel = byId("animaHighresPanel");
     if (panel) panel.open = true;
+    refreshHighresOptions();
     window.animaHighresSyncVisibility();
   }
 
@@ -240,11 +273,13 @@
     const active = document.querySelector("[data-highres-preset].active");
     return {
       enabled: byId("animaHighresEnabled")?.checked === true,
-      preset: active?.dataset.highresPreset || "recommended",
+      preset: active?.dataset.highresPreset || "detail",
       scale: num(byId("animaHighresScale"), 1.5),
-      denoise: num(byId("animaHighresDenoise"), 0.25),
-      steps: Math.round(num(byId("animaHighresSteps"), 20)),
-      cfg: num(byId("animaHighresCfg"), 4.8),
+      denoise: num(byId("animaHighresDenoise"), 0.28),
+      steps: Math.round(num(byId("animaHighresSteps"), 24)),
+      cfg: num(byId("animaHighresCfg"), 4.2),
+      sampler: String(byId("animaHighresSampler")?.value || "auto"),
+      scheduler: String(byId("animaHighresScheduler")?.value || "auto"),
       scope,
     };
   };
@@ -259,6 +294,8 @@
     set("hiresDenoise", state.denoise);
     set("hiresSteps", state.steps);
     set("hiresCfg", state.cfg);
+    set("hiresSampler", state.sampler);
+    set("hiresScheduler", state.scheduler);
     const mode = byId("hiresPromptMode");
     const positive = byId("hiresPositive");
     if (state.scope === "inherit") {
@@ -290,6 +327,17 @@
     sync("animaHighresDenoise", "hiresDenoise");
     sync("animaHighresSteps", "hiresSteps");
     sync("animaHighresCfg", "hiresCfg");
+    const syncSelect = (inputId, sourceId) => {
+      const input = byId(inputId);
+      const source = byId(sourceId);
+      if (!input || !source) return;
+      const value = String(source.value || "");
+      if (!value || value === input.value) return;
+      if (!Array.from(input.options).some((option) => option.value === value)) return;
+      input.value = value;
+    };
+    syncSelect("animaHighresSampler", "hiresSampler");
+    syncSelect("animaHighresScheduler", "hiresScheduler");
     const mode = String(byId("hiresPromptMode")?.value || "");
     const text = String(byId("hiresPositive")?.value || "").trim();
     const next = mode === "inherit" ? "inherit"
@@ -309,9 +357,13 @@
     const preset = PRESETS[key];
     if (!preset) return;
     const set = (id, value) => { const field = byId(id); if (field) field.value = String(value); };
+    refreshHighresOptions();
     set("animaHighresScale", preset.scale);
     set("animaHighresDenoise", preset.denoise);
     set("animaHighresSteps", preset.steps);
+    set("animaHighresCfg", preset.cfg);
+    set("animaHighresSampler", preset.sampler);
+    set("animaHighresScheduler", preset.scheduler);
     document.querySelectorAll("[data-highres-preset]").forEach((button) => {
       button.classList.toggle("active", button.dataset.highresPreset === key);
     });
@@ -389,7 +441,10 @@
     const clampNote = limited
       ? `请求 ${state.scale}×，受长边上限 ${maxLongEdge} 限制，实际约 ${effectiveScale.toFixed(2)}×`
       : `按 ${state.scale}× 执行`;
-    lines.push(`预计输出 ${width}×${height}（${clampNote}）· 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise}。`);
+    lines.push(`预计输出 ${width}×${height}（${clampNote}）· 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise} · ${state.sampler} + ${state.scheduler}。`);
+    if (state.enabled && state.scheduler === "beta57" && !schedulerAvailable("beta57")) {
+      lines.push("⚠ 调度器 beta57 需要 RES4LYF 自定义节点；当前调度器列表里没有它，请先安装/重启 ComfyUI，否则生成会失败。");
+    }
     lines.push(`超分模型：${String(allowedUpscalers()[0] || FALLBACK_LIMITS.upscalers[0]).replace(".pth", "")}（高清重建内部完成，无需再开输出增强）`);
     if (!state.enabled) lines.length = 1;
     const outputMode = String(byId("outputEnhancementMode")?.value || "off");
@@ -403,6 +458,11 @@
       lines.push("⚠ 目标尺寸较大：8GB 显存会明显变慢，必要时把倍率降到 1.25×。");
     }
     note.textContent = lines.filter(Boolean).join(" ");
+  };
+
+  window.animaHighresPresetLabel = function (key) {
+    const preset = PRESETS[String(key || "")];
+    return preset ? preset.label : "";
   };
 
   window.animaHighresSyncVisibility = function () {
@@ -428,6 +488,7 @@
         data.animaHighres = {
           enabled: state.enabled, scale: state.scale, denoise: state.denoise,
           steps: state.steps, cfg: state.cfg,
+          sampler: state.sampler, scheduler: state.scheduler, preset: state.preset,
         };
       }
       return data;
@@ -453,6 +514,13 @@
         assign("animaHighresDenoise", raw.denoise);
         assign("animaHighresSteps", raw.steps);
         assign("animaHighresCfg", raw.cfg);
+        refreshHighresOptions();
+        [["animaHighresSampler", raw.sampler], ["animaHighresScheduler", raw.scheduler]].forEach(([id, value]) => {
+          const field = byId(id);
+          const next = String(value || "");
+          if (!field || !next) return;
+          if (Array.from(field.options).some((option) => option.value === next)) field.value = next;
+        });
         const enabled = byId("animaHighresEnabled");
         if (enabled) enabled.checked = raw.enabled === true;
         window.animaHighresScopeChanged(true);
@@ -486,6 +554,7 @@
         }
       }
       lastKnownFamily = family;
+      refreshHighresOptions();
       window.animaHighresSyncVisibility();
       pullFromHiresControls();
       window.animaHighresRefresh();

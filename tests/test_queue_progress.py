@@ -74,7 +74,7 @@ class QueueProgressBridgeTests(unittest.TestCase):
     def test_index_html_caches_bust_new_panel_js(self):
         for page in (PROJECT_DIR / "index.html", PROJECT_DIR / "installers/payload/index.html"):
             content = page.read_text(encoding="utf-8")
-            self.assertIn("panel.js?v=75", content)
+            self.assertIn("panel.js?v=76", content)
 
 
 class TaskQueueSnapshotContractTests(unittest.TestCase):

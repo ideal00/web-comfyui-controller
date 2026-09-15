@@ -1034,12 +1034,22 @@ Krea 2 是蒸馏免引导模型，面板锁定：
 | Milmu Anime Illustrious v-pred | 30 步 · CFG 6.0 · `euler / normal` | 自动应用 `v_prediction`；CFG Rescale 可用 |
 | Gock So Anime Love Song | 30 步 · CFG 7.0 · `dpmpp_2m_sde / karras` | 材质细节可试 34 步 / CFG 6.5 |
 | PlantMilk Walnut | 28 步 · CFG 3.0 · `euler / normal` | 作者建议从 CFG 3 起步，常用约 28 步 |
-| Anima Base | 默认「标准」30 步 · CFG 4.8 · `er_sde / simple` | 预设组合：标准 / 细节增强 / 柔和插画 / 稳定实验 / 高纹理实验 |
+| Anima Base | 默认「Anima 标准」34 步 · CFG 4.8 · `er_sde / sgm_uniform` | 一采预设：Anima 标准 / Anima 柔和 / Anima 变化（30–40 步、CFG 4.0–5.5） |
 | Hoseki LustrousMix Anima | 24 步 · CFG 4.5 · `er_sde / simple` | 作者推荐 ER SDE / Euler a、CFG 4–5 |
 | Nova Anime Anima | 24 步 · CFG 4.5 · `euler_ancestral / normal` | 发布配置 |
 | Krea 2 Turbo FP8 / INT8 | 8 步 · CFG 1.0 · `euler / simple` | 后端锁定 |
 
 每个模型的“快速 / 推荐 / 细节”组合、来源链接、分辨率上限和能力开关由 `easy_panel_app/data/model_profiles.json` 统一管理；切换模型时界面会同步更新，不再把上一模型参数误带到下一模型。
+
+Anima 的高清重建（二采）可以单独指定采样器与调度器，内置三档：
+
+| 二采档位 | 采样器 / 调度器 | 步数 · CFG · denoise |
+| --- | --- | --- |
+| ⭐ 二采·细节（默认） | `dpmpp_2m_sde_gpu / sgm_uniform` | 20–30 · 4.0–4.5 · 0.20–0.35 |
+| 二采·保真 | `er_sde / sgm_uniform` | 20–30 · 4.0–4.5 · 0.20–0.30 |
+| 二采·纹理 | `er_sde / beta57` | 20–30 · 4.0–4.5 · 0.20–0.30 |
+
+`beta57` 是 [RES4LYF](https://github.com/ClownsharkBatwing/RES4LYF) 注入的调度器（beta 曲线 α=0.5 / β=0.7）：把节点包放进 `custom_nodes` 并重启 ComfyUI 后，它就出现在采样器/调度器下拉里；未安装时面板会在说明里提醒。
 
 ### 10.3 模型增强与显存选项
 

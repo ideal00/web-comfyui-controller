@@ -85,11 +85,9 @@
       "source": "CircleStone Labs 官方模型卡",
       "source_url": "https://huggingface.co/circlestone-labs/Anima",
       "combos": [
-        {"key": "standard", "label": "标准", "steps": 30, "cfg": 4.8, "sampler": "er_sde", "scheduler": "simple", "guidance": "off", "note": "Anima 标准：ER-SDE / Simple、30 步、CFG 4.5–5；日常出图基线。"},
-        {"key": "detail_refine", "label": "细节增强", "steps": 32, "cfg": 4.5, "sampler": "dpmpp_2m_sde_gpu", "scheduler": "simple", "guidance": "off", "note": "细节增强：DPM++ 2M SDE GPU / Simple、30–35 步、CFG 4–5。"},
-        {"key": "soft", "label": "柔和插画", "steps": 30, "cfg": 4.5, "sampler": "euler_ancestral", "scheduler": "simple", "guidance": "off", "note": "柔和插画：Euler a / Simple、30 步、CFG 4–5。"},
-        {"key": "stable", "label": "稳定实验", "steps": 30, "cfg": 4.5, "sampler": "uni_pc", "scheduler": "ddim_uniform", "guidance": "off", "note": "稳定实验：UniPC / DDIM Uniform、30 步左右（原文未标 CFG，暂用 4.5）。"},
-        {"key": "texture", "label": "高纹理实验", "steps": 30, "cfg": 4.5, "sampler": "heunpp2", "scheduler": "beta", "guidance": "off", "note": "高纹理实验：Heun++ 2 / Beta、30 步；原文用 beta57，本机 ComfyUI 未内置该调度器，这里用最接近的 beta。"}
+        {"key": "standard", "label": "Anima 标准", "steps": 34, "cfg": 4.8, "sampler": "er_sde", "scheduler": "sgm_uniform", "guidance": "off", "note": "⭐ 一采默认：ER-SDE / SGM Uniform、30–40 步、CFG 4.5–5.0；日常出图基线。"},
+        {"key": "soft", "label": "Anima 柔和", "steps": 34, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "柔和：Euler a / Normal、30–40 步、CFG 4.5–5.5。Normal 过渡更柔但线稿可能偏松；外轮廓发虚时把调度器切回 sgm_uniform。"},
+        {"key": "variant", "label": "Anima 变化", "steps": 34, "cfg": 4.3, "sampler": "dpmpp_2m_sde_gpu", "scheduler": "sgm_uniform", "guidance": "off", "note": "变化：DPM++ 2M SDE GPU / SGM Uniform、30–40 步、CFG 4.0–4.5；结构变化更大，适合换构图。"}
       ]
     },
     {

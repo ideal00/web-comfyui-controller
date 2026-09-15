@@ -149,7 +149,7 @@ class CapabilityContractTests(unittest.TestCase):
         highres = mp.capability_constraints(anima, "highres_reconstruction")
         self.assertTrue(highres["enabled"])
         self.assertEqual([1.15, 2.0], highres["scale"])
-        self.assertEqual([0.2, 0.3], highres["denoise"])
+        self.assertEqual([0.2, 0.35], highres["denoise"])
         self.assertEqual(2560, highres["max_long_edge"])
         self.assertEqual(["RealESRGAN_x4plus_anime_6B.pth"], highres["allowed_upscalers"])
         self.assertEqual([0.05, 0.2], mp.capability_constraints(anima, "detail_refine")["denoise"])
@@ -343,7 +343,7 @@ class FrontendFamilySourceTests(unittest.TestCase):
         index_html = (ROOT / "index.html").read_text(encoding="utf-8")
         self.assertRegex(index_html, r"panel\.js\?v=\d+")
         self.assertIn("anima-refine.js?v=3", index_html)
-        self.assertIn("anima-highres.js?v=6", index_html)
+        self.assertIn("anima-highres.js?v=7", index_html)
 
 
 if __name__ == "__main__":

@@ -29,20 +29,21 @@ DEFAULT_HIRES = {
     "sampler": "auto",
     "scheduler": "auto",
 }
-# Anima 的高清重建不是普通 SDXL Hires：倍率 1.15–2.0、denoise 0.20–0.30（默认
-# 1.5× / 0.25），长边上限 2560，超分模型固定 Anime6B。数值取自成熟的 Anima
-# 工作流（EasyUseAnima ≈1.25×/0.29、AnimaFlow ≈1.5×/0.25）。
+# Anima 的高清重建不是普通 SDXL Hires：倍率 1.15–2.0、denoise 0.20–0.35（默认
+# 1.5× / 0.28），长边上限 2560，超分模型固定 Anime6B。二采默认走「二采·细节」
+# （DPM++ 2M SDE GPU / SGM Uniform、24 步、CFG 4.2），二采采样器/调度器可在面板
+# 或 API（animaHighres.sampler / .scheduler）里覆盖；beta57 由 RES4LYF 节点提供。
 ANIMA_HIGHRES_DEFAULTS = {
     "scale": 1.50,
     "min_scale": 1.15,
     "max_scale": 2.0,
-    "denoise": 0.25,
+    "denoise": 0.28,
     "min_denoise": 0.20,
-    "max_denoise": 0.30,
-    "steps": 20,
-    "cfg": 4.8,
-    "sampler": "auto",
-    "scheduler": "auto",
+    "max_denoise": 0.35,
+    "steps": 24,
+    "cfg": 4.2,
+    "sampler": "dpmpp_2m_sde_gpu",
+    "scheduler": "sgm_uniform",
     "max_long_edge": 2560,
     "upscaler": "RealESRGAN_x4plus_anime_6B.pth",
 }
@@ -238,21 +239,15 @@ def is_illustrious_model(model_name: str) -> bool:
 def _generic_profile(family: str) -> dict:
     if family == "anima":
         combos = [
-            {"key": "standard", "label": "标准", "steps": 30, "cfg": 4.8,
-             "sampler": "er_sde", "scheduler": "simple", "guidance": "off",
-             "note": "Anima 标准：ER-SDE / Simple、30 步、CFG 4.5–5；日常出图基线。"},
-            {"key": "detail_refine", "label": "细节增强", "steps": 32, "cfg": 4.5,
-             "sampler": "dpmpp_2m_sde_gpu", "scheduler": "simple", "guidance": "off",
-             "note": "细节增强：DPM++ 2M SDE GPU / Simple、30–35 步、CFG 4–5。"},
-            {"key": "soft", "label": "柔和插画", "steps": 30, "cfg": 4.5,
-             "sampler": "euler_ancestral", "scheduler": "simple", "guidance": "off",
-             "note": "柔和插画：Euler a / Simple、30 步、CFG 4–5。"},
-            {"key": "stable", "label": "稳定实验", "steps": 30, "cfg": 4.5,
-             "sampler": "uni_pc", "scheduler": "ddim_uniform", "guidance": "off",
-             "note": "稳定实验：UniPC / DDIM Uniform、30 步左右（原文未标 CFG，暂用 4.5）。"},
-            {"key": "texture", "label": "高纹理实验", "steps": 30, "cfg": 4.5,
-             "sampler": "heunpp2", "scheduler": "beta", "guidance": "off",
-             "note": "高纹理实验：Heun++ 2 / Beta、30 步；原文用 beta57，本机 ComfyUI 未内置该调度器，这里用最接近的 beta。"},
+            {"key": "standard", "label": "Anima 标准", "steps": 34, "cfg": 4.8,
+             "sampler": "er_sde", "scheduler": "sgm_uniform", "guidance": "off",
+             "note": "⭐ 一采默认：ER-SDE / SGM Uniform、30–40 步、CFG 4.5–5.0；日常出图基线。"},
+            {"key": "soft", "label": "Anima 柔和", "steps": 34, "cfg": 5.0,
+             "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off",
+             "note": "柔和：Euler a / Normal、30–40 步、CFG 4.5–5.5。Normal 过渡更柔但线稿可能偏松；外轮廓发虚时把调度器切回 sgm_uniform。"},
+            {"key": "variant", "label": "Anima 变化", "steps": 34, "cfg": 4.3,
+             "sampler": "dpmpp_2m_sde_gpu", "scheduler": "sgm_uniform", "guidance": "off",
+             "note": "变化：DPM++ 2M SDE GPU / SGM Uniform、30–40 步、CFG 4.0–4.5；结构变化更大，适合换构图。"},
         ]
         return {"id": "anima-generic", "family": family, "label": "Anima",
                 "source": "CircleStone Labs 官方模型卡",

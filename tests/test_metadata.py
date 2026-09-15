@@ -124,7 +124,7 @@ class MetadataSeedTests(unittest.TestCase):
             prompt = easy_panel.build_workflow(data)["prompt"]
         result = parse_comfyui_prompt(prompt)
         self.assertEqual("anima-base-v1.0.safetensors", result["model"])
-        self.assertEqual((30, 4.8, "er_sde", "simple"),
+        self.assertEqual((34, 4.8, "er_sde", "sgm_uniform"),
                          (result["steps"], result["cfg"],
                           result["sampler"], result["scheduler"]))
         self.assertEqual("seedvr2", result["output_enhancement"]["mode"])

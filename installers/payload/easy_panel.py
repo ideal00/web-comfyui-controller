@@ -4118,6 +4118,15 @@ def build_workflow(data: dict) -> dict:
             hires_sampler = sampler_name
         if hires_scheduler == "auto":
             hires_scheduler = scheduler
+        # Anima 二采：animaHighres.sampler / .scheduler 优先（面板的二采预设就是走这里），
+        # 例如「二采·纹理」= er_sde + beta57（beta57 由 RES4LYF 节点注入 SCHEDULER_HANDLERS）。
+        if anima and anima_highres:
+            anima_highres_sampler = str(anima_highres.get("sampler") or "").strip()
+            anima_highres_scheduler = str(anima_highres.get("scheduler") or "").strip()
+            if anima_highres_sampler and anima_highres_sampler != "auto":
+                hires_sampler = anima_highres_sampler
+            if anima_highres_scheduler and anima_highres_scheduler != "auto":
+                hires_scheduler = anima_highres_scheduler
         # Two-stage prompts: the first pass decides composition, the second pass
         # only adds detail. Regional conditioning is a masked graph instead of
         # plain text, so it always keeps the first-stage refs.

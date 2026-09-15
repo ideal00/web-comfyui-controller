@@ -2,7 +2,8 @@
 
 复用主流程的 Hires 链（Anime6B → 缩放 → VAEEncode → 二采 → Decode），由
 ``animaHighres.enabled`` 触发；参数按 Anima profile 约束（1.15–2.0× /
-denoise 0.20–0.30 / 长边上限 2560），不套用 Illustrious 的「二采目的」上限。
+denoise 0.20–0.35 / 长边上限 2560），不套用 Illustrious 的「二采目的」上限。
+二采的采样器与调度器可单独指定（animaHighres.sampler / .scheduler，如 er_sde + beta57）。
 与 Detail Refine（同尺寸润色）互不替代。
 """
 
@@ -60,12 +61,22 @@ class AnimaHighresParameterTests(unittest.TestCase):
         spec = self.normalize({})
         self.assertFalse(spec["enabled"])
         self.assertEqual(1.5, spec["scale"])
-        self.assertEqual(0.25, spec["denoise"])
-        self.assertEqual(20, spec["steps"])
-        self.assertEqual(4.8, spec["cfg"])
+        self.assertEqual(0.28, spec["denoise"])
+        self.assertEqual(24, spec["steps"])
+        self.assertEqual(4.2, spec["cfg"])
+        self.assertEqual("dpmpp_2m_sde_gpu", spec["sampler"])
+        self.assertEqual("sgm_uniform", spec["scheduler"])
         self.assertEqual(DEFAULT_MAX_LONG_EDGE, spec["maxLongEdge"])
         self.assertEqual((1248, 1824), (spec["targetWidth"], spec["targetHeight"]))
         self.assertEqual("RealESRGAN_x4plus_anime_6B.pth", spec["upscaler"])
+
+    def test_second_pass_sampler_and_scheduler_can_be_overridden(self):
+        spec = self.normalize({"enabled": True, "sampler": "er_sde", "scheduler": "beta57"})
+        self.assertEqual("er_sde", spec["sampler"])
+        self.assertEqual("beta57", spec["scheduler"])
+        fallback = self.normalize({"enabled": True, "sampler": "auto", "scheduler": ""})
+        self.assertEqual("dpmpp_2m_sde_gpu", fallback["sampler"])
+        self.assertEqual("sgm_uniform", fallback["scheduler"])
 
     def test_scale_and_denoise_are_clamped_to_anima_range(self):
         spec = self.normalize({"enabled": True, "scale": 3.0, "denoise": 0.9})
@@ -88,10 +99,17 @@ class AnimaHighresParameterTests(unittest.TestCase):
         self.assertEqual(4.2, spec["cfg"])
 
     def test_presets_are_listed_for_the_frontend(self):
-        self.assertEqual(1.25, ANIMA_HIGHRES_PRESETS["conservative"]["scale"])
-        self.assertEqual(0.25, ANIMA_HIGHRES_PRESETS["recommended"]["denoise"])
-        self.assertEqual(0.29, ANIMA_HIGHRES_PRESETS["strong"]["denoise"])
-        self.assertEqual(24, ANIMA_HIGHRES_PRESETS["strong"]["steps"])
+        self.assertEqual("二采·细节", ANIMA_HIGHRES_PRESETS["detail"]["label"])
+        self.assertEqual("dpmpp_2m_sde_gpu", ANIMA_HIGHRES_PRESETS["detail"]["sampler"])
+        self.assertEqual("sgm_uniform", ANIMA_HIGHRES_PRESETS["detail"]["scheduler"])
+        self.assertEqual(0.28, ANIMA_HIGHRES_PRESETS["detail"]["denoise"])
+        self.assertEqual([0.20, 0.35], ANIMA_HIGHRES_PRESETS["detail"]["denoise_range"])
+        self.assertEqual("er_sde", ANIMA_HIGHRES_PRESETS["fidelity"]["sampler"])
+        self.assertEqual("beta57", ANIMA_HIGHRES_PRESETS["texture"]["scheduler"])
+        for key in ("detail", "fidelity", "texture"):
+            with self.subTest(key=key):
+                self.assertEqual(24, ANIMA_HIGHRES_PRESETS[key]["steps"])
+                self.assertEqual(4.2, ANIMA_HIGHRES_PRESETS[key]["cfg"])
 
 
 class AnimaHighresProfileTests(unittest.TestCase):
@@ -107,7 +125,9 @@ class AnimaHighresProfileTests(unittest.TestCase):
                 self.assertFalse(profile["capabilities"]["regional_prompting"])
                 self.assertEqual(1.5, profile["hires"]["scale"])
                 self.assertEqual(0.20, profile["hires"]["min_denoise"])
-                self.assertEqual(0.30, profile["hires"]["max_denoise"])
+                self.assertEqual(0.35, profile["hires"]["max_denoise"])
+                self.assertEqual("dpmpp_2m_sde_gpu", profile["hires"]["sampler"])
+                self.assertEqual("sgm_uniform", profile["hires"]["scheduler"])
                 self.assertEqual(2560, profile["hires"]["max_long_edge"])
 
     def test_illustrious_keeps_its_own_hires_defaults(self):
@@ -136,11 +156,11 @@ class AnimaHighresWorkflowTests(unittest.TestCase):
         samplers = self.nodes_of(workflow, "KSampler")
         self.assertEqual(2, len(samplers))
         refine = samplers[1]["inputs"]
-        self.assertAlmostEqual(0.25, refine["denoise"])
-        self.assertEqual(20, refine["steps"])
-        self.assertAlmostEqual(4.8, refine["cfg"])
-        self.assertEqual("er_sde", refine["sampler_name"])
-        self.assertEqual("simple", refine["scheduler"])
+        self.assertAlmostEqual(0.28, refine["denoise"])
+        self.assertEqual(24, refine["steps"])
+        self.assertAlmostEqual(4.2, refine["cfg"])
+        self.assertEqual("dpmpp_2m_sde_gpu", refine["sampler_name"])
+        self.assertEqual("sgm_uniform", refine["scheduler"])
         # 超分 → 缩放 → VAEEncode 链存在，且二采 latent 来自放大后的图。
         self.assertEqual(1, len(self.nodes_of(workflow, "UpscaleModelLoader")))
         self.assertEqual(1, len(self.nodes_of(workflow, "ImageUpscaleWithModel")))
@@ -158,6 +178,19 @@ class AnimaHighresWorkflowTests(unittest.TestCase):
         saves = self.nodes_of(workflow, "SaveImage")
         prefixes = [node["inputs"]["filename_prefix"] for node in saves]
         self.assertEqual(["EasyPanel_aux/EasyPanel_base", "EasyPanel"], prefixes)
+
+    def test_second_pass_spawns_requested_sampler_and_scheduler(self):
+        """二采采样器/调度器可单独指定（面板的「二采·纹理」= er_sde + beta57）。"""
+
+        data = payload("anima-base-v1.0.safetensors")
+        data["animaHighres"] = {"enabled": True, "sampler": "er_sde", "scheduler": "beta57",
+                                "steps": 28, "cfg": 4.0, "denoise": 0.30}
+        refine = self.nodes_of(self.build(data), "KSampler")[1]["inputs"]
+        self.assertEqual("er_sde", refine["sampler_name"])
+        self.assertEqual("beta57", refine["scheduler"])
+        self.assertEqual(28, refine["steps"])
+        self.assertAlmostEqual(4.0, refine["cfg"])
+        self.assertAlmostEqual(0.30, refine["denoise"])
 
     def test_disabled_keeps_single_sampler(self):
         data = payload("anima-base-v1.0.safetensors")
@@ -205,11 +238,25 @@ class AnimaHighresUiTests(unittest.TestCase):
 
     def test_script_exposes_the_panel_and_state(self):
         script = (PROJECT_DIR / "web/assets/js/anima-highres.js").read_text(encoding="utf-8")
-        for marker in ("animaHighresEnabled", "高清重建", "保守", "推荐", "强化",
+        for marker in ("animaHighresEnabled", "高清重建", "二采·细节", "二采·保真", "二采·纹理",
                        "animaHighresState", "pushToHiresControls", "animaHighresApplyPreset",
+                       "animaHighresSampler", "animaHighresScheduler", "refreshHighresOptions",
                        "fine individual hair strands"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
+
+    def test_scheduler_options_include_beta57_for_res4lyf(self):
+        """beta57 是 RES4LYF 注入的调度器；主下拉必须能选到，否则二采·纹理无意义。"""
+
+        panel_js = (PROJECT_DIR / "web/assets/js/panel.js").read_text(encoding="utf-8")
+        self.assertIn("'beta57'", panel_js)
+        with patch.object(easy_panel, "checkpoint_issue", return_value=None):
+            data = payload("anima-base-v1.0.safetensors")
+            data["animaHighres"] = {"enabled": True, "scheduler": "beta57"}
+            prompt = easy_panel.build_workflow(data)["prompt"]
+        schedulers = [node["inputs"]["scheduler"] for node in prompt.values()
+                      if node.get("class_type") == "KSampler"]
+        self.assertEqual(["sgm_uniform", "beta57"], schedulers)
 
     def test_custom_prompt_has_paste_and_clear_buttons(self):
         """自定义二采提示词与提示词分区一致：可一键粘贴/清除。"""

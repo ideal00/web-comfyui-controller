@@ -11,23 +11,32 @@
 VAEEncode → KSampler → VAEDecode），不新增第二套架构。
 
 约束取自成熟 Anima 工作流（EasyUseAnima / AnimaFlow）：
-倍率 1.15–2.0、denoise 0.20–0.30、默认 1.5× / 0.25、长边上限 2560。
+倍率 1.15–2.0、denoise 0.20–0.35、默认 1.5× / 0.28、长边上限 2560；二采采样器与
+调度器可被 ``animaHighres.sampler`` / ``.scheduler`` 覆盖（beta57 由 RES4LYF 提供）。
 """
 
 from __future__ import annotations
 
-#: 一键档位（前端 anima-highres.js 同步使用）：scale / denoise / 二采步数。
+#: 二采档位（前端 anima-highres.js 同步使用）：
+#: 细节 = DPM++ 2M SDE GPU / SGM Uniform（默认）；保真 = ER-SDE / SGM Uniform；
+#: 纹理 = ER-SDE / beta57（低噪声纹理，需 RES4LYF 节点）。
 ANIMA_HIGHRES_PRESETS = {
-    "conservative": {"label": "保守", "scale": 1.25, "denoise": 0.25, "steps": 19},
-    "recommended": {"label": "推荐", "scale": 1.50, "denoise": 0.25, "steps": 20},
-    "strong": {"label": "强化", "scale": 1.50, "denoise": 0.29, "steps": 24},
+    "detail": {"label": "二采·细节", "scale": 1.50, "denoise": 0.28, "steps": 24, "cfg": 4.2,
+               "sampler": "dpmpp_2m_sde_gpu", "scheduler": "sgm_uniform",
+               "denoise_range": [0.20, 0.35]},
+    "fidelity": {"label": "二采·保真", "scale": 1.50, "denoise": 0.24, "steps": 24, "cfg": 4.2,
+                 "sampler": "er_sde", "scheduler": "sgm_uniform",
+                 "denoise_range": [0.20, 0.30]},
+    "texture": {"label": "二采·纹理", "scale": 1.50, "denoise": 0.26, "steps": 24, "cfg": 4.2,
+                "sampler": "er_sde", "scheduler": "beta57",
+                "denoise_range": [0.20, 0.30]},
 }
 
 #: 兜底边界（profile 未提供 min/max 时使用）。
 HIGHRES_SCALE_FLOOR = 1.15
 HIGHRES_SCALE_CAP = 2.0
 HIGHRES_DENOISE_FLOOR = 0.20
-HIGHRES_DENOISE_CAP = 0.30
+HIGHRES_DENOISE_CAP = 0.35
 HIGHRES_STEPS_RANGE = (6, 40)
 HIGHRES_CFG_RANGE = (1.0, 10.0)
 DEFAULT_MAX_LONG_EDGE = 2560
@@ -79,12 +88,23 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
     denoise = _number(raw.get("denoise"), defaults.get("denoise", 0.25),
                       denoise_min, denoise_max)
 
-    steps = int(round(_number(raw.get("steps"), defaults.get("steps", 20),
+    steps = int(round(_number(raw.get("steps"), defaults.get("steps", 24),
                               *HIGHRES_STEPS_RANGE)))
     cfg_default = defaults.get("cfg")
     if cfg_default in (None, ""):
         cfg_default = first_pass_cfg
     cfg = _number(raw.get("cfg"), cfg_default, *HIGHRES_CFG_RANGE)
+
+    # 二采采样器/调度器：请求值 > profile 默认 > auto（auto = 按档位预设，
+    # 只有 profile 也没给时才由主流程回退到首采）。
+    def _pick_sampler(raw_value, default_value) -> str:
+        text = str(raw_value or "").strip()
+        if not text or text == "auto":
+            text = str(default_value or "").strip()
+        return text or "auto"
+
+    sampler = _pick_sampler(raw.get("sampler"), defaults.get("sampler"))
+    scheduler = _pick_sampler(raw.get("scheduler"), defaults.get("scheduler"))
 
     max_long_edge = int(_number(defaults.get("max_long_edge"), DEFAULT_MAX_LONG_EDGE,
                                 0, 8192))
@@ -101,6 +121,8 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
         "denoise": round(denoise, 3),
         "steps": steps,
         "cfg": round(cfg, 3),
+        "sampler": sampler,
+        "scheduler": scheduler,
         "maxLongEdge": max_long_edge,
         "targetWidth": target_width,
         "targetHeight": target_height,
