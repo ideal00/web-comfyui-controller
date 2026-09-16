@@ -32,6 +32,27 @@
     "fine individual hair strands, refined fabric folds, detailed clothing texture, " +
     "clean line details, small accessory details, crisp facial features";
 
+  // 与后端 HAND_REPAIR_DEFAULTS / hand_repair 约束保持一致。
+  const HAND_DEFAULTS = {
+    denoise: 0.45,
+    steps: 24,
+    grow: 6,
+    cfg: 4.2,
+    positive: "perfect hands, five fingers, detailed hands, natural hand pose",
+    negative: "bad hands, extra fingers, missing fingers, fused fingers, malformed hands, extra limbs, wrong finger count",
+  };
+  const HAND_FALLBACK_LIMITS = {
+    denoise: { min: 0.20, max: 0.65, step: 0.01 },
+    steps: { min: 8, max: 40, step: 1 },
+    grow: { min: 0, max: 48, step: 1 },
+  };
+  // 已上传的蒙版/原图文件名（ComfyUI input 目录里的相对名），随 payload 提交。
+  let handUpload = { image: "", mask: "" };
+  // 蒙版绘制器状态（与 Illustrious「局部修复」同一套交互：画笔/橡皮/撤销/清空，红=重绘区）。
+  let handBaseImg = null, handBaseFile = null, handBaseUrl = "", handMaskCv = null,
+      handTintCv = null, handUndo = [], handDrawing = false, handLast = null,
+      handTool = "paint";
+
   // catalog 未就绪时的兑底（正常路径一律走约束契约）。
   const FALLBACK_LIMITS = {
     scale: { min: 1.15, max: 2.0, step: 0.05 },
@@ -97,6 +118,322 @@
     return Array.from(source.options).some((option) => option.value === String(name));
   }
 
+  function handLimits() {
+    const contract = highresConstraints().hand_repair;
+    const source = contract && typeof contract === "object" ? contract : {};
+    const merge = (pair, fallback) => {
+      const value = Array.isArray(pair) && pair.length === 2 ? pair : null;
+      return {
+        min: value ? Number(value[0]) : fallback.min,
+        max: value ? Number(value[1]) : fallback.max,
+        step: fallback.step,
+      };
+    };
+    return {
+      denoise: merge(source.denoise, HAND_FALLBACK_LIMITS.denoise),
+      steps: merge(source.steps, HAND_FALLBACK_LIMITS.steps),
+      grow: merge(source.grow, HAND_FALLBACK_LIMITS.grow),
+    };
+  }
+
+  function setHandStatus(text, error) {
+    const node = byId("animaHighresHandStatus");
+    if (!node) return;
+    node.textContent = text;
+    node.classList.toggle("diagnostic-error", !!error);
+  }
+
+  window.animaHighresHandState = function () {
+    return {
+      enabled: byId("animaHighresHandEnabled")?.checked === true,
+      image: handUpload.image,
+      mask: handUpload.mask,
+      denoise: num(byId("animaHighresHandDenoise"), HAND_DEFAULTS.denoise),
+      steps: Math.round(num(byId("animaHighresHandSteps"), HAND_DEFAULTS.steps)),
+      grow: Math.round(num(byId("animaHighresHandGrow"), HAND_DEFAULTS.grow)),
+      cfg: num(byId("animaHighresHandCfg"), HAND_DEFAULTS.cfg),
+      positive: String(byId("animaHighresHandPositive")?.value ?? HAND_DEFAULTS.positive),
+      negative: String(byId("animaHighresHandNegative")?.value ?? HAND_DEFAULTS.negative),
+    };
+  };
+
+  // 蒙版上传：复用 /api/upload-inpaint（会归一化成 PNG 放进 ComfyUI input）。
+  async function handUploadFiles(imageFile, maskBlob, label) {
+    const form = new FormData();
+    form.append("image", imageFile, imageFile.name || "anima_hand_base.png");
+    form.append("mask", maskBlob, "anima_hand_mask.png");
+    setHandStatus("正在上传蒙版…");
+    try {
+      const response = await fetch("/api/upload-inpaint", { method: "POST", body: form });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      handUpload = { image: String(data.image || ""), mask: String(data.mask || "") };
+      setHandStatus(`蒙版已就绪：${label}；生成时会在 Anime6B 超分前先修手（多一次采样）。`);
+      window.animaHighresRefresh();
+      return true;
+    } catch (error) {
+      handUpload = { image: "", mask: "" };
+      setHandStatus("蒙版上传失败：" + error.message, true);
+      return false;
+    }
+  }
+
+  // 导入现成蒙版文件（原图可选，只选蒙版时把同一个文件当 image 提交）。
+  window.animaHighresHandUpload = async function () {
+    const maskFile = byId("animaHighresHandMask")?.files?.[0] || null;
+    if (!maskFile) return;
+    const imageFile = byId("animaHighresHandImage")?.files?.[0] || maskFile;
+    const onlyMask = imageFile === maskFile ? "（只上传了蒙版，工作流只用蒙版）" : "";
+    await handUploadFiles(imageFile, maskFile, maskFile.name + onlyMask);
+  };
+
+  // ---- 面板内自画蒙版（与 Illustrious「局部修复」同一套交互） ----
+  function handCanvas() { return byId("animaHighresHandCanvas"); }
+  function handCtx() { return handMaskCv ? handMaskCv.getContext("2d", { willReadFrequently: true }) : null; }
+
+  function handRender() {
+    const canvas = handCanvas();
+    if (!canvas || !handBaseImg) return;
+    const width = canvas.width, height = canvas.height;
+    if (handMaskCv) {
+      // 红色叠加不能直接在视图画布上用 source-in（底图不透明会整张变红）：
+      // 先用临时画布把蒙版染红，再叠到原图上。
+      if (!handTintCv) handTintCv = document.createElement("canvas");
+      handTintCv.width = width;
+      handTintCv.height = height;
+      const tint = handTintCv.getContext("2d", { willReadFrequently: true });
+      tint.clearRect(0, 0, width, height);
+      tint.drawImage(handMaskCv, 0, 0, width, height);
+      tint.globalCompositeOperation = "source-in";
+      tint.fillStyle = "rgba(255,60,60,0.55)";
+      tint.fillRect(0, 0, width, height);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(handBaseImg, 0, 0, width, height);
+    if (handTintCv) ctx.drawImage(handTintCv, 0, 0, width, height);
+  }
+
+  function handPushUndo() {
+    if (!handMaskCv) return;
+    handUndo.push(handCtx().getImageData(0, 0, handMaskCv.width, handMaskCv.height));
+    while (handUndo.length > 12) handUndo.shift();
+  }
+
+  function handPointerPos(event) {
+    const canvas = handCanvas(), rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * canvas.width / (rect.width || canvas.width),
+      y: (event.clientY - rect.top) * canvas.height / (rect.height || canvas.height),
+    };
+  }
+
+  function handStroke(from, to) {
+    const ctx = handCtx();
+    if (!ctx) return;
+    const radius = Math.max(2, Number(byId("animaHighresHandBrush")?.value || 48) / 2);
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = radius * 2;
+    ctx.globalCompositeOperation = handTool === "erase" ? "destination-out" : "source-over";
+    ctx.strokeStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(to.x, to.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    handRender();
+  }
+
+  function handPointerDown(event) {
+    if (!handMaskCv) { setHandStatus("请先载入底图。", true); return; }
+    event.preventDefault();
+    handDrawing = true;
+    handPushUndo();
+    const point = handPointerPos(event);
+    handLast = point;
+    handStroke(point, point);
+    handCanvas()?.setPointerCapture?.(event.pointerId);
+  }
+
+  function handPointerMove(event) {
+    if (!handDrawing) return;
+    event.preventDefault();
+    const point = handPointerPos(event);
+    handStroke(handLast || point, point);
+    handLast = point;
+  }
+
+  function handPointerUp() { handDrawing = false; handLast = null; }
+
+  function handMaskPixels() {
+    if (!handMaskCv) return 0;
+    const data = handCtx().getImageData(0, 0, handMaskCv.width, handMaskCv.height).data;
+    let count = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 8) count += 1;
+    return count;
+  }
+
+  function handSetBase(blob, label) {
+    if (handBaseUrl) URL.revokeObjectURL(handBaseUrl);
+    handBaseUrl = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      handBaseImg = image;
+      handBaseFile = new File([blob], "anima_hand_base.png", { type: blob.type || "image/png" });
+      const canvas = handCanvas();
+      const scale = Math.min(1, 1024 / Math.max(image.naturalWidth, image.naturalHeight));
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      handMaskCv = document.createElement("canvas");
+      handMaskCv.width = canvas.width;
+      handMaskCv.height = canvas.height;
+      handUndo = [];
+      handTintCv = null;
+      handRender();
+      setHandStatus(`已载入底图${label ? "（" + label + "）" : ""}：涂出要修的手（红色区域），再点「上传蒙版」。`);
+    };
+    image.onerror = () => setHandStatus("底图载入失败，请换一张图片。", true);
+    image.src = handBaseUrl;
+  }
+
+  async function refreshHandBaseOptions() {
+    const select = byId("animaHighresHandBase");
+    if (!select || select.dataset.loaded === "1") return;
+    try {
+      const data = await (await fetch("/api/output-images")).json();
+      select.innerHTML = '<option value="">— 从最近生成结果选择 —</option>' +
+        (data.entries || []).map((item) => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join("");
+      select.dataset.loaded = "1";
+    } catch (error) { /* 保持空列表，用户仍可上传底图 */ }
+  }
+
+  window.animaHighresHandLoadBase = async function () {
+    const name = String(byId("animaHighresHandBase")?.value || "");
+    if (!name) { setHandStatus("请先选择一张最近生成的结果。", true); return; }
+    setHandStatus("正在读取底图…");
+    try {
+      const response = await fetch("/output?name=" + encodeURIComponent(name));
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      handSetBase(await response.blob(), name);
+    } catch (error) { setHandStatus("读取底图失败：" + error.message, true); }
+  };
+
+  window.animaHighresHandUploadBase = function (file) {
+    if (file) handSetBase(file, file.name);
+  };
+
+  // 「上次首采图」：从快照里取最新的对比图（_base），顺便把 seed 与尺寸填回面板，
+  // 这样用同一张构图重跑时蒙版位置才对得上。
+  window.animaHighresHandLoadLastBase = async function () {
+    setHandStatus("正在查找上次首采图…");
+    try {
+      const data = await (await fetch("/api/snapshots")).json();
+      const entry = (data.entries || []).find((item) => Array.isArray(item.comparisonOutputs) && item.comparisonOutputs.length);
+      if (!entry) throw new Error("还没有首采对照图（先开一次高清重建生成）");
+      const name = String(entry.comparisonOutputs[0]);
+      const response = await fetch("/output?name=" + encodeURIComponent(name) + "&subfolder=EasyPanel_aux");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      handSetBase(await response.blob(), name);
+      const payload = entry.payload || {};
+      const notes = [];
+      if (payload.seed != null) {
+        const seed = byId("seed");
+        if (seed) { seed.value = String(payload.seed); notes.push("seed " + payload.seed); }
+      }
+      if (payload.width && payload.height) {
+        const value = `${payload.width}x${payload.height}`;
+        const size = byId("size");
+        if (size && Array.from(size.options).some((option) => option.value === value)) {
+          size.value = value;
+          size.dispatchEvent(new Event("change", { bubbles: true }));
+          notes.push(value);
+        }
+      }
+      setHandStatus(`已载入上次首采图（${notes.join(" · ") || "参数未记录"}）：用同一 seed 重跑才对齐；涂完手点「上传蒙版」。`);
+      window.animaHighresRefresh();
+    } catch (error) { setHandStatus("载入上次首采图失败：" + error.message, true); }
+  };
+
+  window.animaHighresHandSetTool = function (tool) {
+    handTool = tool === "erase" ? "erase" : "paint";
+    byId("animaHighresHandPaint")?.classList.toggle("active", handTool === "paint");
+    byId("animaHighresHandErase")?.classList.toggle("active", handTool === "erase");
+  };
+
+  window.animaHighresHandBrushChanged = function () {
+    const label = byId("animaHighresHandBrushValue");
+    if (label) label.textContent = String(byId("animaHighresHandBrush")?.value || "");
+  };
+
+  window.animaHighresHandUndo = function () {
+    if (!handMaskCv || !handUndo.length) return;
+    handCtx().putImageData(handUndo.pop(), 0, 0);
+    handRender();
+  };
+
+  window.animaHighresHandResetMask = function () {
+    if (handMaskCv) {
+      handPushUndo();
+      handCtx().clearRect(0, 0, handMaskCv.width, handMaskCv.height);
+      handRender();
+    }
+    handUpload = { image: "", mask: "" };
+    setHandStatus("已清空蒙版（需要重新上传才能生效）。");
+    window.animaHighresRefresh();
+  };
+
+  window.animaHighresHandSaveMask = async function () {
+    if (!handMaskCv || !handBaseFile) { setHandStatus("请先载入底图并涂出要修的手。", true); return; }
+    const pixels = handMaskPixels();
+    if (!pixels) { setHandStatus("蒙版是空的：先在图上涂出要修的手（红色区域）。", true); return; }
+    const exporter = document.createElement("canvas");
+    exporter.width = handMaskCv.width;
+    exporter.height = handMaskCv.height;
+    const ctx = exporter.getContext("2d");
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, exporter.width, exporter.height);
+    ctx.drawImage(handMaskCv, 0, 0);
+    const blob = await new Promise((resolve) => exporter.toBlob(resolve, "image/png"));
+    if (!blob) { setHandStatus("蒙版导出失败，请重试。", true); return; }
+    await handUploadFiles(handBaseFile, blob, `${handMaskCv.width}×${handMaskCv.height} 画布 · ${pixels.toLocaleString()} px 重绘区`);
+  };
+
+  window.animaHighresHandClear = function () {
+    handUpload = { image: "", mask: "" };
+    if (handMaskCv) {
+      handCtx().clearRect(0, 0, handMaskCv.width, handMaskCv.height);
+      handRender();
+    }
+    ["animaHighresHandImage", "animaHighresHandMask", "animaHighresHandBaseFile"].forEach((id) => {
+      const field = byId(id);
+      if (field) field.value = "";
+    });
+    setHandStatus("已清除蒙版。");
+    window.animaHighresRefresh();
+  };
+
+  // 由「手部修复」工作台调用：把工作台里已上传好的原图/蒙版直接接到本面板。
+  window.animaHighresHandReceive = function (imageName, maskName, label) {
+    handUpload = { image: String(imageName || ""), mask: String(maskName || "") };
+    const handEnabled = byId("animaHighresHandEnabled");
+    if (handEnabled) handEnabled.checked = true;
+    const highres = byId("animaHighresEnabled");
+    if (highres && !highres.checked) {
+      highres.checked = true;
+      highres.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    setHandStatus(`已从手部工作台接收蒙版${label ? "（" + label + "）" : ""}；生成时会在 Anime6B 超分前先修复手部。`);
+    const block = byId("animaHighresHandBlock");
+    if (block) block.open = true;
+    window.animaHighresRefresh();
+    byId("animaHighresPanel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   // 把契约里的范围写回输入框（换模型 / 重启面板后立即生效，不再硬编码 min/max）。
   function applyConstraintRanges() {
     const limits = rangeLimits();
@@ -109,6 +446,16 @@
         field.max = String(limit.max);
         field.step = String(limit.step);
       });
+    // 手部修复的滑块范围同样来自约束契约（anima 族 hand_repair）。
+    const hand = handLimits();
+    [["animaHighresHandDenoise", hand.denoise], ["animaHighresHandSteps", hand.steps],
+     ["animaHighresHandGrow", hand.grow]].forEach(([id, limit]) => {
+      const field = byId(id);
+      if (!field || !limit) return;
+      field.min = String(limit.min);
+      field.max = String(limit.max);
+      field.step = String(limit.step);
+    });
   }
 
   let scope = "auto";
@@ -188,6 +535,50 @@
           <div><div class="field-title"><span>二采采样器</span><span class="small">可单独指定，不再固定 ER-SDE</span></div><select id="animaHighresSampler" onchange="animaHighresRefresh()"></select></div>
           <div><div class="field-title"><span>二采调度器</span><span class="small">beta57 需 RES4LYF 节点</span></div><select id="animaHighresScheduler" onchange="animaHighresRefresh()"></select></div>
         </div>
+        <details id="animaHighresHandBlock" style="margin-top:10px">
+          <summary>二采前手部修复（可选 · 蒙版 inpaint）</summary>
+          <div class="small">在 Anime6B 超分<b>之前</b>用一张黑白蒙版（白=重绘区）把手重画一次：先改结构，再放大重建细节。下面可以直接画：先载入底图（推荐「上次首采图」，会顺便把 seed 与尺寸对齐），涂出要修的手再上传蒙版。</div>
+          <label class="switch" style="margin-top:6px"><input id="animaHighresHandEnabled" type="checkbox"><div><b>启用二采前手部修复</b><div class="small">会多一次采样（首采 → 手部修复 → 高清二采）；修复结果另存到 EasyPanel_aux 供对照，不进作品库。</div></div></label>
+          <div id="animaHighresHandBody" style="display:none">
+            <div class="field-title" style="margin-top:6px"><span>① 载入底图</span><span class="small">蒙版要与本次首采对齐：用「上次首采图」最准</span></div>
+            <div class="anima-hand-row">
+              <select id="animaHighresHandBase" style="flex:1;min-width:120px"><option value="">— 从最近生成结果选择 —</option></select>
+              <button class="secondary" type="button" onclick="animaHighresHandLoadBase()">载入</button>
+              <button class="secondary" type="button" onclick="animaHighresHandLoadLastBase()">上次首采图（对齐 seed/尺寸）</button>
+              <label class="secondary anima-hand-file">上传底图<input id="animaHighresHandBaseFile" type="file" accept="image/*" onchange="animaHighresHandUploadBase(this.files[0])"></label>
+            </div>
+            <div class="field-title" style="margin-top:6px"><span>② 涂出要修的手</span><span class="small">红色 = 重绘区</span></div>
+            <div class="anima-hand-row">
+              <button id="animaHighresHandPaint" class="secondary active" type="button" onclick="animaHighresHandSetTool('paint')">画笔</button>
+              <button id="animaHighresHandErase" class="secondary" type="button" onclick="animaHighresHandSetTool('erase')">橡皮</button>
+              <span class="small">笔刷</span><input id="animaHighresHandBrush" type="range" min="4" max="200" step="2" value="48" style="max-width:110px" oninput="animaHighresHandBrushChanged()"><span id="animaHighresHandBrushValue" class="small">48</span>
+              <button class="secondary" type="button" onclick="animaHighresHandUndo()">撤销</button>
+              <button class="secondary" type="button" onclick="animaHighresHandResetMask()">清空</button>
+              <button type="button" onclick="animaHighresHandSaveMask()">③ 上传蒙版</button>
+            </div>
+            <canvas id="animaHighresHandCanvas" width="1" height="1" style="display:block;width:100%;height:auto;max-height:420px;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:#111;touch-action:none;cursor:crosshair"></canvas>
+            <div id="animaHighresHandStatus" class="small">尚未上传蒙版：可先「上次首采图」再涂手，然后点「上传蒙版」。</div>
+            <details style="margin-top:6px"><summary class="small">导入已画好的蒙版文件</summary>
+              <div class="two" style="margin-top:6px">
+                <div><div class="field-title"><span>原图（可选）</span></div><input id="animaHighresHandImage" type="file" accept="image/*"></div>
+                <div><div class="field-title"><span>蒙版（白=重绘区）</span></div><input id="animaHighresHandMask" type="file" accept="image/*"></div>
+              </div>
+            </details>
+            <div class="two" style="margin-top:6px">
+              <div><div class="field-title"><span>重绘幅度 denoise</span></div><input id="animaHighresHandDenoise" type="number" min="0.2" max="0.65" step="0.01" value="0.45"></div>
+              <div><div class="field-title"><span>修复步数</span></div><input id="animaHighresHandSteps" type="number" min="8" max="40" step="1" value="24"></div>
+            </div>
+            <div class="two" style="margin-top:6px">
+              <div><div class="field-title"><span>蒙版扩张 px</span></div><input id="animaHighresHandGrow" type="number" min="0" max="48" step="1" value="6"></div>
+              <div><div class="field-title"><span>修复 CFG</span></div><input id="animaHighresHandCfg" type="number" min="1" max="10" step="0.1" value="4.2"></div>
+            </div>
+            <div class="field-title" style="margin-top:6px"><span>手部正向词</span></div>
+            <textarea id="animaHighresHandPositive" rows="2"></textarea>
+            <div class="field-title" style="margin-top:6px"><span>手部负向词</span></div>
+            <textarea id="animaHighresHandNegative" rows="2"></textarea>
+            <div class="actions" style="margin-top:6px"><button class="secondary" type="button" onclick="animaHighresHandClear()">清除蒙版</button></div>
+          </div>
+        </details>
         <div class="field-title" style="margin-top:8px"><span>高清重建提示词</span></div>
         <select id="animaHighresScope" onchange="animaHighresScopeChanged()">
           <option value="inherit">完全继承首采（只放大重绘）</option>
@@ -206,10 +597,33 @@
     anchor.appendChild(block);
 
     ["animaHighresEnabled", "animaHighresScale", "animaHighresDenoise",
-     "animaHighresSteps", "animaHighresCfg"].forEach((id) => {
+     "animaHighresSteps", "animaHighresCfg", "animaHighresHandEnabled",
+     "animaHighresHandDenoise", "animaHighresHandSteps", "animaHighresHandGrow",
+     "animaHighresHandCfg"].forEach((id) => {
       byId(id)?.addEventListener("input", animaHighresRefresh);
       byId(id)?.addEventListener("change", animaHighresRefresh);
     });
+    ["animaHighresHandPositive", "animaHighresHandNegative"].forEach((id) => {
+      const field = byId(id);
+      if (!field) return;
+      field.value = HAND_DEFAULTS[id === "animaHighresHandPositive" ? "positive" : "negative"];
+      field.addEventListener("input", animaHighresRefresh);
+      field.addEventListener("change", animaHighresRefresh);
+    });
+    ["animaHighresHandImage", "animaHighresHandMask"].forEach((id) => {
+      byId(id)?.addEventListener("change", () => window.animaHighresHandUpload());
+    });
+    // 蒙版绘制器：指针事件直接绑在画布上（touch-action:none，手机也能涂）。
+    const handCanvasNode = byId("animaHighresHandCanvas");
+    if (handCanvasNode) {
+      handCanvasNode.addEventListener("pointerdown", handPointerDown);
+      handCanvasNode.addEventListener("pointermove", handPointerMove);
+      handCanvasNode.addEventListener("pointerup", handPointerUp);
+      handCanvasNode.addEventListener("pointercancel", handPointerUp);
+      handCanvasNode.addEventListener("pointerleave", () => { if (handDrawing) handPointerUp(); });
+    }
+    window.animaHighresHandBrushChanged();
+    refreshHandBaseOptions();
     // 与输出增强互斥：提前拦截，避免提交后才被后端拒绝。
     byId("animaHighresEnabled")?.addEventListener("change", () => {
       const enabled = byId("animaHighresEnabled").checked === true;
@@ -280,6 +694,7 @@
       cfg: num(byId("animaHighresCfg"), 4.2),
       sampler: String(byId("animaHighresSampler")?.value || "auto"),
       scheduler: String(byId("animaHighresScheduler")?.value || "auto"),
+      handRepair: window.animaHighresHandState(),
       scope,
     };
   };
@@ -416,6 +831,13 @@
     applyConstraintRanges();
     const body = byId("animaHighresBody");
     if (body) body.style.display = state.enabled ? "" : "none";
+    const handBody = byId("animaHighresHandBody");
+    if (handBody) handBody.style.display = state.handRepair.enabled ? "" : "none";
+    // 打开手部修复时刷新一次底图下拉（会话里新出的图也能选到）。
+    if (state.handRepair.enabled) {
+      const select = byId("animaHighresHandBase");
+      if (select) refreshHandBaseOptions();
+    }
     if (state.enabled) pushToHiresControls();
     const preview = byId("animaHighresDetailPreview");
     if (preview) preview.textContent = DETAIL_TERMS;
@@ -444,6 +866,13 @@
     lines.push(`预计输出 ${width}×${height}（${clampNote}）· 二采 ${state.steps} 步 · CFG ${state.cfg} · denoise ${state.denoise} · ${state.sampler} + ${state.scheduler}。`);
     if (state.enabled && state.scheduler === "beta57" && !schedulerAvailable("beta57")) {
       lines.push("⚠ 调度器 beta57 需要 RES4LYF 自定义节点；当前调度器列表里没有它，请先安装/重启 ComfyUI，否则生成会失败。");
+    }
+    if (state.enabled && state.handRepair.enabled) {
+      if (state.handRepair.mask) {
+        lines.push(`二采前手部修复：蒙版已就绪 · ${state.handRepair.steps} 步 · denoise ${state.handRepair.denoise} · 扩张 ${state.handRepair.grow}px · CFG ${state.handRepair.cfg}（会多一次采样）`);
+      } else {
+        lines.push("⚠ 已勾选「二采前手部修复」但还没有蒙版：下面「上次首采图 → 涂手 → 上传蒙版」画一张，或导入现成蒙版 / 用导航栏「手部修复」工作台画好发送。");
+      }
     }
     lines.push(`超分模型：${String(allowedUpscalers()[0] || FALLBACK_LIMITS.upscalers[0]).replace(".pth", "")}（高清重建内部完成，无需再开输出增强）`);
     if (!state.enabled) lines.length = 1;
@@ -489,6 +918,7 @@
           enabled: state.enabled, scale: state.scale, denoise: state.denoise,
           steps: state.steps, cfg: state.cfg,
           sampler: state.sampler, scheduler: state.scheduler, preset: state.preset,
+          handRepair: state.handRepair,
         };
       }
       return data;
@@ -521,6 +951,22 @@
           if (!field || !next) return;
           if (Array.from(field.options).some((option) => option.value === next)) field.value = next;
         });
+        const handRaw = raw.handRepair && typeof raw.handRepair === "object" ? raw.handRepair : null;
+        if (handRaw) {
+          if (byId("animaHighresHandEnabled")) byId("animaHighresHandEnabled").checked = handRaw.enabled === true;
+          assign("animaHighresHandDenoise", handRaw.denoise);
+          assign("animaHighresHandSteps", handRaw.steps);
+          assign("animaHighresHandGrow", handRaw.grow);
+          assign("animaHighresHandCfg", handRaw.cfg);
+          if (typeof handRaw.positive === "string" && byId("animaHighresHandPositive")) {
+            byId("animaHighresHandPositive").value = handRaw.positive;
+          }
+          if (typeof handRaw.negative === "string" && byId("animaHighresHandNegative")) {
+            byId("animaHighresHandNegative").value = handRaw.negative;
+          }
+          handUpload = { image: String(handRaw.image || ""), mask: String(handRaw.mask || "") };
+          setHandStatus(handUpload.mask ? "已从快照恢复蒙版。" : "快照里没有可用蒙版，请重新上传或在手部工作台重新发送。");
+        }
         const enabled = byId("animaHighresEnabled");
         if (enabled) enabled.checked = raw.enabled === true;
         window.animaHighresScopeChanged(true);

@@ -293,7 +293,7 @@ def list_output_images(limit: int = 80) -> list[dict]:
         if file.suffix.lower() not in {".png", ".webp", ".jpg", ".jpeg"}:
             continue
         # 高清二采的首采对照图不是成品，不能出现在“最近输出”与图生图候选里。
-        if "_base_" in file.name:
+        if "_base_" in file.name or "_hand_" in file.name:
             continue
         # 机位预览等辅助图在 EasyPanel_aux 子目录里，同样不是成品。
         if AUX_OUTPUT_SUBFOLDER in file.parts:
@@ -310,13 +310,19 @@ def list_output_images(limit: int = 80) -> list[dict]:
 
 #: 首采对照图的统一标记：文件名里带它就属于「对照图」，不是成品。
 HIRES_BASE_MARKER = "_base_"
+#: 「二采前手部修复」的中间图（EasyPanel_aux/<prefix>_hand_00001_.png）同样不是成品。
+HIRES_HAND_MARKER = "_hand_"
 
 
 def is_hires_base_filename(value) -> bool:
-    """全项目唯一的首采对照图判断（接受文件名或 {filename: ...} 字典）。"""
+    """全项目唯一的「非成品中间图」判断（接受文件名或 {filename: ...} 字典）。
+
+    包括高清二采的首采对照图（_base_）与二采前手部修复的中间图（_hand_）。
+    """
 
     name = value.get("filename") if isinstance(value, dict) else value
-    return HIRES_BASE_MARKER in Path(str(name or "")).name
+    leaf = Path(str(name or "")).name
+    return HIRES_BASE_MARKER in leaf or HIRES_HAND_MARKER in leaf
 
 
 def split_hires_outputs(images) -> dict:
@@ -332,17 +338,17 @@ def split_hires_outputs(images) -> dict:
     return {"all": items, "final": final, "base": base}
 
 
-def validate_input_image(name: str) -> str:
+def validate_input_image(name: str, label: str = "姿势图") -> str:
     relative = Path(str(name or "").replace("\\", "/"))
     if not relative.name or relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("姿势图片路径无效。")
+        raise ValueError(f"{label}路径无效。")
     file = (COMFY_INPUT / relative).resolve()
     try:
         file.relative_to(COMFY_INPUT.resolve())
     except ValueError as exc:
-        raise ValueError("姿势图片路径无效。") from exc
+        raise ValueError(f"{label}路径无效。") from exc
     if not file.is_file():
-        raise ValueError("找不到已上传的姿势图片，请重新上传。")
+        raise ValueError(f"找不到已上传的{label}，请重新上传。")
     return relative.as_posix()
 
 
@@ -369,6 +375,7 @@ def prepare_generation_image(name: str) -> str:
 
 __all__ = [
     "HIRES_BASE_MARKER",
+    "HIRES_HAND_MARKER",
     "clean_transparent_residue",
     "copy_output_to_input",
     "extract_image_upload",

@@ -13,7 +13,7 @@ class HandWorkbenchTests(unittest.TestCase):
             'id="handToolAnchor"', 'id="handToolWand"', 'id="handSendMaskButton"',
             'id="handMiniPaint"', 'id="handCompareCanvas"',
             'id="handPaintFullscreen"',
-            'src="/assets/js/hand-workbench.js?v=6"',
+            'src="/assets/js/hand-workbench.js?v=',
         ):
             self.assertIn(marker, html)
         for marker in (
@@ -29,7 +29,9 @@ class HandWorkbenchTests(unittest.TestCase):
         self.assertIn(".hand-workbench.paint-expanded", css)
         self.assertIn(".hand-workbench.paint-resizing", css)
         self.assertIn("width:min(98vw,1800px)", css)
-        self.assertIn("选区完成：发送蒙版到局部修复", html)
+        self.assertIn("选区完成：发送蒙版到修复流程", html)
+        # Anima 模型下同一个按钮会把蒙版直接送到「二采前手部修复」。
+        self.assertIn("window.animaHighresHandReceive", script)
 
     def test_local_minipaint_bundle_keeps_license_and_bridge(self):
         vendor = Path("web/assets/vendor/minipaint")

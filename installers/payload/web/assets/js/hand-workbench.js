@@ -120,6 +120,21 @@ window.handApplyFeather=function(){featherMask(Number(el('handFeather').value));
 window.handInvertSelection=function(){const ctx=hand.mask.getContext('2d'),img=ctx.getImageData(0,0,hand.mask.width,hand.mask.height);for(let i=0;i<img.data.length;i+=4){const a=255-img.data[i+3];img.data[i]=img.data[i+1]=img.data[i+2]=255;img.data[i+3]=a}ctx.putImageData(img,0,0);render();status('已反选。');};
 
 window.handSendMaskToRepair=async function(){try{if(!hand.image||!hand.file){status('请先载入图片。',true);return}let pixels=0,d=hand.mask.getContext('2d',{willReadFrequently:true}).getImageData(0,0,hand.mask.width,hand.mask.height).data;for(let i=3;i<d.length;i+=4)if(d[i]>8)pixels++;if(!pixels){status('当前选区为空。',true);return}
+  // Anima 有自己的二采前手部修复（animaHighres.handRepair）：直接把蒙版传给面板，
+  // 而不是走 Illustrious 的「局部修复」模式（Anima 不支持那个模式）。
+  const family=typeof window.modelFamilyClient==='function'?window.modelFamilyClient():'';
+  if(family==='anima'&&typeof window.animaHighresHandReceive==='function'){
+    status('正在把手部蒙版发送到 Anima 高清重建…');
+    const maskBlob=await new Promise(resolve=>hand.mask.toBlob(resolve,'image/png'));
+    if(!maskBlob){status('蒙版导出失败，请重试。',true);return}
+    const form=new FormData();form.append('image',hand.file,hand.file.name||'hand_source.png');form.append('mask',maskBlob,'hand_mask.png');
+    const response=await fetch('/api/upload-inpaint',{method:'POST',body:form}),data=await response.json();
+    if(data.error)throw Error(data.error);
+    window.animaHighresHandReceive(data.image,data.mask,`${hand.image.naturalWidth}×${hand.image.naturalHeight} · ${pixels.toLocaleString()} px`);
+    status('已发送到 Anima「二采前手部修复」：回主面板开启高清重建后直接生成。');
+    el('handWorkbench').close();
+    return;
+  }
   const repairCanvas=el('repairCanvas'),scale=Math.min(1,1024/Math.max(hand.image.naturalWidth,hand.image.naturalHeight));repairCanvas.width=Math.max(1,Math.round(hand.image.naturalWidth*scale));repairCanvas.height=Math.max(1,Math.round(hand.image.naturalHeight*scale));
   repairImg=hand.editedImage||hand.image;repairImageFile=hand.file;repairMaskCv=document.createElement('canvas');repairMaskCv.width=repairCanvas.width;repairMaskCv.height=repairCanvas.height;repairMaskCv.getContext('2d').drawImage(hand.mask,0,0,repairCanvas.width,repairCanvas.height);repairUndoStack=[];repairTintCv=null;repairUpload={image:'',mask:''};
   if(el('illustriousMode'))el('illustriousMode').value='repair';if(el('repairControls'))el('repairControls').style.display='block';renderRepairView();el('handWorkbench').close();el('repairStatus').textContent=`已从手部工作台接收蒙版（${pixels.toLocaleString()} px），请点击“上传蒙版”后生成。`;el('repairControls').scrollIntoView({behavior:'smooth',block:'center'});

@@ -177,3 +177,9 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .anima-highres-presets button b{font-size:13px}
 .anima-highres-presets button span{font-size:11px;color:#7f93ae}
 .anima-highres-presets button.active{border-color:#6f8fb8;background:#1b2740}
+/* Anima 二采前手部修复：面板内自画蒙版（与 Illustrious「局部修复」同一套交互） */
+.anima-hand-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
+.anima-hand-row button.active{outline:2px solid var(--accent);background:#4c4270}
+.anima-hand-row input[type=range]{max-width:130px}
+.anima-hand-file{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid var(--line);border-radius:8px;background:#242b3d;cursor:pointer}
+.anima-hand-file input[type=file]{max-width:150px;border:0;padding:0;background:transparent}

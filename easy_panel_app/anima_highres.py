@@ -41,6 +41,20 @@ HIGHRES_STEPS_RANGE = (6, 40)
 HIGHRES_CFG_RANGE = (1.0, 10.0)
 DEFAULT_MAX_LONG_EDGE = 2560
 
+#: 二采前「蒙版手部修复」：在 Anime6B 超分之前，用上传的黑白蒙版对手部区域
+#: inpaint 一次（白色=重绘区），修好结构再进二采。默认值取常用手修复参数。
+HAND_REPAIR_DEFAULTS = {
+    "denoise": 0.45,
+    "steps": 24,
+    "grow": 6,
+    "positive": "perfect hands, five fingers, detailed hands, natural hand pose",
+    "negative": ("bad hands, extra fingers, missing fingers, fused fingers, "
+                 "malformed hands, extra limbs, wrong finger count"),
+}
+HAND_REPAIR_DENOISE_RANGE = (0.20, 0.65)
+HAND_REPAIR_STEPS_RANGE = (8, 40)
+HAND_REPAIR_GROW_RANGE = (0, 48)
+
 
 def _number(value, default: float, low: float, high: float) -> float:
     try:
@@ -106,6 +120,31 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
     sampler = _pick_sampler(raw.get("sampler"), defaults.get("sampler"))
     scheduler = _pick_sampler(raw.get("scheduler"), defaults.get("scheduler"))
 
+    # 二采前手部修复：蒙版走 ComfyUI input 目录里的文件名（上传接口返回）；
+    # cfg 默认跟随首采，denoise/steps/grow 各自有安全范围。
+    hand_raw = raw.get("handRepair") if isinstance(raw.get("handRepair"), dict) else {}
+
+    def _hand_text(key: str) -> str:
+        value = hand_raw.get(key)
+        if value is None:
+            return HAND_REPAIR_DEFAULTS[key]
+        return str(value).strip()[:400]
+
+    hand_repair = {
+        "enabled": bool(hand_raw.get("enabled")),
+        "image": str(hand_raw.get("image") or "").strip(),
+        "mask": str(hand_raw.get("mask") or "").strip(),
+        "denoise": round(_number(hand_raw.get("denoise"), HAND_REPAIR_DEFAULTS["denoise"],
+                                 *HAND_REPAIR_DENOISE_RANGE), 3),
+        "steps": int(round(_number(hand_raw.get("steps"), HAND_REPAIR_DEFAULTS["steps"],
+                                  *HAND_REPAIR_STEPS_RANGE))),
+        "grow": int(round(_number(hand_raw.get("grow"), HAND_REPAIR_DEFAULTS["grow"],
+                                 *HAND_REPAIR_GROW_RANGE))),
+        "cfg": round(_number(hand_raw.get("cfg"), cfg, *HIGHRES_CFG_RANGE), 3),
+        "positive": _hand_text("positive"),
+        "negative": _hand_text("negative"),
+    }
+
     max_long_edge = int(_number(defaults.get("max_long_edge"), DEFAULT_MAX_LONG_EDGE,
                                 0, 8192))
     target_width = _align8(base_width * scale)
@@ -123,6 +162,7 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
         "cfg": round(cfg, 3),
         "sampler": sampler,
         "scheduler": scheduler,
+        "handRepair": hand_repair,
         "maxLongEdge": max_long_edge,
         "targetWidth": target_width,
         "targetHeight": target_height,
@@ -131,7 +171,9 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
 
 
 __all__ = [
-    "ANIMA_HIGHRES_PRESETS", "DEFAULT_MAX_LONG_EDGE", "HIGHRES_CFG_RANGE",
-    "HIGHRES_DENOISE_CAP", "HIGHRES_DENOISE_FLOOR", "HIGHRES_SCALE_CAP",
-    "HIGHRES_SCALE_FLOOR", "HIGHRES_STEPS_RANGE", "normalize_anima_highres",
+    "ANIMA_HIGHRES_PRESETS", "DEFAULT_MAX_LONG_EDGE", "HAND_REPAIR_DEFAULTS",
+    "HAND_REPAIR_DENOISE_RANGE", "HAND_REPAIR_GROW_RANGE", "HAND_REPAIR_STEPS_RANGE",
+    "HIGHRES_CFG_RANGE", "HIGHRES_DENOISE_CAP", "HIGHRES_DENOISE_FLOOR",
+    "HIGHRES_SCALE_CAP", "HIGHRES_SCALE_FLOOR", "HIGHRES_STEPS_RANGE",
+    "normalize_anima_highres",
 ]

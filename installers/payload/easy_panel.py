@@ -2472,6 +2472,15 @@ def anima_preflight(data: dict) -> dict:
             f"（请求 {spec['scale']}×，实际 {effective:.2f}×），再由 Anima 二采重建细节；"
             "预计耗时与显存占用显著增加，8GB 显存建议 1.25–1.5×。"
             "高清重建内部已含 Anime6B 超分，因此与「输出增强」不能同时开启：想只放大不重绘时改用输出增强。")
+        hand = spec.get("handRepair") if isinstance(spec.get("handRepair"), dict) else {}
+        if hand.get("enabled"):
+            if not hand.get("mask"):
+                errors.append("已启用「二采前手部修复」，但没有上传蒙版；请先上传黑白蒙版（白=重绘区）。")
+            else:
+                warnings.append(
+                    f"二采前手部修复已开启：蒙版重绘 {hand['steps']} 步 · denoise {hand['denoise']}"
+                    f" · 蒙版扩张 {hand['grow']}px · {spec.get('sampler')} + {spec.get('scheduler')}；"
+                    "本次会多一次采样（首采 → 手部修复 → 高清二采），修复结果另存到 EasyPanel_aux 供对照。")
     return {"isAnima": True, "errors": errors, "warnings": warnings,
             "prompt": compiled["positive"], "negative": compiled["negative"],
             "compiled": compiled}
@@ -4193,6 +4202,54 @@ def build_workflow(data: dict) -> dict:
             "filename_prefix": auxiliary_generation_prefix(data, "_base"),
             "images": [base_decode_id, 0],
         }, "_meta": {"artifactStage": "base", "artifactRole": "comparison"}}
+        # 可选的「二采前手部修复」：用上传的黑白蒙版在首采图上 inpaint 一次，
+        # 修好手再进 Anime6B 超分与二采——先改结构、再放大重建细节，顺序很重要。
+        image_for_upscale = [base_decode_id, 0]
+        hand_repair = (anima_highres.get("handRepair")
+                       if isinstance(anima_highres, dict)
+                       and isinstance(anima_highres.get("handRepair"), dict) else {})
+        if anima and hand_repair.get("enabled"):
+            hand_mask_name = validate_input_image(str(hand_repair.get("mask") or ""), "手部修复蒙版")
+            if not hand_mask_name:
+                raise ValueError("已启用「二采前手部修复」，但没有上传蒙版；请先上传黑白蒙版（白=重绘区）或关闭该选项。")
+            hand_mask_id, hand_encode_id, hand_sampler_id, hand_decode_id, hand_save_id = (
+                alloc(), alloc(), alloc(), alloc(), alloc())
+            nodes[hand_mask_id] = {"class_type": "LoadImageMask",
+                                   "inputs": {"image": hand_mask_name, "channel": "red"}}
+            nodes[hand_encode_id] = {
+                "class_type": "VAEEncodeForInpaint",
+                "inputs": {"pixels": [base_decode_id, 0], "vae": vae_ref,
+                           "mask": [hand_mask_id, 0],
+                           "grow_mask_by": int(hand_repair["grow"])},
+            }
+            hand_positive_ref, hand_negative_ref = positive_ref, negative_ref
+            hand_positive_text = str(hand_repair.get("positive") or "").strip()
+            hand_negative_text = str(hand_repair.get("negative") or "").strip()
+            if hand_positive_text or hand_negative_text:
+                hand_positive_id, hand_negative_id = alloc(), alloc()
+                nodes[hand_positive_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                    "text": ", ".join(part for part in (base_positive, hand_positive_text) if part),
+                    "clip": clip_ref}}
+                nodes[hand_negative_id] = {"class_type": "CLIPTextEncode", "inputs": {
+                    "text": ", ".join(part for part in (negative, hand_negative_text) if part),
+                    "clip": clip_ref}}
+                hand_positive_ref = [hand_positive_id, 0]
+                hand_negative_ref = [hand_negative_id, 0]
+            nodes[hand_sampler_id] = {"class_type": "KSampler", "inputs": {
+                "seed": seed, "steps": int(hand_repair["steps"]),
+                "cfg": float(hand_repair["cfg"]),
+                "sampler_name": hires_sampler, "scheduler": hires_scheduler,
+                "denoise": float(hand_repair["denoise"]), "model": model_ref,
+                "positive": hand_positive_ref, "negative": hand_negative_ref,
+                "latent_image": [hand_encode_id, 0]},
+                "_meta": {"stageLabel": "二采前手部修复"}}
+            nodes[hand_decode_id] = {"class_type": "VAEDecode",
+                                     "inputs": {"samples": [hand_sampler_id, 0], "vae": vae_ref}}
+            nodes[hand_save_id] = {"class_type": "SaveImage", "inputs": {
+                "filename_prefix": auxiliary_generation_prefix(data, "_hand"),
+                "images": [hand_decode_id, 0],
+            }, "_meta": {"artifactStage": "hand_repair", "artifactRole": "comparison"}}
+            image_for_upscale = [hand_decode_id, 0]
         nodes[upscale_loader_id] = {
             "class_type": "UpscaleModelLoader",
             "inputs": {"model_name": hires_upscaler},
@@ -4200,7 +4257,7 @@ def build_workflow(data: dict) -> dict:
         nodes[model_upscale_id] = {
             "class_type": "ImageUpscaleWithModel",
             "inputs": {"upscale_model": [upscale_loader_id, 0],
-                       "image": [base_decode_id, 0]},
+                       "image": image_for_upscale},
         }
         nodes[resize_id] = {
             "class_type": "ImageScale",

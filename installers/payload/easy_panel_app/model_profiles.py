@@ -58,6 +58,16 @@ FAMILY_CONSTRAINTS: dict[str, dict[str, dict[str, Any]]] = {
             "steps": [6, 40],
             "cfg": [1.0, 10.0],
             "allowed_upscalers": [ANIMA_HIGHRES_DEFAULTS["upscaler"]],
+            # 二采前可选屏膜手部修复（animaHighres.handRepair）：
+            # 前端滑块 min/max、预检与手机端都读这一份。
+            "hand_repair": {
+                "denoise": [0.20, 0.65],
+                "steps": [8, 40],
+                "grow": [0, 48],
+                "default_denoise": 0.45,
+                "default_steps": 24,
+                "default_grow": 6,
+            },
         },
         "detail_refine": {
             "denoise": [0.05, 0.20],

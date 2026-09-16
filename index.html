@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=43">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=44">
 
 </head>
 <body>
@@ -347,7 +347,7 @@
       <button type="button" onclick="handApplyFeather()">应用羽化</button>
       <button type="button" onclick="handInvertSelection()">反选</button>
     </aside>
-    <div class="hand-canvas-shell"><canvas id="handCanvas"></canvas><div id="handCanvasEmpty">请上传图片或从最近输出载入</div><button id="handSendMaskButton" class="primary hand-send-mask" type="button" onclick="window.handSendMaskToRepair()">选区完成：发送蒙版到局部修复</button></div>
+    <div class="hand-canvas-shell"><canvas id="handCanvas"></canvas><div id="handCanvasEmpty">请上传图片或从最近输出载入</div><button id="handSendMaskButton" class="primary hand-send-mask" type="button" title="Anima 模型：发送到「二采前手部修复」；其他模型：发送到「局部修复」模式" onclick="window.handSendMaskToRepair()">选区完成：发送蒙版到修复流程</button></div>
   </section>
   <section id="handPaintPane" class="hand-pane" hidden><div class="hand-minipaint-bar"><span>推荐工具：仿制图章、画笔、模糊、内容填充。</span><div class="hand-minipaint-actions"><button id="handPaintFullscreen" class="secondary" type="button" aria-pressed="false" onclick="toggleHandPaintFullscreen()">全屏修图</button><button type="button" onclick="handExportMiniPaint()">将 miniPaint 结果送回工作台</button></div></div><iframe id="handMiniPaint" title="miniPaint 开源图片编辑器（简体中文）" src="/assets/vendor/minipaint/index.html?lang=zh&amp;ep=5"></iframe></section>
   <section id="handComparePane" class="hand-pane" hidden><div class="hand-compare"><canvas id="handCompareCanvas"></canvas><label>向左看原图，向右看修复图<input id="handCompareRange" type="range" min="0" max="100" value="50" oninput="renderHandCompare()"></label><div id="handCompareInfo" class="small">从 miniPaint 回传结果后即可对比。</div></div></section>
@@ -376,14 +376,14 @@
 <script src="/assets/js/feature-editor.js?v=1"></script>
 <script src="/assets/js/model-advanced.js?v=7"></script>
 <script src="/assets/js/anima-refine.js?v=3"></script>
-<script src="/assets/js/anima-highres.js?v=7"></script>
+<script src="/assets/js/anima-highres.js?v=8"></script>
 <script src="/assets/js/camera-control.js?v=6"></script>
 <script src="/assets/js/generation-chain.js?v=1"></script>
-<script src="/assets/js/hand-workbench.js?v=6"></script>
+<script src="/assets/js/hand-workbench.js?v=7"></script>
 <script src="/assets/js/transparent-background.js?v=1"></script>
 <script src="/assets/js/transparent-extract.js?v=1"></script>
 <script src="/assets/js/snapshot-flow.js?v=3"></script>
-<script src="/assets/js/result-workbench.js?v=4"></script>
+<script src="/assets/js/result-workbench.js?v=5"></script>
 <script src="/assets/js/creative-library.js?v=9"></script>
 <script src="/assets/js/preflight-check.js?v=2"></script>
 <script src="/assets/js/batch-experiment.js?v=2"></script>

@@ -34,6 +34,9 @@
   ];
 
   const isBaseImage = (image) => image && String(image.filename || "").includes(HIRES_BASE_MARKER);
+  // 二采前手部修复的中间图 "<prefix>_hand_00001_.png" 同样不是成品：不进画廊，也不计入张数。
+  const HAND_REPAIR_MARKER = "_hand_";
+  const isIntermediateImage = (image) => isBaseImage(image) || !!(image && String(image.filename || "").includes(HAND_REPAIR_MARKER));
   // 对照 / 预览图在 EasyPanel_aux 子目录：URL 必须带上 subfolder，否则 /output 找不到。
   const outputUrl = (image) => {
     const name = encodeURIComponent((image && image.filename) || "");
@@ -804,7 +807,7 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     const wrapped = function (images) {
       const all = Array.isArray(images) ? images.filter((item) => item && item.filename) : [];
       const base = all.filter(isBaseImage);
-      const finals = all.filter((item) => !isBaseImage(item));
+      const finals = all.filter((item) => !isIntermediateImage(item));
       const visible = finals.length ? finals : all;
       const args = Array.prototype.slice.call(arguments);
       args[0] = visible;
