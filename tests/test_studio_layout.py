@@ -107,5 +107,84 @@ class SizePresetTests(unittest.TestCase):
             self.assertLessEqual(max(width, height), 1536)
 
 
+class StudioHeaderDensityTests(unittest.TestCase):
+    """创作区头部按钮横向排版 + Anima 提示词分层默认折叠。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pages = [
+            (ROOT / "index.html").read_text(encoding="utf-8"),
+            (ROOT / "installers/payload/index.html").read_text(encoding="utf-8"),
+        ]
+        cls.css = (ROOT / "web/assets/css/panel.css").read_text(encoding="utf-8")
+        cls.payload_css = (ROOT / "installers/payload/web/assets/css/panel.css").read_text(encoding="utf-8")
+
+    def test_header_actions_are_horizontal(self):
+        # `.studio-panel-heading>div` 的 grid 会盖掉单类选择器，必须用更高特异性压成一行。
+        self.assertIn(
+            ".studio-panel-heading>.studio-heading-actions{display:flex;flex-flow:row nowrap",
+            self.css,
+        )
+        self.assertIn(
+            ".studio-heading-actions button{min-height:36px;padding:7px 14px;white-space:nowrap}",
+            self.css,
+        )
+        for html in self.pages:
+            for marker in (
+                '<div class="studio-heading-actions">',
+                '<button class="studio-enqueue-top" type="button" onclick="enqueueJob()">＋ 加入队列</button>',
+                '<button class="studio-generate-top" type="button" onclick="quickGenerateImage()">生成图片</button>',
+            ):
+                self.assertIn(marker, html)
+
+    def test_narrow_screens_may_wrap_header_actions(self):
+        self.assertIn(
+            "@media(max-width:700px){.studio-main-heading{align-items:flex-start}"
+            ".studio-panel-heading>.studio-heading-actions{flex-wrap:wrap",
+            self.css,
+        )
+
+    def test_anima_layer_panel_is_a_collapsible_details_block(self):
+        for html in self.pages:
+            self.assertNotIn('<section class="memo" id="animaPromptPanel"', html)
+            self.assertIn(
+                '<details class="memo anima-layer-panel" id="animaPromptPanel" style="display:none">',
+                html,
+            )
+            self.assertIn('<summary class="anima-layer-summary">', html)
+            self.assertIn('<h3>Anima 提示词分层</h3>', html)
+            self.assertIn('<span id="animaTagInfo" class="small">', html)
+            self.assertIn('<span class="anima-layer-toggle"></span></summary>', html)
+            self.assertIn(
+                '<div id="animaPreflight" class="small" style="margin-top:8px"></div></details>',
+                html,
+            )
+
+    def test_anima_layer_panel_defaults_to_closed(self):
+        # 默认折叠靠 details 不带 open 属性，展开状态由浏览器维护。
+        for html in self.pages:
+            start = html.index('id="animaPromptPanel"')
+            tag = html[html.rindex("<", 0, start): html.index(">", start) + 1]
+            self.assertNotIn(" open", tag)
+
+    def test_anima_layer_summary_styles_exist_in_both_copies(self):
+        for marker in (
+            ".anima-layer-panel>summary{",
+            ".anima-layer-panel[open]>summary{",
+            ".anima-layer-panel>summary::marker{",
+            ".anima-layer-toggle::after{content:'点击展开填写'}",
+            ".anima-layer-panel[open] .anima-layer-toggle::after{content:'点击收起'}",
+        ):
+            self.assertIn(marker, self.css)
+            self.assertIn(marker, self.payload_css)
+
+    def test_layer_child_panels_are_appended_inside_the_details(self):
+        # 机位控制 / Anima 分层修正 / 二采面板插入到面板末尾；改成插到开头会把 summary 顶掉。
+        for name in ("camera-control.js", "anima-refine.js", "anima-highres.js"):
+            source = (ROOT / "web/assets/js" / name).read_text(encoding="utf-8")
+            self.assertIn('byId("animaPromptPanel")', source)
+            self.assertIn("anchor.appendChild(block);", source)
+
+
 if __name__ == "__main__":
     unittest.main()
