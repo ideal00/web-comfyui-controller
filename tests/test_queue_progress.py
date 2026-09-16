@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 import unittest
@@ -72,9 +73,13 @@ class QueueProgressBridgeTests(unittest.TestCase):
         self.assertEqual((PROJECT_DIR / "web/assets/js/panel.js").read_bytes(), payload)
 
     def test_index_html_caches_bust_new_panel_js(self):
+        versions = []
         for page in (PROJECT_DIR / "index.html", PROJECT_DIR / "installers/payload/index.html"):
             content = page.read_text(encoding="utf-8")
-            self.assertIn("panel.js?v=76", content)
+            match = re.search(r"panel\.js\?v=(\d+)", content)
+            self.assertIsNotNone(match, str(page))
+            versions.append(match.group(1))
+        self.assertEqual(versions[0], versions[1])
 
 
 class TaskQueueSnapshotContractTests(unittest.TestCase):
