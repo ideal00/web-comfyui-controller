@@ -61,9 +61,11 @@ class LoraFavoritesTests(unittest.TestCase):
         aliases = module.load_lora_rename_aliases()
         import json
 
-        alias_files = Path("lora_imports").glob("*_illustrious_chinese_filenames.json")
-        expected = 2 * sum(len(json.loads(path.read_text(encoding="utf-8"))) for path in alias_files)
-        self.assertEqual(len(aliases), expected)
+        alias_files = Path("lora_imports").glob("*_chinese_filenames.json")
+        total = sum(len(json.loads(path.read_text(encoding="utf-8"))) for path in alias_files)
+        # Every entry yields three keys: the shared Illustrious path, the path as
+        # recorded (Anima folders keep their own top-level folder) and the bare name.
+        self.assertEqual(len(aliases), 3 * total)
         self.assertEqual(
             aliases["Illustrious_Hosiery_Test/01_服装/maidify.safetensors"],
             "Illustrious_Hosiery_Test/01_服装/女仆化服装（Maidify）.safetensors",
@@ -71,6 +73,10 @@ class LoraFavoritesTests(unittest.TestCase):
         self.assertEqual(
             aliases["Illustrious_Hosiery_Test/02_人物模板/Odette.safetensors"],
             "Illustrious_Hosiery_Test/02_人物模板/奥黛塔（原神）.safetensors",
+        )
+        self.assertEqual(
+            aliases["Anima_Soft_Illustration/01_NSFW_人物/honoka.safetensors"],
+            "Anima_Soft_Illustration/01_NSFW_人物/穗乃果（Honoka·Anima自训）.safetensors",
         )
 
 

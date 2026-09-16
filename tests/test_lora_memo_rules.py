@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "lora_imports" / "2026-08-26_civitai_downloads.json"
 RENAME_MANIFEST = ROOT / "lora_imports" / "2026-08-26_illustrious_chinese_filenames.json"
+RENAME_MANIFESTS = sorted((ROOT / "lora_imports").glob("*_chinese_filenames.json"))
 NEW_MANIFEST = ROOT / "lora_imports" / "2026-08-27_civitai_downloads.json"
 NEW_RENAME_MANIFEST = ROOT / "lora_imports" / "2026-08-27_illustrious_chinese_filenames.json"
 BATCH_MANIFESTS = sorted((ROOT / "lora_imports").glob("2026-08-27_batch*_civitai_downloads.json"))
@@ -37,6 +38,9 @@ class LoraMemoRulesTests(unittest.TestCase):
     def setUpClass(cls):
         cls.imports = json.loads(MANIFEST.read_text(encoding="utf-8"))
         cls.renames = json.loads(RENAME_MANIFEST.read_text(encoding="utf-8"))
+        cls.all_renames: dict[str, str] = {}
+        for manifest in RENAME_MANIFESTS:
+            cls.all_renames.update(json.loads(manifest.read_text(encoding="utf-8")))
         cls.notes = json.loads(NOTES.read_text(encoding="utf-8"))
 
     @classmethod
@@ -46,7 +50,8 @@ class LoraMemoRulesTests(unittest.TestCase):
         if destination.startswith(prefix):
             destination = destination[len(prefix):]
         relative = destination + "/" + filename
-        return Path(cls.renames.get(relative, relative)).name
+        renamed = cls.all_renames.get(relative) or cls.renames.get(relative, relative)
+        return Path(renamed).name
 
     def test_rule_and_manifest_files_exist(self):
         self.assertTrue(RULES.is_file())

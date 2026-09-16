@@ -2621,7 +2621,7 @@ def load_lora_rename_aliases() -> dict[str, str]:
         sources.append(packaged)
     imports = PROJECT_DIR / "lora_imports"
     if imports.is_dir():
-        sources.extend(sorted(imports.glob("*_illustrious_chinese_filenames.json")))
+        sources.extend(sorted(imports.glob("*_chinese_filenames.json")))
     if not sources:
         return {}
     aliases: dict[str, str] = {}
@@ -2639,6 +2639,11 @@ def load_lora_rename_aliases() -> dict[str, str]:
             if not old_name or not new_name:
                 continue
             aliases[prefix + old_name] = prefix + new_name
+            # Entries may already carry their top-level folder (for example
+            # Anima_Soft_Illustration/01_NSFW_人物/xxx.safetensors); keep the
+            # relative path as recorded so favourites stored with a full path
+            # migrate onto the same folder after a rename.
+            aliases[old_name] = new_name
             aliases[Path(old_name).name] = Path(new_name).name
     return aliases
 

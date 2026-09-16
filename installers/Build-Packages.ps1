@@ -79,7 +79,7 @@ function Sync-CorePayload {
         Copy-Item -LiteralPath $source -Destination (Join-Path $toolsPayload (Split-Path -Leaf $tool)) -Force
     }
     $mergedAliases = [ordered]@{}
-    foreach ($aliasFile in Get-ChildItem -LiteralPath (Join-Path $repositoryRoot "lora_imports") -Filter "*_illustrious_chinese_filenames.json" | Sort-Object Name) {
+    foreach ($aliasFile in Get-ChildItem -LiteralPath (Join-Path $repositoryRoot "lora_imports") -Filter "*_chinese_filenames.json" | Sort-Object Name) {
         $entries = Get-Content -LiteralPath $aliasFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
         foreach ($entry in $entries.GetEnumerator()) { $mergedAliases[$entry.Key] = $entry.Value }
     }
