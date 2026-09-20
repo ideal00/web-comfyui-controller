@@ -292,8 +292,12 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
     if (isAnima && animaToggle) {
       animaToggle.checked = true;
       if (typeof window.animaHighresRefresh === "function") window.animaHighresRefresh();
-      if (typeof window.setStudioCreationTab === "function") window.setStudioCreationTab("prompt");
-      byId("animaHighresPanel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (typeof window.animaHighresReveal === "function") {
+        window.animaHighresReveal();
+      } else {
+        if (typeof window.setStudioCreationTab === "function") window.setStudioCreationTab("settings");
+        byId("animaHighresPanel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       status("已开启 Anima 高清重建：在面板里选档位（推荐 1.5× / denoise 0.25），生成时自动放大后二采。");
       return;
     }

@@ -8,6 +8,9 @@
  * 参数范围不再写在本文件：统一读能力契约 profile.constraints.highres_reconstruction
  * （model_profiles.FAMILY_CONSTRAINTS → /api/models → window.currentSamplingProfile）。
  * 这里的 FALLBACK_LIMITS 仅作为 catalog 未就绪时的兑底。
+ *
+ * 面板位置：生成设置 → 高级参数 下方（#animaHighresMount），默认折叠；
+ * window.animaHighresReveal() 可展开并滚过去。
  */
 (function () {
   "use strict";
@@ -431,7 +434,7 @@
     const block = byId("animaHighresHandBlock");
     if (block) block.open = true;
     window.animaHighresRefresh();
-    byId("animaHighresPanel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    revealPanel();
   };
 
   // 把契约里的范围写回输入框（换模型 / 重启面板后立即生效，不再硬编码 min/max）。
@@ -508,7 +511,8 @@
   }
 
   function installPanel() {
-    const anchor = byId("animaPromptPanel");
+    // 挂在「生成设置 → 高级参数」下方的 #animaHighresMount（HTML 缓存未更新时回退到提示词面板）。
+    const anchor = byId("animaHighresMount") || byId("animaPromptPanel");
     if (!anchor || byId("animaHighresPanel")) return;
     const block = document.createElement("details");
     block.id = "animaHighresPanel";
@@ -646,11 +650,22 @@
     });
     window.animaHighresApplyPreset("detail", true);
     window.animaHighresScopeChanged(true);
+    // 与「Anima 提示词分层」一致：默认折叠，展开状态交给浏览器。
     const panel = byId("animaHighresPanel");
-    if (panel) panel.open = true;
+    if (panel) panel.open = false;
     refreshHighresOptions();
     window.animaHighresSyncVisibility();
   }
+
+  // 展开面板并滚过去（跨标签页时先切到「生成设置」）。
+  function revealPanel() {
+    const panel = byId("animaHighresPanel");
+    if (!panel) return;
+    panel.open = true;
+    if (typeof window.setStudioCreationTab === "function") window.setStudioCreationTab("settings");
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  window.animaHighresReveal = revealPanel;
 
   function modelFamily() {
     // 单一真相源：后端 /api/models 的 samplingProfiles[model].family。

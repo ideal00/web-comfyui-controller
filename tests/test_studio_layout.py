@@ -179,11 +179,37 @@ class StudioHeaderDensityTests(unittest.TestCase):
             self.assertIn(marker, self.payload_css)
 
     def test_layer_child_panels_are_appended_inside_the_details(self):
-        # 机位控制 / Anima 分层修正 / 二采面板插入到面板末尾；改成插到开头会把 summary 顶掉。
-        for name in ("camera-control.js", "anima-refine.js", "anima-highres.js"):
+        # 机位控制 / Anima 分层修正插入到提示词面板末尾；改成插到开头会把 summary 顶掉。
+        for name in ("camera-control.js", "anima-refine.js"):
             source = (ROOT / "web/assets/js" / name).read_text(encoding="utf-8")
             self.assertIn('byId("animaPromptPanel")', source)
             self.assertIn("anchor.appendChild(block);", source)
+
+    def test_anima_highres_panel_moves_under_advanced_parameters(self):
+        # 高清重建搬到「生成设置 → 高级参数」下方，挂载点必须紧跟该 details。
+        for html in self.pages:
+            self.assertIn('<div id="animaHighresMount" class="settings-mount"></div>', html)
+            self.assertLess(
+                html.index("<details><summary>高级参数</summary>"),
+                html.index('id="animaHighresMount"'),
+            )
+            self.assertLess(
+                html.index('id="animaHighresMount"'),
+                html.index("<details><summary>多人区域提示词</summary>"),
+            )
+            self.assertIn("anima-highres.js?v=9", html)
+            self.assertIn("result-workbench.js?v=6", html)
+
+        source = (ROOT / "web/assets/js/anima-highres.js").read_text(encoding="utf-8")
+        self.assertIn('byId("animaHighresMount") || byId("animaPromptPanel")', source)
+        self.assertIn("anchor.appendChild(block);", source)
+        # 默认折叠（与 Anima 提示词分层一致），并提供展开+切页的 reveal 入口。
+        self.assertIn("if (panel) panel.open = false;", source)
+        self.assertIn("window.animaHighresReveal = revealPanel;", source)
+        self.assertIn('window.setStudioCreationTab("settings")', source)
+        workbench = (ROOT / "web/assets/js/result-workbench.js").read_text(encoding="utf-8")
+        self.assertIn("window.animaHighresReveal()", workbench)
+        self.assertNotIn('setStudioCreationTab("prompt");\n      byId("animaHighresPanel")', workbench)
 
 
 if __name__ == "__main__":
