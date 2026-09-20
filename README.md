@@ -1034,7 +1034,7 @@ Krea 2 是蒸馏免引导模型，面板锁定：
 | Milmu Anime Illustrious v-pred | 30 步 · CFG 6.0 · `euler / normal` | 自动应用 `v_prediction`；CFG Rescale 可用 |
 | Gock So Anime Love Song | 30 步 · CFG 7.0 · `dpmpp_2m_sde / karras` | 材质细节可试 34 步 / CFG 6.5 |
 | PlantMilk Walnut | 28 步 · CFG 3.0 · `euler / normal` | 作者建议从 CFG 3 起步，常用约 28 步 |
-| Anima Base | 默认「Anima 标准」34 步 · CFG 4.8 · `er_sde / sgm_uniform` | 一采预设：Anima 标准 / Anima 柔和 / Anima 变化（30–40 步、CFG 4.0–5.5） |
+| Anima Base | 默认「Anima 标准」34 步 · CFG 4.8 · `er_sde / sgm_uniform` | 一采预设：Anima 标准 / Anima 简洁（`er_sde / simple`，Denoise 1.0）/ Anima 柔和 / Anima 变化（30–40 步、CFG 4.0–5.5） |
 | Hoseki LustrousMix Anima | 24 步 · CFG 4.5 · `er_sde / simple` | 作者推荐 ER SDE / Euler a、CFG 4–5 |
 | Nova Anime Anima | 24 步 · CFG 4.5 · `euler_ancestral / normal` | 发布配置 |
 | Krea 2 Turbo FP8 / INT8 | 8 步 · CFG 1.0 · `euler / simple` | 后端锁定 |

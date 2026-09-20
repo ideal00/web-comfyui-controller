@@ -144,6 +144,30 @@ class CapabilityContractTests(unittest.TestCase):
         self.assertEqual(2560, hires["max_long_edge"])
         self.assertEqual("RealESRGAN_x4plus_anime_6B.pth", hires["upscaler"])
 
+    def test_anima_first_pass_offers_the_clean_er_sde_simple_combo(self):
+        # 一采「Anima 简洁」：ER-SDE / Simple、30–40 步、CFG 4.5–5.0、一采 Denoise 1.0。
+        # JSON 档案与通用档案必须一致，且默认仍是 ⭐「Anima 标准」。
+        profiles = {
+            "json": mp.model_sampling_profile("anima-base-v1.0.safetensors"),
+            "generic": mp._generic_profile("anima"),
+        }
+        for source, profile in profiles.items():
+            combos = {combo["key"]: combo for combo in profile["combos"]}
+            clean = combos.get("clean")
+            self.assertIsNotNone(clean, source)
+            self.assertEqual("Anima 简洁", clean["label"])
+            self.assertEqual(("er_sde", "simple"), (clean["sampler"], clean["scheduler"]))
+            self.assertEqual(34, clean["steps"])
+            self.assertEqual(4.8, clean["cfg"])
+            self.assertIn("Denoise 1.0", clean["note"])
+            self.assertEqual("standard", profile["combos"][0]["key"], source)
+            self.assertEqual(("er_sde", "sgm_uniform"),
+                             (profile["combos"][0]["sampler"], profile["combos"][0]["scheduler"]), source)
+        # 真正生效的默认采样器仍来自 ⭐ 标准档（generic 档案由 model_sampling_profile 补齐）。
+        default = mp.model_sampling_profile("anima-base-v1.0.safetensors")
+        self.assertEqual(("er_sde", "sgm_uniform"), (default["sampler"], default["scheduler"]))
+        self.assertEqual((34, 4.8), (default["steps"], default["cfg"]))
+
     def test_constraints_are_the_single_source_for_ui_ranges(self):
         anima = mp.model_sampling_profile("anima-base-v1.0.safetensors")
         highres = mp.capability_constraints(anima, "highres_reconstruction")

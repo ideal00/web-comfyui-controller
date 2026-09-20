@@ -86,6 +86,7 @@
       "source_url": "https://huggingface.co/circlestone-labs/Anima",
       "combos": [
         {"key": "standard", "label": "Anima 标准", "steps": 34, "cfg": 4.8, "sampler": "er_sde", "scheduler": "sgm_uniform", "guidance": "off", "note": "⭐ 一采默认：ER-SDE / SGM Uniform、30–40 步、CFG 4.5–5.0；日常出图基线。"},
+        {"key": "clean", "label": "Anima 简洁", "steps": 34, "cfg": 4.8, "sampler": "er_sde", "scheduler": "simple", "guidance": "off", "note": "简洁：ER-SDE / Simple、30–40 步、CFG 4.5–5.0、一采 Denoise 1.0（整段去噪）。Simple 噪声曲线最平直，线条干净、收敛稳，适合先定构图。"},
         {"key": "soft", "label": "Anima 柔和", "steps": 34, "cfg": 5.0, "sampler": "euler_ancestral", "scheduler": "normal", "guidance": "off", "note": "柔和：Euler a / Normal、30–40 步、CFG 4.5–5.5。Normal 过渡更柔但线稿可能偏松；外轮廓发虚时把调度器切回 sgm_uniform。"},
         {"key": "variant", "label": "Anima 变化", "steps": 34, "cfg": 4.3, "sampler": "dpmpp_2m_sde_gpu", "scheduler": "sgm_uniform", "guidance": "off", "note": "变化：DPM++ 2M SDE GPU / SGM Uniform、30–40 步、CFG 4.0–4.5；结构变化更大，适合换构图。"}
       ]
