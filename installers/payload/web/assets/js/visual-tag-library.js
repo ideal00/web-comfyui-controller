@@ -228,14 +228,16 @@
     return state.selected.some((item) => item.tag === tag);
   }
 
-  function toggleSelect(tag, kind) {
+  function toggleSelect(tag, kind, card) {
     if (!tag) return;
     if (isSelected(tag)) {
       state.selected = state.selected.filter((item) => item.tag !== tag);
     } else {
       state.selected.push({ tag: tag, kind: kind || "general" });
     }
-    renderGrid();
+    // 只改这一张卡的选中态：整格重渲染会换掉 DOM 节点，连续点多张时容易丢点击。
+    if (card && card.classList) card.classList.toggle("selected", isSelected(tag));
+    else renderGrid();
     renderFooter();
   }
 
@@ -367,8 +369,11 @@
       return;
     }
     if (!state.results.length) {
+      const filtered = state.source === "local" && state.category;
       const hint = state.source === "local" && state.query
-        ? `<div class="vtl-empty">本地词条库没有“${esc(state.query)}”。<button type="button" class="vtl-tocloud">☁ 去 Danbooru 云端查</button></div>`
+        ? `<div class="vtl-empty">${filtered ? `分类「${esc(state.category)}」里没有“${esc(state.query)}”。` : `本地词条库没有“${esc(state.query)}”。`}${
+          filtered ? '<button type="button" class="vtl-clear-category">清除分类筛选</button>' : ""
+        }<button type="button" class="vtl-tocloud">☁ 去 Danbooru 云端查</button></div>`
         : `<div class="vtl-empty">${state.source === "cloud" ? "输入英文 tag 后查询云端；中文会先自动解析。" : "输入关键词搜索本地精选词条，或留空浏览全部。"}</div>`;
       grid.innerHTML = hint;
       if (thumbHint) thumbHint.textContent = "";
@@ -630,13 +635,21 @@
         reload();
         return;
       }
+      const clearCategory = event.target.closest(".vtl-clear-category");
+      if (clearCategory) {
+        state.category = "";
+        state.page = 1;
+        saveState();
+        loadLocal();
+        return;
+      }
       if (event.target.closest(".vtl-add")) {
         if (state.source === "cloud") addTag(state.query.trim(), "general");
         else addTag(card.dataset.tag, card.dataset.kind);
         return;
       }
-      if (state.source === "cloud") toggleSelect(state.query.trim(), "general");
-      else toggleSelect(card.dataset.tag, card.dataset.kind);
+      if (state.source === "cloud") toggleSelect(state.query.trim(), "general", card);
+      else toggleSelect(card.dataset.tag, card.dataset.kind, card);
     });
   }
 
