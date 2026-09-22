@@ -271,6 +271,32 @@ class SearchTests(LibraryTestCase):
         self.assertEqual(2, filtered["matched"])
         self.assertEqual("鞋子展示", filtered["results"][0]["category"])
 
+    def test_pagination_slices_without_overlap(self):
+        shoes = vtl.search("", limit=3, category="鞋子展示", offset=0)
+        self.assertEqual(2, shoes["shown"])          # 合成库里鞋子类共 2 条
+        self.assertFalse(shoes["has_more"])
+        beyond = vtl.search("", limit=3, category="鞋子展示", offset=3)
+        self.assertEqual(0, len(beyond["results"]))
+        self.assertFalse(beyond["has_more"])
+
+        # 用全部 8 条验证跨页不重复、不丢失
+        page1 = vtl.search("", limit=5, offset=0)
+        page2 = vtl.search("", limit=5, offset=5)
+        self.assertEqual(5, page1["shown"])
+        self.assertEqual(3, page2["shown"])
+        self.assertTrue(page1["has_more"])
+        self.assertFalse(page2["has_more"])
+        ids = [item["id"] for item in page1["results"] + page2["results"]]
+        self.assertEqual(len(ids), len(set(ids)), "分页结果不应重复")
+        self.assertEqual(8, len(ids), "分页应覆盖全部词条")
+
+    def test_pagination_meta_fields(self):
+        payload = vtl.search("shoes", limit=2, offset=1)
+        self.assertEqual(1, payload["offset"])
+        self.assertEqual(2, payload["limit"])
+        self.assertIn("shown", payload)
+        self.assertIn("has_more", payload)
+
     def test_lookup_chinese_prefers_exact_name(self):
         self.assertEqual(["high_heels"], vtl.lookup_chinese("高跟鞋"))
 
@@ -529,8 +555,15 @@ class ApiWiringTests(unittest.TestCase):
     def test_frontend_scripts_loaded_in_both_panels(self):
         for page in (self.index_html, self.payload_html):
             self.assertIn("/assets/js/prompt-dialect.js?v=1", page)
-            self.assertIn("/assets/js/visual-tag-library.js?v=1", page)
+            self.assertIn("/assets/js/visual-tag-library.js?v=", page)
             self.assertLess(page.index("prompt-dialect.js"), page.index("panel.js?v="))
+
+    def test_visual_tags_endpoint_supports_paging(self):
+        self.assertIn('offset=bounded(query.get("offset", ["0"])[0], 0, 0, 20000)', self.panel_source)
+        # 前端本地分页：把页码换成 offset，并统一用同一个翻页控件
+        self.assertIn('offset: String(Math.max(0, state.page - 1) * LOCAL_LIMIT)', self.library_js)
+        self.assertIn('function pageChanged()', self.library_js)
+        self.assertIn('if (pager) pager.hidden = false;', self.library_js)
 
     def test_library_js_uses_dialect_layer(self):
         self.assertIn("EasyPanelDialect", self.library_js)

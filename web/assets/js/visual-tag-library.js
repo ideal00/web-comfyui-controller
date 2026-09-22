@@ -16,8 +16,7 @@
   const CLOUD_IMAGE_API = "/api/danbooru/image";
   const STORAGE_KEY = "easyPanelVisualTagLibraryV1";
   const LOCAL_LIMIT = 48;
-  const CLOUD_LIMIT = 20;
-  const RATINGS = { general: "General 全年龄", sensitive: "Sensitive 敏感", questionable: "Questionable 暗示", explicit: "Explicit 明确" };
+  const CLOUD_LIMIT = 20;  const RATINGS = { general: "General 全年龄", sensitive: "Sensitive 敏感", questionable: "Questionable 暗示", explicit: "Explicit 明确" };
   const SORTS = { newest: "最新", oldest: "最旧" };
   const RATING_BADGE = { g: "G", s: "S", q: "Q", e: "E" };
   const GROUP_LABELS = { general: "通用", character: "角色", copyright: "系列", artist: "画师" };
@@ -44,6 +43,9 @@
     localTotal: 0,
     categories: [],
     recent: [],
+    shown: 0,
+    hasMore: false,
+    indexGeneratedAt: "",
   };
 
   /* ------------------------------------------------------------- 工具 */
@@ -116,6 +118,10 @@
 
   /* ------------------------------------------------------------- 数据 */
 
+  function pageSize() {
+    return state.source === "cloud" ? CLOUD_LIMIT : LOCAL_LIMIT;
+  }
+
   async function loadLocal() {
     state.loading = true;
     renderAll();
@@ -123,6 +129,7 @@
       const layer = dialect();
       const params = new URLSearchParams({
         q: state.query, limit: String(LOCAL_LIMIT), category: state.category,
+        offset: String(Math.max(0, state.page - 1) * LOCAL_LIMIT),
         family: layer ? layer.family() : "", dialect: layer ? layer.currentDialect() : "",
       });
       const response = await fetch(`${LOCAL_API}?${params.toString()}`);
@@ -134,6 +141,8 @@
       // 搜索响应自带总数/分类/索引时间，不必再单独请求一次统计。
       state.localTotal = data.total || 0;
       state.indexGeneratedAt = data.generated_at || "";
+      state.hasMore = !!data.has_more;
+      state.shown = data.shown || 0;
     } catch (error) {
       state.results = [];
       state.error = `本地词条库读取失败：${error.message}`;
@@ -165,6 +174,8 @@
         state.notice = "";
       } else {
         state.error = "";
+        state.shown = data.received != null ? data.received : (data.results || []).length;
+        state.hasMore = state.shown >= CLOUD_LIMIT;
         const notes = [];
         if (data.resolved_tags) notes.push(`已把“${data.original_query}”解析为 ${data.resolved_tags}`);
         if (data.cached) notes.push("本次来自本地缓存");
@@ -183,6 +194,14 @@
   async function reload() {
     if (state.source === "cloud") return loadCloud();
     return loadLocal();
+  }
+
+  function pageChanged() {
+    const grid = byId("vtlGrid");
+    if (grid) grid.scrollTop = 0;
+    const panel = document.querySelector(".vtl-dialog");
+    if (panel) panel.scrollTop = 0;
+    return reload();
   }
 
   async function rebuildIndex() {
@@ -341,8 +360,10 @@
   function renderGrid() {
     const grid = byId("vtlGrid");
     if (!grid) return;
+    const thumbHint = byId("vtlThumbHint");
     if (state.loading) {
       grid.innerHTML = '<div class="vtl-empty">正在读取…</div>';
+      if (thumbHint) thumbHint.textContent = "";
       return;
     }
     if (!state.results.length) {
@@ -350,6 +371,7 @@
         ? `<div class="vtl-empty">本地词条库没有“${esc(state.query)}”。<button type="button" class="vtl-tocloud">☁ 去 Danbooru 云端查</button></div>`
         : `<div class="vtl-empty">${state.source === "cloud" ? "输入英文 tag 后查询云端；中文会先自动解析。" : "输入关键词搜索本地精选词条，或留空浏览全部。"}</div>`;
       grid.innerHTML = hint;
+      if (thumbHint) thumbHint.textContent = "";
       return;
     }
     grid.innerHTML = state.results.map((item) =>
@@ -358,21 +380,24 @@
   }
 
   function trackThumbProgress() {
-    // 冷缓存时 48 张缩略图要现生成；磁盘缓存命中后几乎瞬回。
-    const images = [...document.querySelectorAll("#vtlGrid .vtl-thumb img")];
+    // 冷缓存时缩略图要现生成；磁盘缓存命中后几乎瞬回。
+    // ⚠️ 只统计「已开始加载」的图：loading="lazy" 且未进入视口的图永远 complete=false，
+    // 直接统计会把它们算成永久待加载（提示卡在“加载中”）。
     const hint = byId("vtlThumbHint");
     if (!hint) return;
-    const pending = images.filter((image) => !image.complete);
-    if (!pending.length) {
+    const images = [...document.querySelectorAll("#vtlGrid .vtl-thumb img")];
+    const started = images.filter((image) => image.currentSrc || image.complete);
+    if (!started.length || !started.some((image) => !image.complete)) {
       hint.textContent = "";
       return;
     }
     const repaint = () => {
-      const left = images.filter((image) => !image.complete).length;
-      hint.textContent = left ? `缩略图加载中…（${images.length - left}/${images.length}）` : "";
+      const left = started.filter((image) => !image.complete).length;
+      hint.textContent = left ? `缩略图加载中…（${started.length - left}/${started.length}）` : "";
+      if (!left) hint.textContent = "";
     };
     repaint();
-    pending.forEach((image) => {
+    started.forEach((image) => {
       image.addEventListener("load", repaint, { once: true });
       image.addEventListener("error", repaint, { once: true });
     });
@@ -383,9 +408,13 @@
     if (!status) return;
     const parts = [];
     if (state.source === "local") {
-      parts.push(`本地精选：${state.localTotal} 条${state.meta && state.meta.matched != null ? ` · 命中 ${state.meta.matched}` : ""}${state.indexGeneratedAt ? ` · 索引 ${state.indexGeneratedAt}（源文档未改不会重建）` : ""}`);
+      const shown = state.shown || state.results.length;
+      const from = shown ? state.meta.offset + 1 : 0;
+      const to = state.meta.offset + shown;
+      parts.push(`本地精选：${state.localTotal} 条${state.meta && state.meta.matched != null ? ` · 命中 ${state.meta.matched}` : ""}${shown ? ` · 显示 ${from}–${to}` : ""}${state.indexGeneratedAt ? ` · 索引 ${state.indexGeneratedAt}（源文档未改不会重建）` : ""}`);
     } else {
-      parts.push(`Danbooru 云端：每页 ${CLOUD_LIMIT} 张 · 第 ${state.page} 页${state.meta && state.meta.composed_query ? ` · 查询 ${state.meta.composed_query}` : ""}`);
+      const shown = (state.meta && state.meta.received != null) ? state.meta.received : state.results.length;
+      parts.push(`Danbooru 云端：每页 ${CLOUD_LIMIT} 张 · 第 ${state.page} 页${shown ? ` · 本页 ${shown} 张` : ""}${state.meta && state.meta.composed_query ? ` · 查询 ${state.meta.composed_query}` : ""}`);
     }
     parts.push(`写入形式：${dialectLabel()}`);
     status.innerHTML = `<span>${esc(parts.join(" · "))}</span>`;
@@ -405,13 +434,18 @@
       ? `已选 ${state.selected.length}：${preview.join(", ")}${state.selected.length > 4 ? " …" : ""}`
       : "未选择任何词条";
     const pager = byId("vtlPager");
-    if (pager) pager.hidden = state.source !== "cloud";
+    if (pager) pager.hidden = false;
     const pageLabel = byId("vtlPageLabel");
-    if (pageLabel) pageLabel.textContent = `第 ${state.page} 页`;
+    if (pageLabel) {
+      const pages = state.source === "cloud"
+        ? 0
+        : Math.max(1, Math.ceil((state.meta && state.meta.matched ? state.meta.matched : state.results.length) / LOCAL_LIMIT));
+      pageLabel.textContent = pages > 1 ? `第 ${state.page} / ${pages} 页` : `第 ${state.page} 页`;
+    }
     const prev = byId("vtlPrev");
     const next = byId("vtlNext");
     if (prev) prev.disabled = state.page <= 1 || state.loading;
-    if (next) next.disabled = state.loading || state.results.length < CLOUD_LIMIT;
+    if (next) next.disabled = state.loading || !state.hasMore;
   }
 
   function renderToolbar() {
@@ -520,6 +554,7 @@
     });
     byId("vtlCategory").addEventListener("change", () => {
       state.category = byId("vtlCategory").value;
+      state.page = 1;
       saveState();
       loadLocal();
     });
@@ -542,11 +577,11 @@
     byId("vtlClear").addEventListener("click", clearSelection);
     byId("vtlPrev").addEventListener("click", () => {
       state.page = Math.max(1, state.page - 1);
-      loadCloud();
+      pageChanged();
     });
     byId("vtlNext").addEventListener("click", () => {
       state.page += 1;
-      loadCloud();
+      pageChanged();
     });
     overlay.querySelector(".vtl-close").addEventListener("click", close);
     overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
@@ -648,7 +683,7 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
 .vtl-badge.warn{border-color:#c98b3a;color:#ffcf8f;left:auto;right:6px;top:auto;bottom:6px}
 .vtl-full{position:absolute;right:6px;top:6px;background:rgba(8,10,16,.72);border:1px solid var(--line,#343d53);color:#fff;border-radius:6px;padding:1px 6px;cursor:pointer}
 .vtl-body{padding:8px 9px 4px;display:flex;flex-direction:column;gap:4px}
-.vtl-tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:calc(var(--input-font-size,15px) - 2px);word-break:break-word}
+.vtl-tag{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:calc(var(--input-font-size,15px) - 2px);word-break:break-word;overflow-wrap:anywhere}
 .vtl-zh{font-size:calc(var(--input-font-size,15px) - 3px);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .vtl-group{background:var(--token,#282d40);border:1px solid var(--line,#343d53);border-radius:999px;padding:0 7px;color:var(--muted,#adb7cb);font-size:11px}
 .vtl-desc{color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}

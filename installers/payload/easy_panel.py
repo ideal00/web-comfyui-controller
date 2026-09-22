@@ -6188,6 +6188,7 @@ class Handler(BaseHTTPRequestHandler):
                         query.get("q", [""])[0][:120],
                         limit=bounded(query.get("limit", ["48"])[0], 48, 1, visual_tag_library.MAX_SEARCH_LIMIT),
                         category=query.get("category", [""])[0][:60],
+                        offset=bounded(query.get("offset", ["0"])[0], 0, 0, 20000),
                     )
                     resolved = prompt_dialect.resolve_dialect(family, dialect)
                     for item in payload["results"]:

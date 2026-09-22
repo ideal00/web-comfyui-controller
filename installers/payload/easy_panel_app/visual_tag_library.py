@@ -474,8 +474,8 @@ def categories() -> list[str]:
     return sorted({str(row.get("category") or "") for row in _rows() if row.get("category")})
 
 
-def search(query: str, limit: int = 48, category: str = "") -> dict:
-    """按 tag / 中文名 / 释义 搜索词条；空查询返回全部（受 limit 限制）。"""
+def search(query: str, limit: int = 48, category: str = "", offset: int = 0) -> dict:
+    """按 tag / 中文名 / 释义 搜索词条；空查询返回全部（分页由 limit/offset 控制）。"""
     info = ensure_index()
     rows = _rows()
     needle = _normalize(query)
@@ -493,15 +493,21 @@ def search(query: str, limit: int = 48, category: str = "") -> dict:
         scored.sort(key=lambda item: (-item["score"], item["category"], item["tag"]))
         matched = scored
     max_items = max(1, min(int(limit or 48), MAX_SEARCH_LIMIT))
+    start = max(0, int(offset or 0))
+    page_rows = matched[start:start + max_items]
     return {
         "available": bool(info.get("available")),
         "root": info.get("root", ""),
         "total": len(_rows()),
         "matched": len(matched),
+        "offset": start,
+        "limit": max_items,
+        "shown": len(page_rows),
+        "has_more": start + len(page_rows) < len(matched),
         "categories": categories(),
         "generated_at": info.get("generated_at", ""),
         "query": query,
-        "results": matched[:max_items],
+        "results": page_rows,
     }
 
 
@@ -569,9 +575,12 @@ def _thumb_key(path: Path, size: int) -> str:
 _THUMB_MEMORY: dict[str, bytes] = {}
 _THUMB_MEMORY_LIMIT = 512
 _WARM_STATE: dict = {"started": False}
-#: 后台预热张数：冷缓存单张约 15ms（JPEG draft 降采样），400 张 ≈ 6 秒后台跑完，
-#: 之后首次打开对话框基本无需现生成。
+#: 后台预热张数：冷缓存单张约 15ms（JPEG draft 降采样），400 张约 6 秒跑完。
+#: ⚠️ 必须节流 + 延时启动：PIL 缩放在 GIL 下是 CPU 密集的，猛跑会让正在打开的
+#: 对话框请求被挤慢（实测不节流时 48 张缩略图 6 秒只出 24 张）。
 THUMB_WARM_LIMIT = 400
+THUMB_WARM_DELAY = 3.0
+THUMB_WARM_PAUSE = 0.04
 
 
 def _remember_thumb(key: str, data: bytes) -> None:
@@ -632,10 +641,18 @@ def thumbnail_bytes(path: Path, size: int = DEFAULT_THUMB_SIZE) -> bytes | None:
     return data
 
 
-def prewarm_thumbnails(limit: int = THUMB_WARM_LIMIT, size: int = DEFAULT_THUMB_SIZE) -> int:
-    """同步预热前 ``limit`` 条词条的缩略图（已缓存的不重做）；返回新生成数量。"""
+def prewarm_thumbnails(limit: int = THUMB_WARM_LIMIT, size: int = DEFAULT_THUMB_SIZE,
+                       pause: float = THUMB_WARM_PAUSE) -> int:
+    """同步预热前 ``limit`` 条词条的缩略图（已缓存的不重做）；返回新生成数量。
+
+    每生成一张让出 ``pause`` 秒（参见 ``THUMB_WARM_PAUSE``）；源目录在预热期间变化
+    （切库/测试换临时目录）时立即停手。
+    """
+    expected_root = str(library_root())
     generated = 0
     for row in _rows()[: max(0, int(limit))]:
+        if str(library_root()) != expected_root:
+            break
         path = image_path(row)
         if not path:
             continue
@@ -644,17 +661,27 @@ def prewarm_thumbnails(limit: int = THUMB_WARM_LIMIT, size: int = DEFAULT_THUMB_
             continue
         if thumbnail_bytes(path, size):
             generated += 1
+            if pause > 0:
+                time.sleep(pause)
     return generated
 
 
-def warm_thumbnails_async(limit: int = THUMB_WARM_LIMIT) -> bool:
-    """后台线程预热缩略图（每进程只跑一次），避免首次打开对话框时逐张现生成。"""
+def warm_thumbnails_async(limit: int = THUMB_WARM_LIMIT,
+                          delay: float = THUMB_WARM_DELAY) -> bool:
+    """后台线程预热缩略图（每进程只跑一次），避免首次打开对话框时逐张现生成。
+
+    先等 ``delay`` 秒再开工，避开“面板刚启动 / 刚打开对话框”的高峰。
+    ⚠️ 测试里要把 ``_WARM_STATE["started"]`` 置为 True：否则后台线程会拿着临时
+    源目录的图片句柄，让 TemporaryDirectory 删除时在 Windows 上报 PermissionError。
+    """
     if _WARM_STATE.get("started"):
         return False
     _WARM_STATE["started"] = True
 
     def worker() -> None:
         try:
+            if delay > 0:
+                time.sleep(delay)
             prewarm_thumbnails(limit)
         except Exception:  # noqa: BLE001 - 预热失败不影响按需生成
             pass
