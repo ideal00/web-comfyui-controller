@@ -58,7 +58,7 @@ MAX_THUMB_SIZE = 512
 MAX_SEARCH_LIMIT = 200
 
 NAME_FIELDS = ("tag中文名", "中文名", "中文释义")
-MEANING_FIELDS = ("详细解释", "详细释义", "tag中文含义")
+MEANING_FIELDS = ("详细解释", "详细释义", "tag中文含义", "中文介绍")
 AMBIGUOUS_FIELD = "中文含义"
 TAG_FIELDS = ("danboorutag", "tag")
 SUBCLASS_FIELDS = ("分类", "tag所属的子类", "所属子类", "子类")

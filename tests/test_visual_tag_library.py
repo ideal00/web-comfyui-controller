@@ -136,6 +136,18 @@ DOC_COMBO = """## 1. honkai:star_rail,official_art,game_cg — 星穹铁道画�
 | 分类 | 基础大类 |
 """
 
+# 体系五：衬衫类（Tag / 中文含义=短名 / 中文介绍=长释义，没有子类列）
+DOC_SHIRT = """## 1. shirt — 衬衫 / 上衣
+
+<img src="./images/1 (1).jpg" alt="shirt" style="zoom:60%" />
+
+| 字段 | 内容 |
+| --- | --- |
+| Tag | shirt |
+| 中文含义 | 衬衫 / 上衣 |
+| 中文介绍 | 泛指穿在上半身的衬衫或类似上衣。 |
+"""
+
 UNRELATED_DOC = """# 插件说明
 
 这里没有词条，只有解读文档，不应该进入索引。
@@ -143,7 +155,7 @@ UNRELATED_DOC = """# 插件说明
 
 
 def write_tree(root: Path) -> None:
-    """构造合成词条库：4 个分类目录 + 1 个无关目录 + 假图片。"""
+    """构造合成词条库：5 个分类目录（含 5 套字段命名体系）+ 1 个无关目录 + 假图片。"""
     (root / "26-8-26 鞋子展示" / "筛选").mkdir(parents=True)
     (root / "26-8-26 鞋子展示" / "鞋子tag展示.md").write_text(
         "\ufeff" + DOC_CHILD, encoding="utf-8")  # BOM：首条标题匹配不到，只能靠字段表
@@ -163,13 +175,17 @@ def write_tree(root: Path) -> None:
     for name in ("0001_necklace.jpg", "0002_chain_necklace.jpg"):
         (root / "26-9-19 颈部配饰" / "images" / name).write_bytes(b"fake")
 
+    # 体系五：衬衫类（中文介绍=长释义，且没有子类列）
+    (root / "26-8-24 衬衫展示" / "images").mkdir(parents=True)
+    (root / "26-8-24 衬衫展示" / "衬衫tag展示.md").write_text(DOC_SHIRT, encoding="utf-8")
+    (root / "26-8-24 衬衫展示" / "images" / "1 (1).jpg").write_bytes(b"fake")
+
     (root / "26-9-14 画风" / "images").mkdir(parents=True)
     (root / "26-9-14 画风" / "画风.md").write_text(DOC_COMBO, encoding="utf-8")
     (root / "26-9-14 画风" / "images" / "0001_honkai_star_rail,official_art,game_cg.jpg").write_bytes(b"fake")
 
     (root / "插件目录" / "说明.md").parent.mkdir(parents=True)
     (root / "插件目录" / "说明.md").write_text(UNRELATED_DOC, encoding="utf-8")
-
     # 一张可真正解码的图片，用于缩略图测试
     from PIL import Image
 
@@ -208,9 +224,10 @@ class LibraryTestCase(unittest.TestCase):
 class ParseTests(LibraryTestCase):
     def test_index_build_counts(self):
         result = vtl.build_index()
-        # 鞋 2 + 上衣 1 + 套装 1 + 配饰 2 + 画风 2 = 8（无关 MD 不计）
-        self.assertEqual(8, result["entries"])
-        self.assertEqual({"鞋子展示", "上衣", "套装展示", "颈部配饰", "画风"}, set(result["categories"]))
+        # 鞋 2 + 上衣 1 + 套装 1 + 配饰 2 + 画风 2 + 衬衫 1 = 9（无关 MD 不计）
+        self.assertEqual(9, result["entries"])
+        self.assertEqual({"鞋子展示", "上衣", "套装展示", "颈部配饰", "画风", "衬衫展示"},
+                         set(result["categories"]))
 
     def test_all_four_field_schemes_resolve(self):
         rows = {(row["category"], row["tag"]): row for row in vtl._rows()}
@@ -234,6 +251,12 @@ class ParseTests(LibraryTestCase):
         self.assertEqual("链条项链", necklace["name_zh"])      # 中文名
         self.assertIn("金属链条", necklace["description"])     # 中文含义当长释义
         self.assertEqual("项链/吊坠", necklace["group_name"])
+
+        shirt = rows[("衬衫展示", "shirt")]
+        self.assertEqual("衬衫 / 上衣", shirt["name_zh"])      # 中文含义当短名
+        self.assertIn("上半身", shirt["description"])          # 中文介绍 = 长释义（新别名）
+        self.assertEqual("", shirt["group_name"])              # 该文档没有子类列
+        self.assertTrue(shirt["image_path"].endswith("1 (1).jpg"), shirt["image_path"])
 
     def test_bom_first_entry_is_kept(self):
         tagged = [row for row in vtl._rows() if row["tag"] == "shoes"]
@@ -279,16 +302,16 @@ class SearchTests(LibraryTestCase):
         self.assertEqual(0, len(beyond["results"]))
         self.assertFalse(beyond["has_more"])
 
-        # 用全部 8 条验证跨页不重复、不丢失
+        # 用全部 9 条验证跨页不重复、不丢失
         page1 = vtl.search("", limit=5, offset=0)
         page2 = vtl.search("", limit=5, offset=5)
         self.assertEqual(5, page1["shown"])
-        self.assertEqual(3, page2["shown"])
+        self.assertEqual(4, page2["shown"])
         self.assertTrue(page1["has_more"])
         self.assertFalse(page2["has_more"])
         ids = [item["id"] for item in page1["results"] + page2["results"]]
         self.assertEqual(len(ids), len(set(ids)), "分页结果不应重复")
-        self.assertEqual(8, len(ids), "分页应覆盖全部词条")
+        self.assertEqual(9, len(ids), "分页应覆盖全部词条")
 
     def test_pagination_meta_fields(self):
         payload = vtl.search("shoes", limit=2, offset=1)
@@ -307,20 +330,20 @@ class SearchTests(LibraryTestCase):
     def test_stats_shape(self):
         stats = vtl.stats()
         self.assertTrue(stats["available"])
-        self.assertEqual(8, stats["entries"])
+        self.assertEqual(9, stats["entries"])
         self.assertEqual(1, stats["unmatched_images"])
 
 
 class IndexTests(LibraryTestCase):
     def test_sqlite_round_trip_and_freshness(self):
         first = vtl.ensure_index()
-        self.assertEqual(8, first["entries"])
+        self.assertEqual(9, first["entries"])
         generated = first["generated_at"]
         second = vtl.ensure_index()          # 源文档没变 → 不重建
         self.assertEqual(generated, second["generated_at"])
         with vtl._connection() as connection:
             rows = connection.execute("SELECT COUNT(*) AS total FROM visual_tags").fetchone()
-        self.assertEqual(8, rows["total"])
+        self.assertEqual(9, rows["total"])
 
     def test_document_change_triggers_rebuild(self):
         vtl.ensure_index()
