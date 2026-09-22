@@ -1,0 +1,20 @@
+{
+  "_note": "Prompt 方言双端一致性用例：Python（tests/test_prompt_dialect.py）与前端（tests/prompt_dialect.node-test.cjs）都读这份表，两边都必须得到 expect。",
+  "cases": [
+    {"tag": "high_heels", "kind": "general", "family": "anima", "dialect": "auto", "expect": "high heels", "note": "Anima 下划线转空格"},
+    {"tag": "long_hair", "kind": "general", "family": "illustrious", "dialect": "auto", "expect": "long_hair", "note": "光辉默认保持 Danbooru 原形"},
+    {"tag": "score_7", "kind": "score", "family": "anima", "dialect": "auto", "expect": "score_7", "note": "score_* 保留下划线"},
+    {"tag": "score_7", "kind": "score", "family": "anima", "dialect": "space", "expect": "score_7", "note": "手动空格方言也不动 score_*"},
+    {"tag": "score_12_up", "kind": "score", "family": "anima", "dialect": "auto", "expect": "score_12_up", "note": "带 _up 后缀的 score 同样保留"},
+    {"tag": "@somebody_name", "kind": "artist", "family": "anima", "dialect": "auto", "expect": "@somebody name", "note": "画师标签保留 @ 前缀并转空格"},
+    {"tag": "somebody_name", "kind": "artist", "family": "anima", "dialect": "auto", "expect": "@somebody name", "note": "画师类别自动补 @"},
+    {"tag": "somebody_name", "kind": "artist", "family": "illustrious", "dialect": "auto", "expect": "somebody_name", "note": "非 Anima 不动画师标签"},
+    {"tag": "hatsune_miku", "kind": "character", "family": "anima", "dialect": "auto", "expect": "hatsune miku", "note": "角色标签走空格方言"},
+    {"tag": "some_custom_trigger_v2", "kind": "trigger", "family": "anima", "dialect": "space", "protect": true, "expect": "some_custom_trigger_v2", "note": "LoRA 触发词永不转换"},
+    {"tag": "high_heels", "kind": "general", "family": "krea2", "dialect": "auto", "expect": "high heels", "note": "Krea 2 自然语言用空格"},
+    {"tag": "high_heels", "kind": "general", "family": "anima", "dialect": "canonical", "expect": "high_heels", "note": "手动切回原形"},
+    {"tag": "high_heels", "kind": "general", "family": "illustrious", "dialect": "space", "expect": "high heels", "note": "光辉可手动切空格做对照"},
+    {"tag": "st.louis_\\(azur_lane\\)", "kind": "artist", "family": "anima", "dialect": "auto", "expect": "@st.louis \\(azur lane\\)", "note": "保留作者反斜杠转义，只换下划线"},
+    {"tag": "black-framed_eyewear", "kind": "general", "family": "anima", "dialect": "auto", "expect": "black-framed eyewear", "note": "连字符保留"}
+  ]
+}

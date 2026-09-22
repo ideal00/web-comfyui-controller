@@ -53,3 +53,9 @@ easy_panel_shared_state.json*
 
 # ===== 本地发布构建产物（APK / 校验文件，上传 GitHub Release 后不入库）=====
 release-artifacts/
+
+# ===== 视觉词条库派生数据（源数据在面板目录之外，索引与缩略图可随时重建）=====
+visual_tag_index.sqlite
+visual_tag_index.sqlite-wal
+visual_tag_index.sqlite-shm
+cache/visual_tag_thumbs/

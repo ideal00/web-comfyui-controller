@@ -49,6 +49,7 @@ from easy_panel_app.anima_refine import (
     normalize_anima_detail_refine,
 )
 from easy_panel_app import camera_control
+from easy_panel_app import danbooru_client, prompt_dialect, visual_tag_library
 from easy_panel_app.config import (
     ANIMA_TAG_DATA,
     CHECKPOINT_DIR,
@@ -2585,6 +2586,65 @@ def illustrious_preflight(data: dict) -> dict:
             "positiveTerms": len(positive_terms), "negativeTerms": len(negative_terms),
             "prompt": compiled["positive"], "negative": compiled["negative"],
             "compiled": compiled}
+
+
+@lru_cache(maxsize=1)
+def tag_category_map() -> dict[str, int]:
+    """``{tag: Danbooru 类别号}``；方言层用它区分角色 / 作品 / 画师标签。"""
+    mapping: dict[str, int] = {}
+    for item in TAG_INDEX:
+        tag = str(item.get("tag") or "").strip().lower()
+        if tag:
+            mapping[tag] = int(item.get("category") or 0)
+    return mapping
+
+
+def dialect_categories() -> dict[str, int]:
+    """给 prompt_dialect 用的类别表（TagComplete 全量 tag → 类别号）。"""
+    return tag_category_map()
+
+
+def normalize_dialect_choice(value: str) -> str:
+    return str(value or "").strip().lower() if str(value or "").strip().lower() in prompt_dialect.DIALECTS \
+        else prompt_dialect.DEFAULT_DIALECT
+
+
+def format_prompt_tags(tags: list[str], family: str = "", dialect: str = "") -> dict:
+    """确定性插入路径的统一格式入口（标签搜索 / 词条库 / 云端卡片）。"""
+    return prompt_dialect.convert(tags, family=family, dialect=normalize_dialect_choice(dialect),
+                                  categories=dialect_categories())
+
+
+def english_tag_for_text(text: str) -> str:
+    """中文 → 英文 tag：先查本地精选词条库短名，再退回 TagComplete 的社区中文翻译。
+
+    云端（Danbooru）只认英文 tag，但用户习惯直接输中文，这里做一层解析。
+    """
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    if not visual_tag_library.has_cjk(value):
+        return value
+    hits = visual_tag_library.lookup_chinese(value, limit=1)
+    if hits:
+        return hits[0]
+    needle = value.casefold()
+    exact: list[dict] = []
+    partial: list[dict] = []
+    for item in TAG_INDEX:
+        translation = str(item.get("translation") or "").strip()
+        if not translation:
+            continue
+        folded = translation.casefold()
+        if folded == needle:
+            exact.append(item)
+        elif needle in folded:
+            partial.append(item)
+    pool = exact or partial
+    if not pool:
+        return ""
+    pool.sort(key=lambda item: -int(item.get("count") or 0))
+    return str(pool[0].get("tag") or "")
 
 
 def search_tags(query: str, limit: int = 28) -> list[dict]:
@@ -5687,6 +5747,61 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             hub.unsubscribe(channel)
 
+    def serve_visual_tag_image(self, query: dict):
+        """本地视觉词条库的参考图：默认 320px 缩略图（带缓存），``size=full`` 时才发原图。"""
+        entry = visual_tag_library.find_entry(query.get("id", [""])[0])
+        file = visual_tag_library.image_path(entry) if entry else None
+        if not file:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        content: bytes | None = None
+        content_type = "image/jpeg"
+        cache_control = "private, max-age=3600"
+        if query.get("size", ["thumb"])[0] != "full":
+            content = visual_tag_library.thumbnail_bytes(file, bounded(
+                query.get("px", [visual_tag_library.DEFAULT_THUMB_SIZE])[0],
+                visual_tag_library.DEFAULT_THUMB_SIZE,
+                visual_tag_library.MIN_THUMB_SIZE,
+                visual_tag_library.MAX_THUMB_SIZE,
+            ))
+            cache_control = "private, max-age=86400"
+        if content is None:
+            content = file.read_bytes()
+            content_type = mimetypes.guess_type(file.name)[0] or "image/jpeg"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", cache_control)
+        self.add_rpg_session_header()
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def serve_danbooru_posts(self, query: dict):
+        """Danbooru 云端查询（只读）：中文查询先转英文 tag，失败自动降级。"""
+        raw_tags = query.get("tags", [""])[0][:200].strip()
+        tags = raw_tags
+        resolved = ""
+        if raw_tags and visual_tag_library.has_cjk(raw_tags):
+            english = english_tag_for_text(raw_tags)
+            if english:
+                tags = resolved = english
+        payload = danbooru_client.search_posts(
+            tags,
+            limit=bounded(query.get("limit", [danbooru_client.DEFAULT_LIMIT])[0],
+                          danbooru_client.DEFAULT_LIMIT, 1, danbooru_client.MAX_LIMIT),
+            page=bounded(query.get("page", ["1"])[0], 1, 1, danbooru_client.MAX_PAGE),
+            rating=query.get("rating", ["general"])[0],
+            sort=query.get("sort", ["newest"])[0],
+        )
+        payload["original_query"] = raw_tags
+        payload["resolved_tags"] = resolved
+        if raw_tags:
+            try:
+                payload["local_matches"] = visual_tag_library.search(raw_tags, limit=1)["matched"]
+            except Exception:  # noqa: BLE001 - 本地索引不可用不影响云端结果
+                payload["local_matches"] = 0
+        self.send_json(payload)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         try:
@@ -6039,6 +6154,45 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/tags":
                 query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0]
                 self.send_json({"tags": search_tags(query[:100]), "total": len(TAG_INDEX)})
+            elif parsed.path == "/api/visual-tags":
+                query = urllib.parse.parse_qs(parsed.query)
+                if query.get("stats", [""])[0] in {"1", "true", "yes"}:
+                    self.send_json({"ok": True, **visual_tag_library.stats()})
+                else:
+                    family = query.get("family", [""])[0][:40]
+                    dialect = normalize_dialect_choice(query.get("dialect", [""])[0])
+                    payload = visual_tag_library.search(
+                        query.get("q", [""])[0][:120],
+                        limit=bounded(query.get("limit", ["48"])[0], 48, 1, visual_tag_library.MAX_SEARCH_LIMIT),
+                        category=query.get("category", [""])[0][:60],
+                    )
+                    resolved = prompt_dialect.resolve_dialect(family, dialect)
+                    for item in payload["results"]:
+                        kind = prompt_dialect.classify_tag(item["tag"], dialect_categories())
+                        item["kind"] = kind
+                        item["formatted"] = prompt_dialect.format_tag(item["tag"], resolved, kind)
+                    payload["dialect"] = dialect
+                    payload["family"] = family
+                    payload["resolved_dialect"] = resolved
+                    payload["dialect_description"] = prompt_dialect.describe(dialect, family)
+                    self.send_json(payload)
+            elif parsed.path == "/api/tag-dialect":
+                query = urllib.parse.parse_qs(parsed.query)
+                tags = [item.strip() for item in query.get("tags", [""])[0].split(",") if item.strip()][:64]
+                if not tags:
+                    self.send_json({"ok": True, "dialects": prompt_dialect.DIALECTS,
+                                    "default": prompt_dialect.DEFAULT_DIALECT,
+                                    "kinds": prompt_dialect.KIND_LABELS})
+                else:
+                    self.send_json({"ok": True, **format_prompt_tags(
+                        tags,
+                        family=query.get("family", [""])[0][:40],
+                        dialect=query.get("dialect", [""])[0],
+                    )})
+            elif parsed.path == "/api/visual-tags/image":
+                self.serve_visual_tag_image(urllib.parse.parse_qs(parsed.query))
+            elif parsed.path == "/api/danbooru/posts":
+                self.serve_danbooru_posts(urllib.parse.parse_qs(parsed.query))
             elif parsed.path == "/api/lora-notes":
                 self.send_json({"notes": load_lora_notes()})
             elif parsed.path == "/api/lora-aliases":
@@ -6106,7 +6260,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/camera-prompt", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -6405,6 +6559,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(compile_prompt(data))
             elif self.path == "/api/camera-prompt":
                 self.send_json(camera_control.preview_response(data))
+            elif self.path == "/api/visual-tags/rebuild":
+                override = str(data.get("root") or "").strip()
+                visual_tag_library.build_index(Path(override) if override else None)
+                self.send_json({"ok": True, **visual_tag_library.stats()})
             elif self.path == "/api/preview-pose":
                 self.send_json(comfy_json("/prompt", "POST", build_pose_preview_workflow(data)))
             elif self.path == "/api/clarity-upscale":
