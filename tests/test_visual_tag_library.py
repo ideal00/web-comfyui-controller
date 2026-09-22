@@ -21,6 +21,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
+from easy_panel_app import danbooru_client
 from easy_panel_app import visual_tag_library as vtl
 
 # 体系一：鞋子类（Danbooru tag / 中文释义 / 详细释义 / 分类），带 BOM 且用 div 分隔
@@ -583,6 +584,73 @@ class DanbooruClientTests(unittest.TestCase):
         self.assertEqual("", self.client.resolve_post_image("404"))
 
 
+class DanbooruTagSuggestionTests(unittest.TestCase):
+    """标签补全：输 high 查不到图（Danbooru 只认完整标签），必须能给出真实标签建议。"""
+
+    def setUp(self):
+        from easy_panel_app import danbooru_client
+
+        self.client = danbooru_client
+        self.client.clear_cache()
+
+    def tearDown(self):
+        self.client.clear_cache()
+
+    def test_search_tags_normalizes_and_filters(self):
+        seen = []
+
+        def fetcher(url):
+            seen.append(url)
+            return [
+                {"name": "high_heels", "post_count": 293094, "category": 0},
+                {"name": "highres", "post_count": 8201719, "category": 0},
+                {"name": ":d", "post_count": 5, "category": 0},  # kaomoji 不能进 Prompt
+                {"name": "", "post_count": 3, "category": 0},
+            ]
+
+        payload = self.client.search_tags("high", fetcher=fetcher)
+        self.assertEqual(["high_heels", "highres"], [item["tag"] for item in payload["results"]])
+        self.assertEqual(293094, payload["results"][0]["post_count"])
+        query = urllib.parse.unquote(seen[0])
+        self.assertIn("search[name_matches]=high*", query)
+        self.assertIn("search[order]=count", query)
+
+    def test_search_tags_maps_kind_from_category(self):
+        payload = self.client.search_tags("foo", fetcher=lambda url: [
+            {"name": "foo_artist", "post_count": 10, "category": 1},
+            {"name": "foo_character", "post_count": 9, "category": 4},
+        ])
+        self.assertEqual(["artist", "character"], [item["kind"] for item in payload["results"]])
+
+    def test_search_tags_blank_guard(self):
+        for term in ("", "   ", "*"):
+            payload = self.client.search_tags(term, fetcher=lambda url: [])
+            self.assertTrue(payload["error"], term)
+            self.assertEqual([], payload["results"])
+
+    def test_search_tags_caches_and_degrades(self):
+        calls = []
+
+        def fetcher(url):
+            calls.append(url)
+            return [{"name": "highleg", "post_count": 7, "category": 0}]
+
+        self.client.search_tags("high", fetcher=fetcher)
+        cached = self.client.search_tags("high", fetcher=fetcher)
+        self.assertEqual(1, len(calls), "重复补全应命中缓存")
+        self.assertTrue(cached["cached"])
+
+        def broken(url):
+            raise urllib.error.HTTPError(url, 503, "slow", {}, None)
+
+        self.client.clear_cache()
+        first = self.client.search_tags("high", fetcher=broken)
+        self.assertEqual([], first["results"])
+        self.assertIn("503", first["error"])
+        # 503 后进入退避：后续请求直接回流控提示，不再打网络
+        self.assertIn("限流", self.client.search_tags("high", fetcher=broken)["error"])
+
+
 class PerformanceGuardTests(LibraryTestCase):
     """防回归：源目录扫描必须被缓存，否则并发请求（缩略图网格）会把面板拖死。
 
@@ -699,6 +767,24 @@ class ApiWiringTests(unittest.TestCase):
         # 因此源码里只允许出现在那句解释文案中。
         self.assertEqual(1, self.library_js.count("order:score"))
         self.assertIn('SORTS = { newest: "最新", oldest: "最旧" }', self.library_js)
+
+    def test_cloud_empty_state_offers_tag_completion(self):
+        """用户实测反馈：输 high 云端 0 结果，既没解释也没补全入口（high 不是完整标签）。"""
+        import inspect
+
+        self.assertIn('"/api/danbooru/tags"', self.panel_source)
+        self.assertIn("danbooru_client.search_tags(", self.panel_source)
+        self.assertIn("def search_tags(", inspect.getsource(danbooru_client))
+        self.assertIn("function loadTagSuggestions(term)", self.library_js)
+        self.assertIn('id="vtlSuggest"', self.library_js)
+        self.assertIn('class="vtl-suggest-btn"', self.library_js)
+        # 点建议 → 立即用完整标签重新云端搜索
+        self.assertIn('searchTag(chip.dataset.tag, "cloud")', self.library_js)
+        # 空结果必须解释原因（标签不完整 / 分级过滤 / 限流）
+        self.assertIn("标签不完整", self.library_js)
+        self.assertIn("分级过滤太窄", self.library_js)
+        self.assertIn("没有以", self.library_js)
+        self.assertNotIn("输入英文 tag 后查询云端", self.library_js)
 
 
 if __name__ == "__main__":

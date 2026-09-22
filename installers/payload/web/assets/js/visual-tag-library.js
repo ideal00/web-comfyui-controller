@@ -489,6 +489,51 @@
     </article>`;
   }
 
+  function emptyHint() {
+    if (state.source === "local") {
+      return state.query
+        ? `<div class="vtl-empty">${state.category ? `分类「${esc(state.category)}」里没有“${esc(state.query)}”。` : `本地词条库没有“${esc(state.query)}”。`}${
+            state.category ? '<button type="button" class="vtl-clear-category">清除分类筛选</button>' : ""
+          }<button type="button" class="vtl-tocloud">☁ 去 Danbooru 云端查</button></div>`
+        : `<div class="vtl-empty">输入关键词搜索本地精选词条，或留空浏览全部。</div>`;
+    }
+    // 云端：Danbooru 只认**完整**标签（输 high 查不到图）+ 分级过滤会进一步收窄结果。
+    const info = state.meta && state.meta.query_tags;
+    const typed = ((info && info.tags) || []).join(" ");
+    return `<div class="vtl-empty">云端没有匹配结果。可能原因：
+      <b>①</b> 标签不完整（Danbooru 要完整标签，如 <code>high_heels</code> 而不是 <code>high</code>）；
+      <b>②</b> 分级过滤太窄（当前 <b>${esc(RATINGS[state.rating] || state.rating)}</b>）；
+      <b>③</b> 刚被限流（稍等十几秒重试）。
+      ${typed ? `<button type="button" class="vtl-suggest-btn" data-term="${esc(typed)}">⚡ 补全「${esc(typed)}」相关标签</button>` : ""}
+    </div>`;
+  }
+
+  async function loadTagSuggestions(term) {
+    const box = byId("vtlSuggest");
+    if (!box) return;
+    const needle = String(term || "").trim().replace(/[*\s]+$/, "");
+    if (!needle) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `<span class="vtl-tagpanel-count">正在查以「${esc(needle)}」开头的标签…</span>`;
+    try {
+      const data = await (await fetch("/api/danbooru/tags?" + new URLSearchParams({ q: needle, limit: "12" }))).json();
+      if (data.error) throw new Error(data.error);
+      const items = (data.results || []).filter((item) => item.tag.toLowerCase() !== needle.toLowerCase());
+      if (!items.length) {
+        box.textContent = `没有以「${needle}」开头的标签，试试换一个词。`;
+        return;
+      }
+      box.innerHTML = `<span class="vtl-grouplabel">标签补全</span>` + items.map((item) =>
+        `<button type="button" class="vtl-suggest" data-tag="${esc(item.tag)}" title="点击搜索「${esc(item.tag)}」">${esc(item.tag)} <small>${item.post_count.toLocaleString()}</small></button>`).join("");
+    } catch (error) {
+      box.textContent = `标签补全失败：${error.message}`;
+    }
+  }
+
   function renderGrid() {
     const grid = byId("vtlGrid");
     if (!grid) return;
@@ -499,18 +544,27 @@
       return;
     }
     if (!state.results.length) {
-      const filtered = state.source === "local" && state.category;
-      const hint = state.source === "local" && state.query
-        ? `<div class="vtl-empty">${filtered ? `分类「${esc(state.category)}」里没有“${esc(state.query)}”。` : `本地词条库没有“${esc(state.query)}”。`}${
-          filtered ? '<button type="button" class="vtl-clear-category">清除分类筛选</button>' : ""
-        }<button type="button" class="vtl-tocloud">☁ 去 Danbooru 云端查</button></div>`
-        : `<div class="vtl-empty">${state.source === "cloud" ? "输入英文 tag 后查询云端；中文会先自动解析。" : "输入关键词搜索本地精选词条，或留空浏览全部。"}</div>`;
-      grid.innerHTML = hint;
+      grid.innerHTML = emptyHint();
       if (thumbHint) thumbHint.textContent = "";
+      if (state.source === "cloud") {
+        const info = state.meta && state.meta.query_tags;
+        const first = ((info && info.tags) || [])[0] || "";
+        if (state.error) {
+          const box = byId("vtlSuggest");
+          if (box) box.hidden = true;
+        } else if (first) {
+          loadTagSuggestions(first);
+        }
+      }
       return;
     }
     grid.innerHTML = state.results.map((item) =>
       state.source === "cloud" ? cloudCard(item) : localCard(item)).join("");
+    const suggestBox = byId("vtlSuggest");
+    if (suggestBox) {
+      suggestBox.hidden = true;
+      suggestBox.innerHTML = "";
+    }
     // 展开过的云端卡片要重新填回 Tags 面板（懒渲染）。
     Object.keys(state.expanded).forEach((id) => {
       if (state.expanded[id]) refreshPostTags(id);
@@ -646,6 +700,7 @@
           <button type="button" id="vtlRebuild" class="vtl-ghost" title="源文档有改动时重建本地索引">重建索引</button>
         </div>
         <div id="vtlStatus" class="vtl-status"></div>
+        <div id="vtlSuggest" class="vtl-suggest-row" hidden></div>
         <div id="vtlThumbHint" class="vtl-thumb-hint"></div>
         <div id="vtlNotice" class="vtl-notice" hidden></div>
         <div id="vtlGrid" class="vtl-grid"></div>
@@ -713,6 +768,10 @@
       loadCloud();
     });
     byId("vtlRebuild").addEventListener("click", rebuildIndex);
+    byId("vtlSuggest").addEventListener("click", (event) => {
+      const chip = event.target.closest(".vtl-suggest");
+      if (chip) searchTag(chip.dataset.tag, "cloud");
+    });
     byId("vtlCopy").addEventListener("click", copySelected);
     byId("vtlInsert").addEventListener("click", () => insertSelected("section"));
     byId("vtlInsertHires").addEventListener("click", () => insertSelected("hires"));
@@ -807,6 +866,11 @@
         state.page = 1;
         saveState();
         loadLocal();
+        return;
+      }
+      const suggestBtn = event.target.closest(".vtl-suggest-btn");
+      if (suggestBtn) {
+        loadTagSuggestions(suggestBtn.dataset.term);
         return;
       }
       if (event.target.closest(".vtl-add")) {
@@ -906,6 +970,12 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
 .vtl-tagpanel-actions button{background:var(--token,#282d40);border:1px solid var(--line,#343d53);color:inherit;border-radius:7px;padding:2px 8px;cursor:pointer;font-size:calc(var(--input-font-size,15px) - 4px)}
 .vtl-related-box{display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
 .vtl-related-box[hidden]{display:none}
+.vtl-suggest-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 14px 8px;color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-suggest-row[hidden]{display:none}
+.vtl-suggest,.vtl-suggest-btn{background:var(--token,#282d40);border:1px solid var(--line,#343d53);color:inherit;border-radius:999px;padding:2px 10px;cursor:pointer;font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-suggest:hover,.vtl-suggest-btn:hover{border-color:var(--accent,#9174ff)}
+.vtl-suggest small{color:var(--muted,#adb7cb)}
+.vtl-empty code{background:var(--token,#282d40);border-radius:4px;padding:0 4px}
 .vtl-foot{display:flex;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line,#343d53);flex-wrap:wrap}
 .vtl-foot-count{color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px);flex:1 1 200px}
 .vtl-foot-actions{display:flex;gap:6px;flex-wrap:wrap}

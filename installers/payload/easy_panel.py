@@ -6218,6 +6218,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.serve_visual_tag_image(urllib.parse.parse_qs(parsed.query))
             elif parsed.path == "/api/danbooru/posts":
                 self.serve_danbooru_posts(urllib.parse.parse_qs(parsed.query))
+            elif parsed.path == "/api/danbooru/tags":
+                query = urllib.parse.parse_qs(parsed.query)
+                self.send_json(danbooru_client.search_tags(
+                    query.get("q", [""])[0][:60],
+                    limit=bounded(query.get("limit", ["12"])[0], 12, 1, 40),
+                ))
             elif parsed.path == "/api/danbooru/related":
                 query = urllib.parse.parse_qs(parsed.query)
                 tag = query.get("tag", [""])[0][:120].strip()

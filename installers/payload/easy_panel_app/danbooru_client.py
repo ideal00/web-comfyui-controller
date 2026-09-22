@@ -399,6 +399,68 @@ def split_search_tags(query: str) -> dict:
     return {"tags": tags, "filters": filters, "single": tags[0] if len(tags) == 1 else ""}
 
 
+def search_tags(term: str, limit: int = 12, fetcher=None, use_cache: bool = True) -> dict:
+    """标签补全：查以 ``term`` 开头的真实标签（Danbooru 只认完整标签，输 high 查不到图）。"""
+    needle = str(term or "").strip().strip("*").strip()
+    payload = {"source": "danbooru", "query": needle, "results": [], "error": "",
+               "cached": False, "base": base_url()}
+    if not needle:
+        payload["error"] = "请输入要补全的标签前缀。"
+        return payload
+    try:
+        safe_limit = max(1, min(int(limit or 12), 40))
+    except (TypeError, ValueError):
+        safe_limit = 12
+    key = ("tags", needle.lower(), safe_limit)
+    if use_cache:
+        cached = _cached(key)
+        if cached:
+            return cached
+    with _LOCK:
+        backoff_left = _BACKOFF_UNTIL["ts"] - time.monotonic()
+    if backoff_left > 0:
+        payload["error"] = f"云端刚被限流，{int(backoff_left) + 1} 秒后可重试。"
+        payload["retry_after"] = int(backoff_left) + 1
+        return payload
+    params = {
+        "search[name_matches]": f"{needle}*",
+        "search[order]": "count",
+        "limit": safe_limit,
+    }
+    url = f"{base_url()}/tags.json?{urllib.parse.urlencode(params)}"
+    fetch = fetcher or _default_fetcher
+    _wait_for_slot()
+    try:
+        raw = fetch(url)
+    except urllib.error.HTTPError as exc:  # noqa: PERF203
+        code = getattr(exc, "code", 0)
+        with _LOCK:
+            _BACKOFF_UNTIL["ts"] = time.monotonic() + (BACKOFF_SECONDS if code in {429, 503} else 15.0)
+        payload["error"] = f"云端返回错误（HTTP {code}）。"
+        return payload
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        payload["error"] = f"无法连接 Danbooru：{exc}"
+        return payload
+    except (ValueError, json.JSONDecodeError):
+        payload["error"] = "云端返回内容无法解析。"
+        return payload
+    results = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or not is_promptable_tag(name):
+            continue
+        results.append({
+            "tag": name,
+            "kind": DANBOORU_TAG_KIND.get(int(item.get("category") or 0), "general"),
+            "post_count": int(item.get("post_count") or 0),
+        })
+    payload["results"] = results
+    payload["received"] = len(results)
+    return _store(key, payload)
+
+
 def related_tags(tag: str, limit: int = 24, category: str = "",
                  fetcher=None, use_cache: bool = True) -> dict:
     """查相关标签（Danbooru related_tag.json）；失败同样降级为带 error 的结果。"""
