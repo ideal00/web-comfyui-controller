@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import threading
 import time
@@ -58,6 +59,20 @@ _LOCK = threading.RLock()
 _CACHE: dict[tuple, tuple[float, dict]] = {}
 _LAST_CALL = {"ts": 0.0}
 _BACKOFF_UNTIL = {"ts": 0.0}
+
+#: 帖图索引：搜索/缓存过的帖子的预览图与原图 URL，供 /api/danbooru/image 代理使用
+#: （代理不能用任意 URL（SSRF），只能解析“我们确实搜索到过的帖子”的图片）。
+_POST_INDEX: dict[str, dict] = {}
+_POST_INDEX_LIMIT = 4000
+
+#: 图片字节缓存（仅内存）：预览图约 5–15KB，300 张 ≈ 3MB；重复打开对话框直接命中。
+IMAGE_CACHE: dict[str, tuple[float, bytes]] = {}
+IMAGE_CACHE_LIMIT = 300
+IMAGE_CACHE_TTL = 1800.0
+IMAGE_KINDS = {"preview": "preview_url", "sample": "sample_url"}
+IMAGE_MIN_INTERVAL = 0.05
+IMAGE_MAX_BYTES = 4_000_000
+_IMAGE_LAST_CALL = {"ts": 0.0}
 
 
 def base_url() -> str:
@@ -170,6 +185,101 @@ def normalize_post(post: dict) -> dict | None:
     }
 
 
+def _index_posts(cards: list[dict]) -> None:
+    """记住搜到的帖子，供图片代理解析（不信任外部传入的 URL）。"""
+    with _LOCK:
+        for card in cards:
+            post_id = str(card.get("post_id") or "")
+            if not post_id:
+                continue
+            _POST_INDEX[post_id] = {
+                "preview_url": card.get("preview_url") or "",
+                "sample_url": card.get("sample_url") or "",
+                "ts": time.monotonic(),
+            }
+        if len(_POST_INDEX) > _POST_INDEX_LIMIT:
+            oldest = sorted(_POST_INDEX.items(), key=lambda pair: pair[1].get("ts", 0.0))
+            for stale_id, _ in oldest[: _POST_INDEX_LIMIT // 4]:
+                _POST_INDEX.pop(stale_id, None)
+
+
+def resolve_post_image(post_id: str, kind: str = "preview") -> str:
+    """帖子编号 → 图片 URL（仅限本次进程搜到过的帖子；未知则返回空）。"""
+    key = str(post_id or "").strip()
+    field = IMAGE_KINDS.get(str(kind or "preview").strip().lower(), "preview_url")
+    if not key:
+        return ""
+    with _LOCK:
+        entry = _POST_INDEX.get(key)
+    return str(entry.get(field) or "") if entry else ""
+
+
+def _image_get(url: str, timeout: float = REQUEST_TIMEOUT):
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read(IMAGE_MAX_BYTES + 1)
+
+
+def fetch_image(url: str, fetcher=None, use_cache: bool = True) -> bytes | None:
+    """抓取帖图字节（带内存缓存与轻量限速）；失败返回 None，绝不抛错给上层。"""
+    target = str(url or "").strip()
+    if not target:
+        return None
+    now = time.monotonic()
+    if use_cache:
+        with _LOCK:
+            cached = IMAGE_CACHE.get(target)
+        if cached and now - cached[0] <= IMAGE_CACHE_TTL:
+            return cached[1]
+    fetch = fetcher or _image_get
+    with _LOCK:
+        gap = now - _IMAGE_LAST_CALL["ts"]
+    if gap < IMAGE_MIN_INTERVAL:
+        time.sleep(IMAGE_MIN_INTERVAL - gap)
+    with _LOCK:
+        _IMAGE_LAST_CALL["ts"] = time.monotonic()
+    try:
+        data = fetch(target)
+    except Exception:  # noqa: BLE001 - 图片拿不到就当没有（前端回退占位符）
+        return None
+    if not data or len(data) > IMAGE_MAX_BYTES:
+        return None
+    with _LOCK:
+        if len(IMAGE_CACHE) >= IMAGE_CACHE_LIMIT:
+            oldest = sorted(IMAGE_CACHE.items(), key=lambda pair: pair[1][0])
+            for stale_key, _ in oldest[: IMAGE_CACHE_LIMIT // 4]:
+                IMAGE_CACHE.pop(stale_key, None)
+        IMAGE_CACHE[target] = (time.monotonic(), data)
+    return data
+
+
+def prefetch_images(cards: list[dict], workers: int = 6, kind: str = "preview") -> bool:
+    """搜索返回后后台预取预览图：浏览器同源并发只有 6，且 CDN 单张约 1–2 秒，
+    后台先抓一轮可以让首屏尾部与再次打开都接近瞬时。"""
+    urls = []
+    for card in cards:
+        url = str(card.get("preview_url") or "") if kind == "preview" else str(card.get("sample_url") or "")
+        if not url:
+            continue
+        with _LOCK:
+            cached = IMAGE_CACHE.get(url)
+        if cached and time.monotonic() - cached[0] <= IMAGE_CACHE_TTL:
+            continue
+        urls.append(url)
+    if not urls:
+        return False
+
+    def worker() -> None:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+                list(pool.map(lambda item: fetch_image(item), urls))
+        except Exception:  # noqa: BLE001 - 预取失败不影响按需加载
+            pass
+
+    threading.Thread(target=worker, name="danbooru-image-prefetch", daemon=True).start()
+    return True
+
+
 def search_posts(tags: str, limit: int = DEFAULT_LIMIT, page: int = 1,
                  rating: str = "general", sort: str = "newest",
                  fetcher=None, use_cache: bool = True) -> dict:
@@ -260,6 +370,8 @@ def search_posts(tags: str, limit: int = DEFAULT_LIMIT, page: int = 1,
             cards.append(card)
     payload["results"] = cards
     payload["received"] = len(cards)
+    _index_posts(cards)
+    prefetch_images(cards)
     return _store(key, payload)
 
 
@@ -273,4 +385,6 @@ def clear_cache() -> None:
     """清空云端缓存与退避（测试与手动重试用）。"""
     with _LOCK:
         _CACHE.clear()
+        _POST_INDEX.clear()
+        IMAGE_CACHE.clear()
         _BACKOFF_UNTIL["ts"] = 0.0

@@ -379,6 +379,7 @@ def ensure_index(force: bool = False) -> dict:
         "signature": signature,
     }
     _INDEX_STATE.update({"key": str(root), "ts": now, "value": state})
+    warm_thumbnails_async()
     return state
 
 
@@ -565,21 +566,49 @@ def _thumb_key(path: Path, size: int) -> str:
     return hashlib.sha1(f"{path}|{stamp}|{size}".encode("utf-8")).hexdigest()
 
 
+_THUMB_MEMORY: dict[str, bytes] = {}
+_THUMB_MEMORY_LIMIT = 512
+_WARM_STATE: dict = {"started": False}
+#: 后台预热张数：冷缓存单张约 15ms（JPEG draft 降采样），400 张 ≈ 6 秒后台跑完，
+#: 之后首次打开对话框基本无需现生成。
+THUMB_WARM_LIMIT = 400
+
+
+def _remember_thumb(key: str, data: bytes) -> None:
+    if len(_THUMB_MEMORY) >= _THUMB_MEMORY_LIMIT:
+        for stale in list(_THUMB_MEMORY)[: _THUMB_MEMORY_LIMIT // 4]:
+            _THUMB_MEMORY.pop(stale, None)
+    _THUMB_MEMORY[key] = data
+
+
 def thumbnail_bytes(path: Path, size: int = DEFAULT_THUMB_SIZE) -> bytes | None:
-    """生成/读取缩略图 JPEG；Pillow 不可用时返回 None（调用方回退原图）。"""
+    """生成/读取缩略图 JPEG；Pillow 不可用时返回 None（调用方回退原图）。
+
+    三级读取：内存缓存 → 磁盘缓存 → 现生成（JPEG 先 draft 降采样，解码快很多）。
+    """
     try:
         from PIL import Image
     except Exception:  # noqa: BLE001 - 缺 Pillow 时优雅降级
         return None
     target = max(MIN_THUMB_SIZE, min(int(size or DEFAULT_THUMB_SIZE), MAX_THUMB_SIZE))
-    cache_file = THUMB_DIR / f"{_thumb_key(path, target)}.jpg"
+    key = _thumb_key(path, target)
+    cached = _THUMB_MEMORY.get(key)
+    if cached:
+        return cached
+    cache_file = THUMB_DIR / f"{key}.jpg"
     if cache_file.is_file():
         try:
-            return cache_file.read_bytes()
+            data = cache_file.read_bytes()
         except OSError:
-            return None
+            data = b""
+        if data:
+            _remember_thumb(key, data)
+            return data
     try:
         with Image.open(path) as image:
+            if image.format == "JPEG":
+                # draft 让 JPEG 直接以 1/2^n 比例解码，大图缩略快一个数量级。
+                image.draft("RGB", (target, target))
             image.load()
             if image.mode in {"RGBA", "LA", "P"}:
                 background = Image.new("RGB", image.size, (255, 255, 255))
@@ -594,9 +623,51 @@ def thumbnail_bytes(path: Path, size: int = DEFAULT_THUMB_SIZE) -> bytes | None:
         data = buffer.getvalue()
     except Exception:  # noqa: BLE001 - 单张坏图不影响面板
         return None
+    _remember_thumb(key, data)
     try:
         THUMB_DIR.mkdir(parents=True, exist_ok=True)
         cache_file.write_bytes(data)
     except OSError:
         pass
     return data
+
+
+def prewarm_thumbnails(limit: int = THUMB_WARM_LIMIT, size: int = DEFAULT_THUMB_SIZE) -> int:
+    """同步预热前 ``limit`` 条词条的缩略图（已缓存的不重做）；返回新生成数量。
+
+    源目录在预热期间变化（切库/测试换临时目录）时立即停手，避免给错的库干活。
+    """
+    expected_root = str(library_root())
+    generated = 0
+    for row in _rows()[: max(0, int(limit))]:
+        if str(library_root()) != expected_root:
+            break
+        path = image_path(row)
+        if not path:
+            continue
+        key = _thumb_key(path, size)
+        if key in _THUMB_MEMORY or (THUMB_DIR / f"{key}.jpg").is_file():
+            continue
+        if thumbnail_bytes(path, size):
+            generated += 1
+    return generated
+
+
+def warm_thumbnails_async(limit: int = THUMB_WARM_LIMIT) -> bool:
+    """后台线程预热缩略图（每进程只跑一次），避免首次打开对话框时逐张现生成。
+
+    ⚠️ 测试里要把 ``_WARM_STATE["started"]`` 置为 True：否则后台线程会拿着临时
+    源目录的图片句柄，让 TemporaryDirectory 删除时在 Windows 上报 PermissionError。
+    """
+    if _WARM_STATE.get("started"):
+        return False
+    _WARM_STATE["started"] = True
+
+    def worker() -> None:
+        try:
+            prewarm_thumbnails(limit)
+        except Exception:  # noqa: BLE001 - 预热失败不影响按需生成
+            pass
+
+    threading.Thread(target=worker, name="visual-tag-thumb-warm", daemon=True).start()
+    return True

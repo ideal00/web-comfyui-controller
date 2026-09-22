@@ -13,6 +13,7 @@
   const LOCAL_API = "/api/visual-tags";
   const IMAGE_API = "/api/visual-tags/image";
   const CLOUD_API = "/api/danbooru/posts";
+  const CLOUD_IMAGE_API = "/api/danbooru/image";
   const STORAGE_KEY = "easyPanelVisualTagLibraryV1";
   const LOCAL_LIMIT = 48;
   const CLOUD_LIMIT = 20;
@@ -130,7 +131,9 @@
       state.results = data.results || [];
       state.meta = data;
       state.categories = data.categories || [];
+      // 搜索响应自带总数/分类/索引时间，不必再单独请求一次统计。
       state.localTotal = data.total || 0;
+      state.indexGeneratedAt = data.generated_at || "";
     } catch (error) {
       state.results = [];
       state.error = `本地词条库读取失败：${error.message}`;
@@ -180,16 +183,6 @@
   async function reload() {
     if (state.source === "cloud") return loadCloud();
     return loadLocal();
-  }
-
-  async function loadStats() {
-    try {
-      const data = await (await fetch(`${LOCAL_API}?stats=1`)).json();
-      state.localTotal = data.entries || 0;
-      state.categories = data.categories || [];
-      state.meta = Object.assign({}, state.meta, { stats: data });
-      renderStatus();
-    } catch (_error) { /* 统计失败不影响使用 */ }
   }
 
   async function rebuildIndex() {
@@ -328,9 +321,9 @@
     const size = card.width && card.height ? `${card.width}×${card.height}` : "";
     return `<article class="vtl-card vtl-cloud${selected ? " selected" : ""}" data-post="${esc(card.id)}">
       <div class="vtl-thumb">
-        <img loading="lazy" src="${esc(card.preview_url)}" alt="post ${esc(String(card.post_id))}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'vtl-nothumb',textContent:'预览不可用'}))">
+        <img loading="lazy" src="${CLOUD_IMAGE_API}?post=${encodeURIComponent(String(card.post_id))}&kind=preview" alt="post ${esc(String(card.post_id))}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'vtl-nothumb',textContent:'预览不可用'}))">
         <span class="vtl-badge">${badge}</span>
-        ${card.sample_url ? `<button type="button" class="vtl-full" data-full="${esc(card.sample_url)}" title="查看示例大图">⤢</button>` : ""}
+        ${card.sample_url ? `<button type="button" class="vtl-full" data-full="${CLOUD_IMAGE_API}?post=${encodeURIComponent(String(card.post_id))}&kind=sample" title="查看示例大图">⤢</button>` : ""}
       </div>
       <div class="vtl-body">
         <div class="vtl-tag">#${esc(String(card.post_id))}${size ? ` · ${esc(size)}` : ""}</div>
@@ -361,6 +354,28 @@
     }
     grid.innerHTML = state.results.map((item) =>
       state.source === "cloud" ? cloudCard(item) : localCard(item)).join("");
+    trackThumbProgress();
+  }
+
+  function trackThumbProgress() {
+    // 冷缓存时 48 张缩略图要现生成；磁盘缓存命中后几乎瞬回。
+    const images = [...document.querySelectorAll("#vtlGrid .vtl-thumb img")];
+    const hint = byId("vtlThumbHint");
+    if (!hint) return;
+    const pending = images.filter((image) => !image.complete);
+    if (!pending.length) {
+      hint.textContent = "";
+      return;
+    }
+    const repaint = () => {
+      const left = images.filter((image) => !image.complete).length;
+      hint.textContent = left ? `缩略图加载中…（${images.length - left}/${images.length}）` : "";
+    };
+    repaint();
+    pending.forEach((image) => {
+      image.addEventListener("load", repaint, { once: true });
+      image.addEventListener("error", repaint, { once: true });
+    });
   }
 
   function renderStatus() {
@@ -368,8 +383,7 @@
     if (!status) return;
     const parts = [];
     if (state.source === "local") {
-      const stats = (state.meta && state.meta.stats) || {};
-      parts.push(`本地精选：${state.localTotal} 条${state.meta && state.meta.matched != null ? ` · 命中 ${state.meta.matched}` : ""}${stats.generated_at ? ` · 索引 ${stats.generated_at}` : ""}`);
+      parts.push(`本地精选：${state.localTotal} 条${state.meta && state.meta.matched != null ? ` · 命中 ${state.meta.matched}` : ""}${state.indexGeneratedAt ? ` · 索引 ${state.indexGeneratedAt}（源文档未改不会重建）` : ""}`);
     } else {
       parts.push(`Danbooru 云端：每页 ${CLOUD_LIMIT} 张 · 第 ${state.page} 页${state.meta && state.meta.composed_query ? ` · 查询 ${state.meta.composed_query}` : ""}`);
     }
@@ -458,6 +472,7 @@
           <button type="button" id="vtlRebuild" class="vtl-ghost" title="源文档有改动时重建本地索引">重建索引</button>
         </div>
         <div id="vtlStatus" class="vtl-status"></div>
+        <div id="vtlThumbHint" class="vtl-thumb-hint"></div>
         <div id="vtlNotice" class="vtl-notice" hidden></div>
         <div id="vtlGrid" class="vtl-grid"></div>
         <footer class="vtl-foot">
@@ -616,14 +631,17 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
 .vtl-toolbar input,.vtl-toolbar select{background:var(--bg,#10131c);border:1px solid var(--line,#343d53);color:inherit;border-radius:8px;padding:6px 8px;font-size:var(--input-font-size,15px)}
 .vtl-toolbar .vtl-search{flex:1 1 260px;min-width:200px}
 .vtl-status{display:flex;gap:10px;justify-content:space-between;padding:0 14px 6px;color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-thumb-hint{padding:0 14px 6px;color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px);min-height:14px}
 .vtl-notice{margin:0 14px 8px;padding:6px 10px;border-radius:8px;background:rgba(145,116,255,.12);border:1px solid rgba(145,116,255,.35);font-size:calc(var(--input-font-size,15px) - 3px)}
 .vtl-notice.error{background:rgba(255,110,110,.12);border-color:rgba(255,110,110,.45);color:#ffb4b4}
-.vtl-grid{flex:1 1 auto;overflow:auto;display:grid;gap:10px;padding:4px 14px 12px;grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}
+.vtl-grid{flex:1 1 auto;overflow:auto;display:grid;gap:10px;padding:4px 14px 12px;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));align-items:start;grid-auto-rows:min-content}
 .vtl-empty{grid-column:1/-1;color:var(--muted,#adb7cb);padding:18px 4px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.vtl-card{background:var(--card,#1b202c);border:1px solid var(--line,#343d53);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;transition:border-color .15s,transform .15s}
+.vtl-card{background:var(--card,#1b202c);border:1px solid var(--line,#343d53);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;transition:border-color .15s,transform .15s;align-self:start}
 .vtl-card:hover{transform:translateY(-1px)}
 .vtl-card.selected{border-color:var(--accent,#9174ff);box-shadow:0 0 0 1px var(--accent,#9174ff) inset}
-.vtl-thumb{position:relative;background:#0b0e15;aspect-ratio:3/4;display:flex;align-items:center;justify-content:center;overflow:hidden}
+/* ⚠️ 缩略图容器必须给**确定高度**：flex 项上的 aspect-ratio 在本页会被解析成 0 高度，
+   卡片 overflow:hidden 一裁，图就“看不见”了（图其实已加载）。 */
+.vtl-thumb{position:relative;background:#0b0e15;height:232px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;overflow:hidden}
 .vtl-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .vtl-nothumb{color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
 .vtl-badge{position:absolute;left:6px;top:6px;background:rgba(8,10,16,.72);border:1px solid var(--line,#343d53);border-radius:6px;padding:1px 6px;font-size:11px;letter-spacing:.5px}
@@ -698,7 +716,6 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
     if (state.results.length === 0 && !state.query) {
       state.category = state.category || "";
     }
-    if (!state.localTotal) loadStats();
     reload();
     const overlay = byId("vtlOverlay");
     if (overlay) overlay.hidden = false;

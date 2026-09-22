@@ -5802,6 +5802,29 @@ class Handler(BaseHTTPRequestHandler):
                 payload["local_matches"] = 0
         self.send_json(payload)
 
+    def serve_danbooru_image(self, query: dict):
+        """帖图代理：浏览器只连本机（CDN 在国内经常抽风），字节带内存缓存。
+
+        安全：只能解析本进程搜索过的帖子（``resolve_post_image``），不接受任意 URL。
+        """
+        url = danbooru_client.resolve_post_image(query.get("post", [""])[0],
+                                                query.get("kind", ["preview"])[0])
+        if not url:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        content = danbooru_client.fetch_image(url)
+        if not content:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        content_type = "image/png" if ".png" in url.lower() else "image/jpeg"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.add_rpg_session_header()
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         try:
@@ -6193,6 +6216,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.serve_visual_tag_image(urllib.parse.parse_qs(parsed.query))
             elif parsed.path == "/api/danbooru/posts":
                 self.serve_danbooru_posts(urllib.parse.parse_qs(parsed.query))
+            elif parsed.path == "/api/danbooru/image":
+                self.serve_danbooru_image(urllib.parse.parse_qs(parsed.query))
             elif parsed.path == "/api/lora-notes":
                 self.send_json({"notes": load_lora_notes()})
             elif parsed.path == "/api/lora-aliases":

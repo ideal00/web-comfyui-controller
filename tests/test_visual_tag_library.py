@@ -193,6 +193,11 @@ class LibraryTestCase(unittest.TestCase):
             patcher.start()
         vtl._ROWS_CACHE["signature"] = None
         vtl._ROWS_CACHE["rows"] = None
+        vtl._SIGNATURE_CACHE.update({"key": None, "ts": 0.0, "value": None})
+        vtl._INDEX_STATE.update({"key": None, "ts": 0.0, "value": None})
+        # 预热是运行时优化：测试里关掉，否则后台线程会拿着临时目录的图片句柄，
+        # 让 TemporaryDirectory 在 Windows 上报 PermissionError。
+        vtl._WARM_STATE["started"] = True
 
     def tearDown(self):
         for patcher in reversed(self.patchers):
@@ -319,6 +324,22 @@ class ThumbnailTests(LibraryTestCase):
         broken = self.root / "26-9-11 上衣" / "images" / "0001_tank_top.jpg"
         self.assertIsNone(vtl.thumbnail_bytes(broken))
 
+    def test_memory_cache_serves_without_disk(self):
+        vtl.ensure_index()
+        entry = next(row for row in vtl._rows() if row["tag"] == "shoes")
+        path = vtl.image_path(entry)
+        first = vtl.thumbnail_bytes(path)
+        self.assertTrue(first)
+        self.assertTrue(vtl._THUMB_MEMORY, "缩略图应进入内存缓存")
+        for cache_file in vtl.THUMB_DIR.glob("*.jpg"):
+            cache_file.unlink()          # 删掉磁盘缓存，内存仍应能直接返回
+        self.assertEqual(first, vtl.thumbnail_bytes(path))
+
+    def test_prewarm_generates_once_and_skips_cached(self):
+        vtl.ensure_index()
+        self.assertGreaterEqual(vtl.prewarm_thumbnails(3), 1)
+        self.assertEqual(0, vtl.prewarm_thumbnails(3), "已缓存的缩略图不该重复生成")
+
 
 class DanbooruClientTests(unittest.TestCase):
     """云端客户端的关键约束（不联网：全部注入 fetcher）。"""
@@ -400,6 +421,46 @@ class DanbooruClientTests(unittest.TestCase):
         self.assertTrue(payload["error"])
         self.assertEqual([], payload["results"])
 
+    def test_post_image_index_and_proxy_cache(self):
+        fetcher_calls = []
+
+        def search_fetcher(url):
+            return [{"id": 77, "preview_file_url": "https://cdn/p77.jpg",
+                     "large_file_url": "https://cdn/s77.jpg", "tag_string": "x"}]
+
+        def image_fetcher(url):
+            fetcher_calls.append(url)
+            return b"JPEGDATA"
+
+        self.client.search_posts("thighhighs", fetcher=search_fetcher)
+        self.assertEqual("https://cdn/p77.jpg", self.client.resolve_post_image("77"))
+        self.assertEqual("https://cdn/s77.jpg", self.client.resolve_post_image("77", "sample"))
+        self.assertEqual("", self.client.resolve_post_image("999"))
+        self.assertEqual("", self.client.resolve_post_image(""))
+
+        self.assertEqual(b"JPEGDATA", self.client.fetch_image("https://cdn/p77.jpg", fetcher=image_fetcher))
+        self.assertEqual(b"JPEGDATA", self.client.fetch_image("https://cdn/p77.jpg", fetcher=image_fetcher))
+        self.assertEqual(1, len(fetcher_calls), "第二次应该命中内存缓存")
+
+    def test_image_fetch_failures_are_swallowed(self):
+        def broken(url):
+            raise urllib.error.HTTPError(url, 404, "gone", {}, None)
+
+        self.assertIsNone(self.client.fetch_image("https://cdn/missing.jpg", fetcher=broken))
+        self.assertIsNone(self.client.fetch_image(""))
+        oversized = lambda url: b"x" * (self.client.IMAGE_MAX_BYTES + 10)  # noqa: E731
+        self.assertIsNone(self.client.fetch_image("https://cdn/huge.jpg", fetcher=oversized))
+
+    def test_proxy_resolves_only_known_posts(self):
+        # 代理只认“搜到过的帖子”：未知编号拿不到 URL，非法 kind 回退 preview
+        self.client.search_posts("shoes", fetcher=lambda url: [
+            {"id": 5, "preview_file_url": "https://cdn/p5.jpg",
+             "large_file_url": "https://cdn/s5.jpg", "tag_string": "x"}])
+        self.assertEqual("https://cdn/p5.jpg", self.client.resolve_post_image("5", "preview"))
+        self.assertEqual("https://cdn/p5.jpg", self.client.resolve_post_image("5", "evil"))
+        self.assertEqual("https://cdn/s5.jpg", self.client.resolve_post_image("5", "sample"))
+        self.assertEqual("", self.client.resolve_post_image("404"))
+
 
 class PerformanceGuardTests(LibraryTestCase):
     """防回归：源目录扫描必须被缓存，否则并发请求（缩略图网格）会把面板拖死。
@@ -441,10 +502,18 @@ class ApiWiringTests(unittest.TestCase):
 
     def test_get_endpoints_registered(self):
         for endpoint in ('"/api/visual-tags"', '"/api/visual-tags/image"', '"/api/danbooru/posts"',
-                         '"/api/tag-dialect"'):
+                         '"/api/danbooru/image"', '"/api/tag-dialect"'):
             self.assertIn(endpoint, self.panel_source, endpoint)
         self.assertIn("def serve_visual_tag_image", self.panel_source)
         self.assertIn("def serve_danbooru_posts", self.panel_source)
+        self.assertIn("def serve_danbooru_image", self.panel_source)
+
+    def test_cloud_cards_use_local_proxy_and_fixed_thumb_height(self):
+        # 云端图必须走本机代理（CDN 直连在国内很慢），且缩略图高度必须是确定值
+        self.assertIn('src="${CLOUD_IMAGE_API}?post=', self.library_js)
+        self.assertNotIn('src="${esc(card.preview_url)}"', self.library_js)
+        self.assertIn("height:232px;flex:0 0 auto", self.library_js)
+        self.assertNotIn("aspect-ratio:3/4;display:flex;align-items:center", self.library_js)
 
     def test_rebuild_endpoint_is_whitelisted(self):
         self.assertIn('"/api/visual-tags/rebuild"', self.panel_source)
