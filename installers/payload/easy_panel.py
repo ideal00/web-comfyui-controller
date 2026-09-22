@@ -5795,6 +5795,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         payload["original_query"] = raw_tags
         payload["resolved_tags"] = resolved
+        payload["query_tags"] = danbooru_client.split_search_tags(tags)
         if raw_tags:
             try:
                 payload["local_matches"] = visual_tag_library.search(raw_tags, limit=1)["matched"]
@@ -6217,6 +6218,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.serve_visual_tag_image(urllib.parse.parse_qs(parsed.query))
             elif parsed.path == "/api/danbooru/posts":
                 self.serve_danbooru_posts(urllib.parse.parse_qs(parsed.query))
+            elif parsed.path == "/api/danbooru/related":
+                query = urllib.parse.parse_qs(parsed.query)
+                tag = query.get("tag", [""])[0][:120].strip()
+                resolved = ""
+                if tag and visual_tag_library.has_cjk(tag):
+                    english = english_tag_for_text(tag)
+                    if english:
+                        tag, resolved = english, english
+                payload = danbooru_client.related_tags(
+                    tag,
+                    limit=bounded(query.get("limit", ["24"])[0], 24, 1, 60),
+                    category=query.get("category", [""])[0][:20],
+                )
+                payload["resolved_tags"] = resolved
+                self.send_json(payload)
             elif parsed.path == "/api/danbooru/image":
                 self.serve_danbooru_image(urllib.parse.parse_qs(parsed.query))
             elif parsed.path == "/api/lora-notes":

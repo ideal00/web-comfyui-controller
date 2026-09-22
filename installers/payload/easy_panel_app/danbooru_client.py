@@ -34,6 +34,8 @@ MIN_INTERVAL_SECONDS = 1.0
 BACKOFF_SECONDS = 45.0
 REQUEST_TIMEOUT = 20.0
 MAX_TAGS_PER_POST = 160
+#: related_tag 的相似度阈值：低于此值的多为泛化噪声（实测 high_heels 的同类约 0.25–0.44）。
+RELATED_MIN_SIMILARITY = 0.08
 
 #: UI 用的分级名 → Danbooru 单字母分级。
 RATING_CODES = {
@@ -54,6 +56,9 @@ SORT_TAGS = {
     "oldest": "order:id",
 }
 SORT_LABELS = {"newest": "最新", "oldest": "最旧"}
+
+#: Danbooru tag 类别号 → 语义类别（related_tag 返回里带 category）。
+DANBOORU_TAG_KIND = {0: "general", 1: "artist", 3: "copyright", 4: "character", 5: "meta"}
 
 _LOCK = threading.RLock()
 _CACHE: dict[tuple, tuple[float, dict]] = {}
@@ -372,6 +377,120 @@ def search_posts(tags: str, limit: int = DEFAULT_LIMIT, page: int = 1,
     payload["received"] = len(cards)
     _index_posts(cards)
     prefetch_images(cards)
+    return _store(key, payload)
+
+
+def split_search_tags(query: str) -> dict:
+    """把搜索串拆成「用户标签」与「过滤词」。
+
+    Danbooru 搜索里 ``rating:g`` / ``order:id`` / ``-tag`` 这类不是要写进 Prompt 的标签；
+    云端卡片上的「＋」只能加**单个**明确标签，所以前端需要这个拆解结果。
+    """
+    tags: list[str] = []
+    filters: list[str] = []
+    for raw in str(query or "").split():
+        token = raw.strip()
+        if not token:
+            continue
+        if ":" in token or token.startswith("-") or token.startswith("("):
+            filters.append(token)
+            continue
+        tags.append(token)
+    return {"tags": tags, "filters": filters, "single": tags[0] if len(tags) == 1 else ""}
+
+
+def related_tags(tag: str, limit: int = 24, category: str = "",
+                 fetcher=None, use_cache: bool = True) -> dict:
+    """查相关标签（Danbooru related_tag.json）；失败同样降级为带 error 的结果。"""
+    focus = str(tag or "").strip()
+    payload = {
+        "source": "danbooru",
+        "tag": focus,
+        "results": [],
+        "received": 0,
+        "cached": False,
+        "error": "",
+        "base": base_url(),
+    }
+    if not focus:
+        payload["error"] = "请先给出一个标签。"
+        return payload
+    try:
+        safe_limit = max(1, min(int(limit or 24), 60))
+    except (TypeError, ValueError):
+        safe_limit = 24
+    key_extra = str(category or "").strip().lower()
+    key = ("related", focus.lower(), safe_limit, key_extra)
+    if use_cache:
+        cached = _cached(key)
+        if cached:
+            return cached
+    with _LOCK:
+        backoff_left = _BACKOFF_UNTIL["ts"] - time.monotonic()
+    if backoff_left > 0:
+        payload["error"] = f"云端刚被限流，{int(backoff_left) + 1} 秒后可重试。"
+        payload["retry_after"] = int(backoff_left) + 1
+        return payload
+    # 接口返回的那一批**不是按相似度挑的**（实测 limit=20 会漏掉 cosine 最高的同类），
+    # 所以先多取再本地按相似度排序。
+    fetch_limit = max(safe_limit * 3, 40)
+    params = {"query": focus, "limit": min(fetch_limit, 60)}
+    if key_extra:
+        params["category"] = key_extra.capitalize()
+    url = f"{base_url()}/related_tag.json?{urllib.parse.urlencode(params)}"
+    fetch = fetcher or _default_fetcher
+    _wait_for_slot()
+    try:
+        raw = fetch(url)
+    except urllib.error.HTTPError as exc:  # noqa: PERF203
+        code = getattr(exc, "code", 0)
+        with _LOCK:
+            _BACKOFF_UNTIL["ts"] = time.monotonic() + (BACKOFF_SECONDS if code in {429, 503} else 15.0)
+        payload["error"] = {
+            429: "云端限流（429），请稍后再试。",
+            404: "云端没有这个标签的相关数据（404）。",
+        }.get(code, f"云端返回错误（HTTP {code}）。")
+        return payload
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        payload["error"] = f"无法连接 Danbooru：{exc}"
+        return payload
+    except (ValueError, json.JSONDecodeError):
+        payload["error"] = "云端返回内容无法解析。"
+        return payload
+
+    items = raw.get("related_tags") if isinstance(raw, dict) else None
+    results = []
+    focus_folded = focus.casefold()
+    for item in items or []:
+        info = item.get("tag") if isinstance(item, dict) else None
+        if not isinstance(info, dict):
+            continue
+        name = str(info.get("name") or "").strip()
+        if not name or name.casefold() == focus_folded or not is_promptable_tag(name):
+            continue
+        results.append({
+            "source": "danbooru",
+            "tag": name,
+            "kind": DANBOORU_TAG_KIND.get(int(info.get("category") or 0), "meta"),
+            "post_count": int(info.get("post_count") or 0),
+            "similarity": float(item.get("cosine_similarity") or 0.0),
+            "frequency": float(item.get("frequency") or 0.0),
+            "url": f"{base_url()}/posts?tags={urllib.parse.quote(name)}",
+        })
+    # 按 embedding 相似度排序才得到“同类标签”；frequency 反映的是共现，热门标签（1girl/highres）
+    # 会霸榜，只当参考值。
+    results = [entry for entry in results if entry["similarity"] >= RELATED_MIN_SIMILARITY]
+    results.sort(key=lambda entry: -entry["similarity"])
+    focus_count = int((raw or {}).get("post_count") or 0) if isinstance(raw, dict) else 0
+    if focus_count > 0:
+        # 比目标标签通用得多的（如 1girl/highres，帖量是目标的好几倍）不是“同类”，
+        # 只有相似度极高（≥0.45）时才放行。
+        filtered = [entry for entry in results
+                    if entry["post_count"] <= focus_count * 4 or entry["similarity"] >= 0.45]
+        if filtered:
+            results = filtered
+    payload["results"] = results[:safe_limit]
+    payload["received"] = len(payload["results"])
     return _store(key, payload)
 
 

@@ -470,6 +470,78 @@ class DanbooruClientTests(unittest.TestCase):
         self.assertTrue(payload["error"])
         self.assertEqual([], payload["results"])
 
+    def test_split_search_tags(self):
+        split = self.client.split_search_tags("high_heels")
+        self.assertEqual(["high_heels"], split["tags"])
+        self.assertEqual("high_heels", split["single"])
+
+        multi = self.client.split_search_tags("1girl high_heels rating:g order:id -sketch")
+        self.assertEqual(["1girl", "high_heels"], multi["tags"])
+        self.assertEqual("", multi["single"], "多标签时不能当成单个标签用")
+        self.assertIn("rating:g", multi["filters"])
+        self.assertIn("-sketch", multi["filters"])
+
+        only_filters = self.client.split_search_tags("rating:g")
+        self.assertEqual([], only_filters["tags"])
+        self.assertEqual("", only_filters["single"])
+
+    def test_related_tags_normalizes_and_filters_self(self):
+        def fetcher(_url):
+            return {"query": "high_heels", "post_count": 300000, "related_tags": [
+                {"tag": {"name": "high_heels", "category": 0, "post_count": 300000},
+                 "cosine_similarity": 1.0, "frequency": 1.0},
+                {"tag": {"name": "stiletto_heels", "category": 0, "post_count": 50000},
+                 "cosine_similarity": 0.31, "frequency": 0.22},
+                {"tag": {"name": "1girl", "category": 0, "post_count": 9000000},
+                 "cosine_similarity": 0.15, "frequency": 0.80},
+                {"tag": {"name": "somebody", "category": 1, "post_count": 9},
+                 "cosine_similarity": 0.12, "frequency": 0.30},
+                {"tag": {"name": "noise_tag", "category": 0, "post_count": 5},
+                 "cosine_similarity": 0.01, "frequency": 0.9},
+                {"tag": {"name": ":d", "category": 0, "post_count": 1},
+                 "cosine_similarity": 0.9, "frequency": 0.9},
+            ]}
+
+        payload = self.client.related_tags("high_heels", limit=10, fetcher=fetcher)
+        self.assertEqual("", payload["error"])
+        names = [item["tag"] for item in payload["results"]]
+        # 自身 / 颜文字 / 低相似度噪声 / 比目标通用得多（1girl）的都被过滤；按相似度降序
+        self.assertEqual(["stiletto_heels", "somebody"], names)
+        self.assertEqual("artist", payload["results"][1]["kind"])
+        self.assertAlmostEqual(0.31, payload["results"][0]["similarity"], places=2)
+        cached = self.client.related_tags("high_heels", limit=10, fetcher=fetcher)
+        self.assertTrue(cached["cached"])
+
+    def test_related_tags_requests_more_than_displayed(self):
+        seen = []
+
+        def fetcher(url):
+            seen.append(url)
+            return {"post_count": 1000, "related_tags": [
+                {"tag": {"name": "peer", "category": 0, "post_count": 900},
+                 "cosine_similarity": 0.4, "frequency": 0.1},
+            ]}
+
+        self.client.clear_cache()
+        payload = self.client.related_tags("shoes", limit=5, fetcher=fetcher)
+        # 接口那一批不是按相似度挑的，所以要 limit×3 多取再本地排序
+        self.assertIn("limit=40", seen[0])
+        self.assertEqual(1, len(payload["results"]))
+        self.client.clear_cache()
+
+    def test_related_tags_degrades(self):
+        def throttled(_url):
+            raise urllib.error.HTTPError("https://x", 429, "slow", {}, None)
+
+        self.client.clear_cache()
+        payload = self.client.related_tags("shoes", fetcher=throttled)
+        self.assertEqual([], payload["results"])
+        self.assertIn("限流", payload["error"])
+        blocked = self.client.related_tags("shoes", fetcher=lambda url: {"related_tags": []})
+        self.assertIn("秒后可重试", blocked["error"])
+        self.assertTrue(self.client.related_tags("", fetcher=lambda url: {})["error"])
+        self.client.clear_cache()
+
     def test_post_image_index_and_proxy_cache(self):
         fetcher_calls = []
 
@@ -580,6 +652,37 @@ class ApiWiringTests(unittest.TestCase):
             self.assertIn("/assets/js/prompt-dialect.js?v=1", page)
             self.assertIn("/assets/js/visual-tag-library.js?v=", page)
             self.assertLess(page.index("prompt-dialect.js"), page.index("panel.js?v="))
+
+    def test_related_endpoint_registered(self):
+        self.assertIn('"/api/danbooru/related"', self.panel_source)
+        self.assertIn("danbooru_client.related_tags(", self.panel_source)
+        self.assertIn('payload["query_tags"] = danbooru_client.split_search_tags(tags)', self.panel_source)
+
+    def test_v2_cloud_card_binds_single_tag_only(self):
+        """V2.1：云端卡片的「＋」不能把搜索串（可能含多个标签/过滤词）直接写进 Prompt。"""
+        self.assertIn("function cloudAddTarget(card)", self.library_js)
+        self.assertNotIn("addTag(state.query.trim()", self.library_js)
+        self.assertNotIn("toggleSelect(state.query.trim()", self.library_js)
+        self.assertIn("if (tags.length !== 1) return null;", self.library_js)
+        self.assertIn("＋ 从 Tags 选择", self.library_js)
+
+    def test_v2_tag_panel_supports_multiselect_and_research(self):
+        # V2.2：每个标签可“再搜索”；V2.3：多选 + 批量写入
+        self.assertIn('class="vtl-chip-search"', self.library_js)
+        self.assertIn("searchTag(chipSearch.dataset.search,", self.library_js)
+        self.assertIn("function insertMany(items, sectionOverride)", self.library_js)
+        self.assertIn('data-section="clothing"', self.library_js)
+        self.assertIn('data-section="pose"', self.library_js)
+        self.assertIn("function refreshSelectionUi()", self.library_js)
+        self.assertIn("function refreshPostTags(postId)", self.library_js)
+        self.assertIn("function loadRelatedTags(box, tag)", self.library_js)
+
+    def test_v2_dialect_is_the_only_insert_path(self):
+        """V2.4：所有写入都必须经过 formatTag，不允许绕过方言层。"""
+        self.assertEqual(1, self.library_js.count("window.appendEnglish("))
+        self.assertIn("const formatted = formatTag(tag, kind);", self.library_js)
+        hires_branch = self.library_js.split('mode === "hires"', 1)[1].split("已加入二采补充词", 1)[0]
+        self.assertIn("formatTag(item.tag, item.kind)", hires_branch)
 
     def test_visual_tags_endpoint_supports_paging(self):
         self.assertIn('offset=bounded(query.get("offset", ["0"])[0], 0, 0, 20000)', self.panel_source)

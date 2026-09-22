@@ -228,24 +228,116 @@
     return state.selected.some((item) => item.tag === tag);
   }
 
-  function toggleSelect(tag, kind, card) {
+  function toggleSelect(tag, kind, element) {
     if (!tag) return;
     if (isSelected(tag)) {
       state.selected = state.selected.filter((item) => item.tag !== tag);
     } else {
       state.selected.push({ tag: tag, kind: kind || "general" });
     }
-    // 只改这一张卡的选中态：整格重渲染会换掉 DOM 节点，连续点多张时容易丢点击。
-    if (card && card.classList) card.classList.toggle("selected", isSelected(tag));
-    else renderGrid();
+    // 局部刷新选中态：整格重渲染会换掉 DOM 节点，连续点多张时容易丢点击。
+    if (element && element.classList) element.classList.toggle("selected", isSelected(tag));
+    refreshSelectionUi();
+  }
+
+  function refreshSelectionUi() {
+    document.querySelectorAll("#vtlGrid .vtl-card").forEach((card) => {
+      const target = card.dataset.tag
+        ? { tag: card.dataset.tag }
+        : cloudAddTarget(card);
+      if (target && target.tag) card.classList.toggle("selected", isSelected(target.tag));
+    });
+    document.querySelectorAll("#vtlGrid .vtl-chip").forEach((chip) => {
+      const tag = chip.dataset.tag || "";
+      const active = isSelected(tag);
+      chip.classList.toggle("checked", active);
+      chip.textContent = active ? `✓ ${tag}` : tag;
+    });
+    document.querySelectorAll(".vtl-tagpanel-count").forEach((node) => {
+      node.textContent = `已选 ${state.selected.length}`;
+    });
     renderFooter();
   }
 
-  function addTag(tag, kind) {
+  function refreshPostTags(postId) {
+    const card = document.querySelector(`.vtl-card[data-post="${postId}"]`);
+    if (!card) return;
+    const box = card.querySelector(".vtl-post-tags");
+    const post = state.results.find((item) => item.id === postId);
+    if (box && post) box.innerHTML = tagChips(post);
+  }
+
+  function addTag(tag, kind, sectionOverride) {
+    const section = sectionOverride || targetSection();
     const formatted = formatTag(tag, kind);
-    if (typeof window.appendEnglish === "function") window.appendEnglish(formatted, targetSection());
+    if (typeof window.appendEnglish === "function") window.appendEnglish(formatted, section);
     const changed = formatted !== tag;
-    setNotice(`${changed ? `${tag} → ${formatted}（按 ${dialectLabel()} 转换）` : `${formatted}`} 已写入「${targetLabel(targetSection())}」。`);
+    setNotice(`${changed ? `${tag} → ${formatted}（按 ${dialectLabel()} 转换）` : `${formatted}`} 已写入「${targetLabel(section)}」。`);
+    return formatted;
+  }
+
+  function insertMany(items, sectionOverride) {
+    const written = [];
+    items.forEach((item) => {
+      if (!item || !item.tag) return;
+      written.push(addTag(item.tag, item.kind, sectionOverride));
+    });
+    if (!written.length) {
+      setNotice("先点选标签或卡片。");
+      return [];
+    }
+    const section = sectionOverride || targetSection();
+    setNotice(`已写入「${targetLabel(section)}」：${written.join(", ")}`);
+    return written;
+  }
+
+  function searchTag(tag, source) {
+    if (!tag) return;
+    state.query = String(tag).trim();
+    state.page = 1;
+    if (source) state.source = source;
+    // 换搜索词就清空已选：上一次结果里的选中项留在新结果上会让人误以为还是那批标签。
+    state.selected = [];
+    const search = byId("vtlSearch");
+    if (search) search.value = state.query;
+    saveState();
+    reload();
+  }
+
+  function selectedTags() {
+    return state.selected.map((item) => item.tag);
+  }
+
+  function focusTag(card) {
+    if (state.selected.length) return state.selected[0].tag;
+    const info = state.meta && state.meta.query_tags;
+    const tags = (info && info.tags) || [];
+    if (tags.length) return tags[0];
+    return (card && card.dataset && card.dataset.focus) || "";
+  }
+
+  async function loadRelatedTags(box, tag) {
+    if (!box) return;
+    if (!tag) {
+      box.hidden = false;
+      box.textContent = "请先选中一个标签，或用单个标签搜索后再点相关 Tag。";
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `<span class="vtl-tagpanel-count">正在查「${esc(tag)}」的相关标签…</span>`;
+    try {
+      const data = await (await fetch(`/api/danbooru/related?` + new URLSearchParams({ tag: tag, limit: "24" }))).json();
+      if (data.error) throw new Error(data.error);
+      const items = data.results || [];
+      if (!items.length) {
+        box.textContent = `没有找到「${tag}」的相关标签。`;
+        return;
+      }
+      box.innerHTML = `<span class="vtl-grouplabel">相关（${esc(tag)}）</span>` + items.map((item) =>
+        `<span class="vtl-chip-wrap">${chipButton(item.tag, item.kind || "general")}<button type="button" class="vtl-chip-search" data-search="${esc(item.tag)}" title="搜「${esc(item.tag)}」">🔍</button></span>`).join("");
+    } catch (error) {
+      box.textContent = `相关标签读取失败：${error.message}`;
+    }
   }
 
   function insertSelected(mode) {
@@ -326,20 +418,58 @@
     </article>`;
   }
 
+  function kindForTag(tag, card) {
+    const groups = (card && card.groups) || {};
+    for (const key of ["artist", "character", "copyright", "general"]) {
+      if ((groups[key] || []).indexOf(tag) >= 0) return key;
+    }
+    return "general";
+  }
+
+  /**
+   * 云端卡片的“＋”只能加**单个明确标签**：
+   *  - 搜索只有一个用户标签（high_heels）→ 就加它；
+   *  - 搜索含多个标签（1girl high_heels）或只有过滤词（rating:g）→ 不猜，
+   *    改为引导展开该图的 Tags 面板挑选，避免把整串搜索词写进 Prompt。
+   */
+  function cloudAddTarget(card) {
+    const info = state.meta && state.meta.query_tags;
+    const tags = (info && info.tags) || [];
+    if (tags.length !== 1) return null;
+    return { tag: tags[0], kind: kindForTag(tags[0], card) };
+  }
+
+  function chipButton(tag, kind) {
+    const active = state.selected.some((item) => item.tag === tag);
+    return `<span class="vtl-chip-wrap"><button type="button" class="vtl-chip${active ? " checked" : ""}" data-tag="${esc(tag)}" data-kind="${esc(kind)}" title="点选/取消（可多选后批量写入）">${active ? "✓ " : ""}${esc(tag)}</button><button type="button" class="vtl-chip-search" data-search="${esc(tag)}" title="用「${esc(tag)}」重新搜索云端图片">🔍</button></span>`;
+  }
+
   function tagChips(card) {
     const groups = card.groups || {};
-    return Object.keys(GROUP_LABELS).filter((key) => (groups[key] || []).length).map((key) =>
+    const body = Object.keys(GROUP_LABELS).filter((key) => (groups[key] || []).length).map((key) =>
       `<div class="vtl-taggroup"><span class="vtl-grouplabel">${GROUP_LABELS[key]}</span>${
-        groups[key].map((tag) => `<button type="button" class="vtl-chip" data-tag="${esc(tag)}" data-kind="${key}" title="点击写入「${esc(targetLabel(targetSection()))}」">${esc(tag)}</button>`).join("")
+        groups[key].map((tag) => chipButton(tag, key)).join("")
       }</div>`).join("");
+    return `${body}
+      <div class="vtl-tagpanel-actions">
+        <span class="vtl-tagpanel-count">已选 ${state.selected.length}</span>
+        <button type="button" class="vtl-quick" data-section="clothing">加入服装</button>
+        <button type="button" class="vtl-quick" data-section="pose">加入姿势</button>
+        <button type="button" class="vtl-quick" data-section="appearance">加入外貌</button>
+        <button type="button" class="vtl-batch-search">用已选搜索</button>
+        <button type="button" class="vtl-batch-copy">复制</button>
+        <button type="button" class="vtl-related">相关 Tag</button>
+      </div>
+      <div class="vtl-related-box" hidden></div>`;
   }
 
   function cloudCard(card) {
-    const queryTag = state.query.trim();
-    const selected = isSelected(queryTag);
     const expanded = !!state.expanded[card.id];
     const badge = RATING_BADGE[card.rating] || "?";
     const size = card.width && card.height ? `${card.width}×${card.height}` : "";
+    const target = cloudAddTarget(card);
+    const addLabel = target ? `＋ ${target.tag}` : "＋ 从 Tags 选择";
+    const selected = !!target && isSelected(target.tag);
     return `<article class="vtl-card vtl-cloud${selected ? " selected" : ""}" data-post="${esc(card.id)}">
       <div class="vtl-thumb">
         <img loading="lazy" src="${CLOUD_IMAGE_API}?post=${encodeURIComponent(String(card.post_id))}&kind=preview" alt="post ${esc(String(card.post_id))}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'vtl-nothumb',textContent:'预览不可用'}))">
@@ -351,7 +481,7 @@
         <div class="vtl-zh">score ${esc(String(card.score))} · ${esc(String(card.tag_count))} 个标签</div>
       </div>
       <div class="vtl-actions">
-        <button type="button" class="vtl-add">＋ ${esc(queryTag)}</button>
+        <button type="button" class="vtl-add">${esc(addLabel)}</button>
         <button type="button" class="vtl-expand">${expanded ? "收起 Tags" : "查看 Tags"}</button>
         <a class="vtl-link" href="${esc(card.post_url)}" target="_blank" rel="noopener noreferrer">帖子</a>
       </div>
@@ -381,6 +511,11 @@
     }
     grid.innerHTML = state.results.map((item) =>
       state.source === "cloud" ? cloudCard(item) : localCard(item)).join("");
+    // 展开过的云端卡片要重新填回 Tags 面板（懒渲染）。
+    Object.keys(state.expanded).forEach((id) => {
+      if (state.expanded[id]) refreshPostTags(id);
+    });
+    refreshSelectionUi();
     trackThumbProgress();
   }
 
@@ -548,6 +683,7 @@
     byId("vtlSearch").addEventListener("input", debounce(() => {
       state.query = byId("vtlSearch").value.trim();
       state.page = 1;
+      state.selected = [];
       reload();
     }, 300));
     byId("vtlSearch").addEventListener("keydown", (event) => {
@@ -555,6 +691,7 @@
       event.preventDefault();
       state.query = byId("vtlSearch").value.trim();
       state.page = 1;
+      state.selected = [];
       reload();
     });
     byId("vtlCategory").addEventListener("change", () => {
@@ -597,6 +734,7 @@
       if (state.source === tab.dataset.source) return;
       state.source = tab.dataset.source;
       state.page = 1;
+      state.selected = [];
       saveState();
       reload();
     }));
@@ -609,9 +747,42 @@
         window.open(full.dataset.full, "_blank", "noopener,noreferrer");
         return;
       }
+      // ---- Tags 面板（V2.2 / V2.3）：点选多选、🔍 再搜索、快捷写入、相关标签 ----
+      const chipSearch = event.target.closest(".vtl-chip-search");
+      if (chipSearch) {
+        searchTag(chipSearch.dataset.search, "cloud");
+        return;
+      }
       const chip = event.target.closest(".vtl-chip");
       if (chip) {
-        addTag(chip.dataset.tag, chip.dataset.kind);
+        // 只更新选中态：重建 Tags 面板会换掉 DOM 节点，连续点多条时后面几下会落空。
+        toggleSelect(chip.dataset.tag, chip.dataset.kind);
+        return;
+      }
+      const quick = event.target.closest(".vtl-quick");
+      if (quick) {
+        insertMany(state.selected.slice(), quick.dataset.section);
+        return;
+      }
+      const batchSearch = event.target.closest(".vtl-batch-search");
+      if (batchSearch) {
+        const tags = selectedTags();
+        if (!tags.length) {
+          setNotice("先点选要搜索的标签。");
+          return;
+        }
+        searchTag(tags.join(" "), "cloud");
+        return;
+      }
+      const batchCopy = event.target.closest(".vtl-batch-copy");
+      if (batchCopy) {
+        copySelected();
+        return;
+      }
+      const related = event.target.closest(".vtl-related");
+      if (related) {
+        const box = card.querySelector(".vtl-related-box");
+        loadRelatedTags(box, focusTag(card));
         return;
       }
       const expand = event.target.closest(".vtl-expand");
@@ -619,12 +790,7 @@
         const id = card.dataset.post;
         state.expanded[id] = !state.expanded[id];
         renderGrid();
-        if (state.expanded[id]) {
-          // Tags 懒渲染：展开时才写入 chips（一页 20 张卡全部预渲染会多出 1200+ 个节点）
-          const box = document.querySelector(`.vtl-card[data-post="${card.dataset.post}"] .vtl-post-tags`);
-          const post = state.results.find((item) => item.id === card.dataset.post);
-          if (box && post) box.innerHTML = tagChips(post);
-        }
+        if (state.expanded[id]) refreshPostTags(card.dataset.post);
         return;
       }
       const toCloud = event.target.closest(".vtl-tocloud");
@@ -644,12 +810,32 @@
         return;
       }
       if (event.target.closest(".vtl-add")) {
-        if (state.source === "cloud") addTag(state.query.trim(), "general");
-        else addTag(card.dataset.tag, card.dataset.kind);
+        if (state.source === "cloud") {
+          const target = cloudAddTarget(card);
+          if (target) addTag(target.tag, target.kind);
+          else {
+            setNotice("这张图对应多个搜索标签或只有过滤词；已展开 Tags，请挑具体标签（单个可多选后批量写入）。");
+            state.expanded[card.dataset.post] = true;
+            renderGrid();
+            refreshPostTags(card.dataset.post);
+          }
+        } else {
+          addTag(card.dataset.tag, card.dataset.kind);
+        }
         return;
       }
-      if (state.source === "cloud") toggleSelect(state.query.trim(), "general", card);
-      else toggleSelect(card.dataset.tag, card.dataset.kind, card);
+      if (state.source === "cloud") {
+        const target = cloudAddTarget(card);
+        if (target) toggleSelect(target.tag, target.kind, card);
+        else {
+          state.expanded[card.dataset.post] = true;
+          renderGrid();
+          refreshPostTags(card.dataset.post);
+          setNotice("搜索含多个标签，已展开这张图的 Tags，点选后再批量写入。");
+        }
+      } else {
+        toggleSelect(card.dataset.tag, card.dataset.kind, card);
+      }
     });
   }
 
@@ -711,6 +897,15 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
 .vtl-grouplabel{color:var(--muted,#adb7cb);font-size:11px;min-width:30px}
 .vtl-chip{background:var(--token,#282d40);border:1px solid var(--line,#343d53);color:inherit;border-radius:999px;padding:1px 8px;cursor:pointer;font-size:calc(var(--input-font-size,15px) - 4px)}
 .vtl-chip:hover{border-color:var(--accent,#9174ff)}
+.vtl-chip.checked{border-color:var(--accent,#9174ff);background:rgba(145,116,255,.22)}
+.vtl-chip-wrap{display:inline-flex;align-items:center;gap:2px;margin:2px 2px 2px 0}
+.vtl-chip-search{background:transparent;border:1px dashed var(--line,#343d53);color:var(--muted,#adb7cb);border-radius:999px;padding:1px 5px;cursor:pointer;font-size:calc(var(--input-font-size,15px) - 6px)}
+.vtl-chip-search:hover{border-color:var(--accent,#9174ff);color:inherit}
+.vtl-tagpanel-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;border-top:1px dashed var(--line,#343d53);padding-top:6px;margin-top:2px}
+.vtl-tagpanel-count{color:var(--muted,#adb7cb);font-size:11px}
+.vtl-tagpanel-actions button{background:var(--token,#282d40);border:1px solid var(--line,#343d53);color:inherit;border-radius:7px;padding:2px 8px;cursor:pointer;font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-related-box{display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-related-box[hidden]{display:none}
 .vtl-foot{display:flex;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line,#343d53);flex-wrap:wrap}
 .vtl-foot-count{color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px);flex:1 1 200px}
 .vtl-foot-actions{display:flex;gap:6px;flex-wrap:wrap}
