@@ -223,6 +223,65 @@ class SharedStateTests(unittest.TestCase):
             self.assertEqual("manual", categories["未知分类"])
             self.assertEqual(2, len(store.read()["promptPresets"]))
 
+    def test_tag_bundle_keeps_canonical_tags(self):
+        """V2.6 组件：存 Danbooru 原形，方言转换只在插入 Prompt 时做，存储层不能转。"""
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            merged = store.merge(
+                {
+                    "promptPresets": [
+                        {
+                            "id": "bundle_a", "name": "黑色细高跟", "category": "clothing",
+                            "tags": ["High_Heels", "stiletto heels", "black_footwear",
+                                     "black_footwear", "   "],
+                            "description": "细高跟 + 踝带",
+                            "mode": "replace",
+                            "model": "waiIllustriousSDXL_v170.safetensors",
+                            "updatedAt": 100,
+                        }
+                    ],
+                    "characterFavorites": [],
+                },
+                0,
+            )
+            item = merged["state"]["promptPresets"][0]
+            self.assertEqual(["high_heels", "stiletto_heels", "black_footwear"], item["tags"])
+            self.assertEqual(", ".join(item["tags"]), item["content"])
+            self.assertEqual("replace", item["mode"])
+            self.assertEqual("细高跟 + 踝带", item["description"])
+            self.assertEqual("waiIllustriousSDXL_v170.safetensors", item["model"])
+            # 读盘/回写路径同样不能丢字段（否则刷新后就变回普通预设）
+            self.assertEqual(item["tags"], store.read()["promptPresets"][0]["tags"])
+
+    def test_tag_bundle_defaults_and_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            merged = store.merge(
+                {
+                    "promptPresets": [
+                        preset("普通预设", "standing"),
+                        {
+                            "id": "bundle_b", "name": "模式回退", "category": "clothing",
+                            "tags": ["A B"], "mode": "explode", "updatedAt": 90,
+                        },
+                    ],
+                    "characterFavorites": [],
+                },
+                0,
+            )
+            by_name = {item["name"]: item for item in merged["state"]["promptPresets"]}
+            self.assertEqual([], by_name["普通预设"]["tags"])
+            self.assertEqual("append", by_name["模式回退"]["mode"])
+            self.assertEqual(["a_b"], by_name["模式回退"]["tags"])
+            with self.assertRaises(SharedStateError):
+                store.merge(
+                    {"promptPresets": [{
+                        "id": "bundle_big", "name": "标签超限", "category": "clothing",
+                        "tags": ["t%d" % index for index in range(70)], "updatedAt": 100,
+                    }]},
+                    None,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

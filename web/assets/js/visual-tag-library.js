@@ -46,6 +46,8 @@
     shown: 0,
     hasMore: false,
     indexGeneratedAt: "",
+    bundleCategory: "",
+    bundleMode: "append",
   };
 
   /* ------------------------------------------------------------- 工具 */
@@ -77,6 +79,7 @@
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         source: state.source, category: state.category, rating: state.rating, sort: state.sort,
+        bundleCategory: state.bundleCategory, bundleMode: state.bundleMode,
       }));
     } catch (_error) { /* 忽略隐私模式写入失败 */ }
   }
@@ -88,6 +91,8 @@
       if (typeof saved.category === "string") state.category = saved.category;
       if (RATINGS[saved.rating]) state.rating = saved.rating;
       if (SORTS[saved.sort]) state.sort = saved.sort;
+      if (typeof saved.bundleCategory === "string") state.bundleCategory = saved.bundleCategory;
+      if (saved.bundleMode === "replace" || saved.bundleMode === "append") state.bundleMode = saved.bundleMode;
     } catch (_error) { /* 首次使用没有存档 */ }
   }
 
@@ -707,6 +712,7 @@
         <footer class="vtl-foot">
           <span id="vtlCount" class="vtl-foot-count"></span>
           <div class="vtl-foot-actions">
+            <button type="button" id="vtlBundle" class="vtl-ghost" title="把已选标签存成可复用的提示词组件（存 Danbooru 原形，插入时按模型方言转换）">存为组件</button>
             <button type="button" id="vtlCopy" class="vtl-ghost">复制 Tag</button>
             <button type="button" id="vtlInsert" class="vtl-primary">加入当前分区</button>
             <button type="button" id="vtlInsertHires" class="vtl-ghost">加入二采</button>
@@ -773,6 +779,7 @@
       if (chip) searchTag(chip.dataset.tag, "cloud");
     });
     byId("vtlCopy").addEventListener("click", copySelected);
+    byId("vtlBundle").addEventListener("click", openBundleDialog);
     byId("vtlInsert").addEventListener("click", () => insertSelected("section"));
     byId("vtlInsertHires").addEventListener("click", () => insertSelected("hires"));
     byId("vtlClear").addEventListener("click", clearSelection);
@@ -980,6 +987,14 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
 .vtl-foot-count{color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px);flex:1 1 200px}
 .vtl-foot-actions{display:flex;gap:6px;flex-wrap:wrap}
 .vtl-pager{display:flex;gap:6px;align-items:center;color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-bundle-dialog{max-width:560px}
+.vtl-bundle-body{display:flex;flex-direction:column;gap:10px;padding:0 14px 12px;font-size:calc(var(--input-font-size,15px) - 3px)}
+.vtl-field{display:flex;flex-direction:column;gap:4px}
+.vtl-field>span{color:var(--muted,#adb7cb);font-size:calc(var(--input-font-size,15px) - 4px)}
+.vtl-field input,.vtl-field select{background:var(--token,#282d40);border:1px solid var(--line,#343d53);border-radius:8px;color:inherit;padding:6px 8px;font-size:inherit;font-family:inherit}
+.vtl-bundle-tags{display:flex;flex-direction:column;gap:6px}
+.vtl-bundle-chips{display:flex;flex-wrap:wrap;gap:6px}
+.vtl-bundle-chip{cursor:default}
 .prompt-dialect{display:inline-flex;align-items:center;gap:4px}
 .prompt-dialect select{background:var(--bg,#10131c);border:1px solid var(--line,#343d53);color:inherit;border-radius:8px;padding:5px 6px;font-size:calc(var(--input-font-size,15px) - 3px)}
 .prompt-dialect-hint{color:var(--muted,#adb7cb)}
@@ -995,6 +1010,158 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
       clearTimeout(timer);
       timer = setTimeout(() => fn.apply(null, args), wait);
     };
+  }
+
+  /* ------------------------------------------- V2.6 提示词组件（Tag Bundle）
+   *
+   * 组件 = 名称 + 描述 + 一组标签 + 分类（插到哪个分区）+ 插入方式 + 保存时模型。
+   * 标签一律存 **Danbooru 原形**，插入时才过 `window.EasyPanelDialect`：
+   * 切模型不用重新保存，同一个组件在 Anima 下写空格、在 Illustrious 下写下划线。
+   */
+
+  const BUNDLE_CATEGORY_ORDER = [
+    "clothing", "appearance", "subject", "expression", "pose",
+    "scene", "lighting", "composition", "artist", "manual", "negative",
+  ];
+
+  function bundleCategories() {
+    const layer = window.EasyPanelPromptComponent;
+    const map = (layer && layer.categories) || {};
+    const keys = BUNDLE_CATEGORY_ORDER.filter((key) => map[key]);
+    Object.keys(map).forEach((key) => {
+      if (key !== "combo" && keys.indexOf(key) < 0) keys.push(key);
+    });
+    return keys.map((key) => ({ key: key, label: (map[key] && map[key].label) || key }));
+  }
+
+  function canonicalTag(tag) {
+    return String(tag || "").trim().toLowerCase().replace(/\s+/g, "_").slice(0, 96);
+  }
+
+  function bundleNotice(message) {
+    const notice = byId("vtlBundleNotice");
+    if (!notice) return;
+    notice.textContent = message || "";
+    notice.hidden = !message;
+  }
+
+  function buildBundleDialog() {
+    if (byId("vtlBundleOverlay")) return;
+    const overlay = document.createElement("div");
+    overlay.id = "vtlBundleOverlay";
+    overlay.className = "vtl-overlay vtl-bundle-overlay";
+    overlay.hidden = true;
+    overlay.innerHTML = `
+      <div class="vtl-dialog vtl-bundle-dialog" role="dialog" aria-modal="true" aria-label="存为提示词组件">
+        <header class="vtl-head">
+          <b>存为提示词组件</b>
+          <button type="button" class="vtl-close" title="关闭（Esc）">✕</button>
+        </header>
+        <div class="vtl-bundle-body">
+          <label class="vtl-field"><span>组件名称</span>
+            <input id="vtlBundleName" maxlength="80" placeholder="例如：黑色细高跟"></label>
+          <label class="vtl-field"><span>描述（可选）</span>
+            <input id="vtlBundleDesc" maxlength="400" placeholder="例如：细高跟 + 踝带，冷色皮鞋"></label>
+          <label class="vtl-field"><span>分类（决定插入到哪个分区）</span>
+            <select id="vtlBundleCategory"></select></label>
+          <label class="vtl-field"><span>插入方式</span>
+            <select id="vtlBundleMode">
+              <option value="append">追加（保留分区原有内容）</option>
+              <option value="replace">覆盖（替换该分区）</option>
+            </select></label>
+          <div class="vtl-bundle-tags">
+            <span class="vtl-grouplabel">标签（按 Danbooru 原形保存，插入时才转方言）</span>
+            <div id="vtlBundleTags" class="vtl-bundle-chips"></div>
+          </div>
+          <div id="vtlBundleNotice" class="vtl-notice" hidden></div>
+        </div>
+        <footer class="vtl-foot">
+          <span id="vtlBundleCount" class="vtl-foot-count"></span>
+          <div class="vtl-foot-actions">
+            <button type="button" id="vtlBundleSave" class="vtl-primary">保存组件</button>
+            <button type="button" id="vtlBundleCancel" class="vtl-ghost">取消</button>
+          </div>
+        </footer>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector(".vtl-close").addEventListener("click", closeBundleDialog);
+    byId("vtlBundleCancel").addEventListener("click", closeBundleDialog);
+    byId("vtlBundleSave").addEventListener("click", saveBundle);
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) closeBundleDialog(); });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !overlay.hidden) closeBundleDialog();
+    });
+  }
+
+  function openBundleDialog() {
+    if (!state.selected.length) {
+      setNotice("先点选要收进组件的标签。");
+      return;
+    }
+    const overlay = byId("vtlBundleOverlay");
+    if (!overlay) return;
+    const categories = bundleCategories();
+    const select = byId("vtlBundleCategory");
+    if (select) {
+      select.innerHTML = categories.map((item) => `<option value="${esc(item.key)}">${esc(item.label)}</option>`).join("");
+      const preferred = state.bundleCategory || targetSection();
+      if (categories.some((item) => item.key === preferred)) select.value = preferred;
+    }
+    const mode = byId("vtlBundleMode");
+    if (mode) mode.value = state.bundleMode === "replace" ? "replace" : "append";
+    const tags = state.selected.map((item) => canonicalTag(item.tag)).filter(Boolean);
+    const preview = byId("vtlBundleTags");
+    if (preview) {
+      preview.innerHTML = tags.map((tag) => `<span class="vtl-chip vtl-bundle-chip">${esc(tag)}</span>`).join("");
+    }
+    const count = byId("vtlBundleCount");
+    if (count) count.textContent = `${tags.length} 个标签 · 存 Danbooru 原形，插入时按当前模型方言转换`;
+    bundleNotice("");
+    const name = byId("vtlBundleName");
+    if (name) name.focus();
+    overlay.hidden = false;
+  }
+
+  function closeBundleDialog() {
+    const overlay = byId("vtlBundleOverlay");
+    if (overlay) overlay.hidden = true;
+  }
+
+  function saveBundle() {
+    const layer = window.EasyPanelPromptComponent;
+    if (!layer || typeof layer.save !== "function") {
+      bundleNotice("当前页面没有加载提示词预设模块，无法保存组件。");
+      return;
+    }
+    const name = byId("vtlBundleName").value.trim();
+    const description = byId("vtlBundleDesc").value.trim();
+    const category = byId("vtlBundleCategory").value;
+    const mode = byId("vtlBundleMode").value;
+    const tags = state.selected.map((item) => canonicalTag(item.tag)).filter(Boolean);
+    let result = null;
+    try {
+      result = layer.save({
+        name: name, description: description, category: category, mode: mode, tags: tags,
+        model: (byId("model") && byId("model").value) || "",
+      });
+    } catch (error) {
+      bundleNotice(`保存失败：${error.message}`);
+      return;
+    }
+    if (!result || !result.ok) {
+      bundleNotice((result && result.error) || "保存失败。");
+      return;
+    }
+    state.bundleCategory = category;
+    state.bundleMode = mode;
+    saveState();
+    closeBundleDialog();
+    setNotice(`已存为组件「${name}」（${result.count || tags.length} 个标签 · ${bundleCategoryLabel(category)}）${result.replaced ? "，同名组件已更新" : ""}；在「我的提示词预设」里可一键插入或加入二采。`);
+  }
+
+  function bundleCategoryLabel(key) {
+    const found = bundleCategories().find((item) => item.key === key);
+    return found ? found.label : key;
   }
 
   function scrollToEdit() {
@@ -1057,6 +1224,7 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
     RATINGS, SORTS, RATING_BADGE, GROUP_LABELS,
     formatTag, dialectLabel, targetSection, targetLabel, promptFieldId, state,
     open, close, reload,
+    canonicalTag, openBundleDialog, closeBundleDialog, saveBundle, bundleCategories,
   };
   window.EasyPanelVisualTags = Object.assign(testApi, {
     refresh: () => {
@@ -1072,6 +1240,7 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
     loadState();
     installStyles();
     buildDialog();
+    buildBundleDialog();
     installButton();
   }
 

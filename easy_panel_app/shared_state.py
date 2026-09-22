@@ -30,6 +30,11 @@ MAX_CHARACTER_FAVORITES = 500
 MAX_PRESET_NAME_CHARS = 80
 MAX_PRESET_TEXT_CHARS = 12000
 MAX_PRESET_SECTIONS = 10
+MAX_PRESET_TAGS = 64
+MAX_PRESET_TAG_CHARS = 96
+MAX_PRESET_DESCRIPTION_CHARS = 400
+MAX_PRESET_MODEL_CHARS = 200
+PRESET_INSERT_MODES = ("append", "replace")
 MAX_PRESET_ITEM_BYTES = 160 * 1024
 MAX_FAVORITE_CHARS = 512
 PROMPT_PRESET_CATEGORIES = {
@@ -251,6 +256,34 @@ def _text(value: Any, maximum: int, field: str, *, required: bool = False) -> st
     return value
 
 
+def _normalize_preset_tags(raw: Any) -> list[str]:
+    """Tag Bundle（提示词组件）的标签列表。
+
+    统一存 **Danbooru 原形**（小写 + 下划线）：方言转换只发生在插入 Prompt 时，
+    否则同一个组件在 Anima 下存一次、在 Illustrious 下再存一次就会各说各话。
+    """
+
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SharedStateError("提示词预设 tags 必须是数组。")
+    if len(raw) > MAX_PRESET_TAGS:
+        raise SharedStateError(f"提示词预设标签数量超过上限（{MAX_PRESET_TAGS}）。")
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        if not isinstance(value, str):
+            raise SharedStateError("提示词预设 tags 只能是字符串。")
+        tag = re.sub(r"\s+", "_", value.strip().lower())
+        if len(tag) > MAX_PRESET_TAG_CHARS:
+            raise SharedStateError("提示词预设标签超过长度上限。")
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        output.append(tag)
+    return output
+
+
 def _normalize_prompt_item(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, Mapping):
         raise SharedStateError("提示词预设必须是对象。")
@@ -276,6 +309,10 @@ def _normalize_prompt_item(item: Any) -> dict[str, Any] | None:
             sections[key] = clean
     content_limit = MAX_PRESET_TEXT_CHARS * MAX_PRESET_SECTIONS if category == "combo" else MAX_PRESET_TEXT_CHARS
     content = _text(item.get("content"), content_limit, "content")
+    tags = _normalize_preset_tags(item.get("tags"))
+    if tags and not content:
+        # 组件只给了标签：content 作为展示/搜索用的镜像，真相源仍是 tags。
+        content = ", ".join(tags)
     if category == "combo" and not content and sections:
         content = "\n".join(sections.values())
     if not content:
@@ -295,12 +332,19 @@ def _normalize_prompt_item(item: Any) -> dict[str, Any] | None:
     if isinstance(raw_updated, bool) or not isinstance(raw_updated, (int, float)):
         raw_updated = 0
     updated_at = max(0, int(raw_updated))
+    mode = item.get("mode") if isinstance(item.get("mode"), str) else "append"
+    if mode not in PRESET_INSERT_MODES:
+        mode = "append"
     normalized = {
         "id": item_id,
         "name": name,
         "category": category,
         "content": content,
         "sections": sections,
+        "tags": tags,
+        "description": _text(item.get("description"), MAX_PRESET_DESCRIPTION_CHARS, "description"),
+        "mode": mode,
+        "model": _text(item.get("model"), MAX_PRESET_MODEL_CHARS, "model"),
         "updatedAt": updated_at,
     }
     if len(_encode_json(normalized)) > MAX_PRESET_ITEM_BYTES:
@@ -370,6 +414,7 @@ def _prompt_fingerprint(item: Mapping[str, Any]) -> str:
         "category": item.get("category", ""),
         "content": item.get("content", ""),
         "sections": item.get("sections", {}),
+        "tags": item.get("tags", []),
     }
     return hashlib.sha256(_encode_json(material)).hexdigest()
 

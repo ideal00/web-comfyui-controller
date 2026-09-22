@@ -759,6 +759,23 @@ class ApiWiringTests(unittest.TestCase):
         self.assertIn('function pageChanged()', self.library_js)
         self.assertIn('if (pager) pager.hidden = false;', self.library_js)
 
+    def test_v2_tag_bundle_dialog_saves_components(self):
+        """V2.6：选中标签 → 存为组件（原形）→ 我的提示词预设里一键插入 / 加二采。"""
+        for marker in (
+            'id="vtlBundle"', "存为组件", 'overlay.id = "vtlBundleOverlay"',
+            'id="vtlBundleName"', 'id="vtlBundleDesc"',
+            'id="vtlBundleCategory"', 'id="vtlBundleMode"', 'id="vtlBundleTags"',
+            "function buildBundleDialog", "function openBundleDialog",
+            "function saveBundle", "function canonicalTag(tag)",
+            "window.EasyPanelPromptComponent", "layer.save({",
+            "buildBundleDialog();", "byId(\"vtlBundle\").addEventListener(\"click\", openBundleDialog)",
+            "存 Danbooru 原形，插入时按当前模型方言转换",
+        ):
+            self.assertIn(marker, self.library_js)
+        # 存组件不能先过方言：tags 必须是原形（转换只在插入时做）。
+        self.assertNotIn("tags: state.selected.map((item) => formatTag", self.library_js)
+        self.assertIn("const tags = state.selected.map((item) => canonicalTag(item.tag))", self.library_js)
+
     def test_library_js_uses_dialect_layer(self):
         self.assertIn("EasyPanelDialect", self.library_js)
         self.assertIn("window.EasyPanelVisualTags", self.library_js)

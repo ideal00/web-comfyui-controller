@@ -57,6 +57,30 @@ class UserPromptPresetTests(unittest.TestCase):
         self.assertIn(".user-preset-combo-picker", css)
         self.assertIn(".user-preset-combo-fields", css)
 
+    def test_prompt_component_bundles_keep_canonical_tags_and_insert_by_dialect(self):
+        """V2.6：组件存 Danbooru 原形，插入时按当前模型方言转换（切模型不用重存）。"""
+        script = Path("web/assets/js/panel.js").read_text(encoding="utf-8")
+        css = Path("web/assets/css/panel.css").read_text(encoding="utf-8")
+
+        for marker in (
+            "function normalizePresetTags", "function parsePresetTagsFromText",
+            "function userPromptPresetIsBundle", "function presetInsertText",
+            "function applyUserPromptPresetToHires", "function saveUserPromptBundle",
+            "window.EasyPanelPromptComponent=",
+            "tags=normalizePresetTags(item?.tags)",
+            "content:content||tags.join(', ')",
+            "layer.formatTags(tags).join(', ')",
+            "payload.tags=parsePresetTagsFromText(content)",
+            "syncEasyPanelSharedState({manual:true})",
+            ">二采<", "已把", "组件 ", "user-preset-bundle",
+        ):
+            self.assertIn(marker, script)
+        self.assertIn(".user-preset-desc", css)
+        self.assertIn(".user-preset-bundle", css)
+        # 插入必须走 presetInsertText（含方言转换），不能直接搬 content。
+        self.assertNotIn("batchAppendToField(category.target,item.content)", script)
+        self.assertIn("const isBundle=userPromptPresetIsBundle(item),text=presetInsertText(item)", script)
+
     def test_png_metadata_recovery_table_is_complete_and_distinct(self):
         path = Path("web/assets/data/recovered_combo_presets_20260828.json")
         data = json.loads(path.read_text(encoding="utf-8"))
