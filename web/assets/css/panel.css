@@ -209,6 +209,7 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .size-picker-range input[type=range]{flex:1 1 140px;min-width:120px}
 .size-picker input[type=number]{width:78px}
 .size-picker-custom{display:inline-flex;align-items:center;gap:4px}
+.size-picker-custom-hint{flex:1 1 100%;color:#8fa2b8}
 .size-preset-chips{display:flex;flex-wrap:wrap;gap:5px}
 .size-preset-chip{padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:#242b3d;color:inherit;cursor:pointer;font-size:12px;font-variant-numeric:tabular-nums}
 .size-preset-chip:hover{border-color:#6f8fb8}

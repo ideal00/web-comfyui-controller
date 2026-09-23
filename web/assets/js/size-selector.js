@@ -6,6 +6,9 @@
  *     例如 3:2 长边 1664 → 理论短边 1109.3 → 1664×1104）；
  *   - 「推荐档位」是模型推荐尺寸：保留 index.html 里现有档位（≈ 表示该档位像素是近似比例，
  *     例如 1216×832 实际 1.46:1、768×1344 实际 4:7），点一下直接跳过去；
+ *     **点比例时优先落在该比例的第一个严格档位**（3:2 → 1536×1024、16:9 → 1280×720），
+ *     没有严格档位才退回近似档位，完全没有档位才用滑块中间值；
+ *   - `宽 × 高` 是「自定义精确尺寸」：允许临时非标准比例，再次拖动「长边」就回到当前选定比例；
  *   - 每个比例记忆上次使用的尺寸（localStorage easyPanelSizeByRatioV1），再点该比例回到上次档位；
  *   - 显示当前尺寸、MP 与预计显存负载（Anima / Krea 2 在 8GB 上口径更紧）。
  *
@@ -49,7 +52,7 @@
     <div class="size-picker-row size-picker-range"><span class="small">较小</span><input id="sizeLongEdgeRange" type="range" aria-label="长边像素"><span class="small">较大</span></div>
     <div class="size-picker-row"><span class="size-picker-label">长边</span><input id="sizeLongEdgeNumber" type="number" inputmode="numeric"><span class="small">px</span><span id="sizeLongEdgeHint" class="small"></span></div>
     <div class="size-picker-row size-picker-presets"><span class="size-picker-label">推荐档位</span><span id="sizePresetChips" class="size-preset-chips"></span></div>
-    <div class="size-picker-row"><span class="size-picker-label">自定义</span><span class="size-picker-custom"><span class="small">宽</span><input id="sizeCustomWidth" type="number" inputmode="numeric"><span class="small">×</span><span class="small">高</span><input id="sizeCustomHeight" type="number" inputmode="numeric"></span></div>
+    <div class="size-picker-row"><span class="size-picker-label">自定义精确尺寸</span><span class="size-picker-custom"><span class="small">宽</span><input id="sizeCustomWidth" type="number" inputmode="numeric"><span class="small">×</span><span class="small">高</span><input id="sizeCustomHeight" type="number" inputmode="numeric"></span><span class="small size-picker-custom-hint">修改宽高会暂时允许非标准比例，再次拖动「长边」后恢复当前选定比例</span></div>
     <div id="sizePickerNote" class="small size-picker-note"></div>`;
 
   const byId = (id) => (typeof document === "undefined" ? null : document.getElementById(id));
@@ -351,16 +354,25 @@
     elements.hint.textContent = `范围 ${min}–${max}px（当前模型上限），短边按比例向下对齐 ${limits.alignment} 的倍数`;
   }
 
+  /** 实际像素比例文本（用于说明近似档位差多少）。 */
+  function actualRatioText(width, height) {
+    const value = Number(width) / Number(height);
+    return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}:1` : "";
+  }
+
   function noteText(value) {
     const preset = presetGroup(activeRatio).presets.find((item) => item.value === value);
     if (preset) {
-      return `${preset.label}${preset.exact ? "" : "（≈ 近似比例）"}；每个比例会记住上次用的尺寸。`;
+      const info = ratioInfo(activeRatio);
+      const drift = Math.abs(preset.width / preset.height - info.ratio) / info.ratio;
+      const suffix = drift <= 0.001 ? "" : `（实际 ${actualRatioText(preset.width, preset.height)} ≈ ${activeRatio}）`;
+      return `${preset.label}${suffix}；每个比例会记住上次用的尺寸。`;
     }
     const match = CUSTOM_VALUE_RE.exec(value);
     if (!match) return "";
     const exact = isExactForRatio(activeRatio, Number(match[1]), Number(match[2]));
-    const suffix = exact ? `严格 ${activeRatio}` : `≈ ${activeRatio}`;
-    return `自定义尺寸 ${match[1]} × ${match[2]}（${suffix}）：拖滑块或改长边会按当前比例重新对齐 8 的倍数；自定义值不写入比例记忆。`;
+    const suffix = exact ? `严格 ${activeRatio}` : `非标准比例，≈ ${activeRatio}`;
+    return `自定义精确尺寸 ${match[1]} × ${match[2]}（${suffix}）：拖动「长边」会恢复当前比例并对齐 8 的倍数；自定义值不写入比例记忆。`;
   }
 
   function render() {
@@ -528,16 +540,26 @@
     return applyValue(value, { ratio: key, remember: true });
   }
 
-  /** 点比例：优先回到该比例上次用的尺寸，其次该比例第一个推荐档位，最后给个中间值。 */
+  /**
+   * 点比例时的默认档位：**优先第一个严格比例档位**（避免“比例写着 3:2、尺寸却是 1216×832”的错位），
+   * 没有严格档位才退回第一个近似档位，返回 null 表示该比例没有可用档位。
+   */
+  function pickDefaultPreset(presets) {
+    const usable = (presets || []).filter((item) => item && !item.disabled);
+    return usable.find((item) => item.exact) || usable[0] || null;
+  }
+
+  /** 点比例：优先回到该比例上次用的尺寸，其次该比例第一个严格档位（再退近似档），最后用滑块中间值。 */
   function selectRatio(key) {
     if (!elements) return null;
     const remembered = CUSTOM_VALUE_RE.test(String(memory[key] || "")) ? memory[key] : "";
     if (remembered) return applyValue(remembered, { ratio: key, remember: false });
-    const presets = presetGroup(key).presets.filter((item) => !item.disabled);
-    if (presets.length) return applyValue(presets[0].value, { ratio: key, remember: false });
+    const preset = pickDefaultPreset(presetGroup(key).presets);
+    if (preset) return applyValue(preset.value, { ratio: key, remember: false });
     const limits = modelLimits();
     const min = minLongEdge(key, limits.alignment, limits.minSide);
-    return applyLongEdge(Math.min(limits.maxSide, Math.max(min, FALLBACK_LONG_EDGE)), { remember: false });
+    const middle = alignTo((min + Math.max(min, limits.maxSide)) / 2, limits.alignment);
+    return applyLongEdge(middle, { remember: false });
   }
 
   /* ---------- 安装 ---------- */
@@ -639,6 +661,7 @@
     isExactForRatio,
     groupPresets,
     vramEstimate,
+    pickDefaultPreset,
     readMemory,
     writeMemory,
     /** 供其它脚本（读图还原 / 快照恢复 / 控制台）按精确像素设置尺寸。 */

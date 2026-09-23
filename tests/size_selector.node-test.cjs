@@ -132,6 +132,53 @@ test('比例记忆只接受主比例与合法尺寸', () => {
   assert.deepEqual(sizes.readMemory(), {})
 })
 
+test('点比例时优先落在严格比例档位（不会先落到近似档位）', () => {
+  assert.equal(
+    sizes.pickDefaultPreset([
+      { value: '1216x832', exact: false },
+      { value: '1536x1024', exact: true },
+    ]).value,
+    '1536x1024',
+  )
+  // 已有记忆/顺序不变：第一个严格档位优先于更靠前的近似档位
+  const groups = sizes.groupPresets(OPTIONS)
+  const expected = {
+    '1:1': '768x768',
+    '2:3': '1024x1536',
+    '3:4': '768x1024',
+    '9:16': '720x1280',
+    '1:2': '640x1280',
+    '9:21': '720x1680',
+    '3:2': '1536x1024',
+    '4:3': '1024x768',
+    '16:9': '1280x720',
+    '2:1': '1536x768',
+    '21:9': '1344x576',
+  }
+  groups.forEach((group) => {
+    const picked = sizes.pickDefaultPreset(group.presets)
+    assert.ok(picked, `${group.key} 没有默认档位`)
+    assert.equal(picked.value, expected[group.key], `${group.key} 默认档位应为第一个严格档位`)
+    assert.equal(picked.exact, true, `${group.key} 默认档位必须是严格比例`)
+  })
+  // 没有严格档位 → 退回第一个可用近似档位；全禁用 → null
+  assert.equal(
+    sizes.pickDefaultPreset([
+      { value: '768x1344', exact: false },
+      { value: '832x1472', exact: false },
+    ]).value,
+    '768x1344',
+  )
+  assert.equal(sizes.pickDefaultPreset([{ value: '2048x2048', exact: true, disabled: true }]), null)
+  assert.equal(
+    sizes.pickDefaultPreset([
+      { value: '2048x2048', exact: true, disabled: true },
+      { value: '1024x1024', exact: true },
+    ]).value,
+    '1024x1024',
+  )
+})
+
 test('对齐工具与边界', () => {
   assert.equal(sizes.alignTo(1109.3, 8), 1112)
   assert.equal(sizes.alignTo(0, 8), 8)

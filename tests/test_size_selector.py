@@ -58,8 +58,8 @@ class SizeSelectorWiringTests(unittest.TestCase):
 
     def test_both_pages_load_the_selector(self):
         for page in self.pages:
-            self.assertIn('<script src="/assets/js/size-selector.js?v=1"></script>', page)
-            self.assertIn('href="/assets/css/panel.css?v=47"', page)
+            self.assertIn('<script src="/assets/js/size-selector.js?v=2"></script>', page)
+            self.assertIn('href="/assets/css/panel.css?v=48"', page)
 
     def test_payload_copies_are_byte_identical(self):
         self.assertEqual(SCRIPT.read_bytes(), PAYLOAD_SCRIPT.read_bytes())
@@ -96,11 +96,23 @@ class SizeSelectorWiringTests(unittest.TestCase):
     def test_memory_and_display_contract(self):
         self.assertIn('const MEMORY_KEY = "easyPanelSizeByRatioV1"', self.source)
         self.assertIn("easyPanelSizeByRatioV1", self.source)
-        for marker in ("图片比例", "推荐档位", "预计显存负载", "自定义", "长边", "对齐 8 的倍数"):
+        for marker in ("图片比例", "推荐档位", "预计显存负载", "自定义精确尺寸", "长边", "对齐 8 的倍数"):
             self.assertIn(marker, self.source)
+        # 自定义宽高定位：允许临时非标准比例，拖长边即恢复选定比例
+        self.assertIn("修改宽高会暂时允许非标准比例", self.source)
+        self.assertIn("再次拖动「长边」后恢复当前选定比例", self.source)
         # 短边向下对齐（1664×1104 之类的值），不要越过数学比例多占显存
         self.assertIn("Math.floor(number / unit) * unit", self.source)
         self.assertIn("alignDown(exact, unit)", self.source)
+
+    def test_ratio_click_prefers_strict_preset(self):
+        """点比例不能先落到近似档位（否则会出现“比例 3:2、尺寸 1216×832”的错位）。"""
+        self.assertIn("function pickDefaultPreset(presets)", self.source)
+        self.assertIn("usable.find((item) => item.exact) || usable[0] || null", self.source)
+        self.assertIn("const preset = pickDefaultPreset(presetGroup(key).presets)", self.source)
+        # 完全没有档位时用滑块中间值，而不是第一个档位
+        self.assertIn("const middle = alignTo((min + Math.max(min, limits.maxSide)) / 2, limits.alignment)", self.source)
+        self.assertIn("return applyLongEdge(middle, { remember: false })", self.source)
 
     def test_module_is_dom_guarded_and_exported(self):
         self.assertIn('typeof document === "undefined"', self.source)
