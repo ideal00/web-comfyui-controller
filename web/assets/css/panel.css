@@ -216,3 +216,19 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .size-preset-chip.active{border-color:var(--accent);background:#1b2740;color:#fff}
 .size-preset-approx{border-style:dashed}
 .size-picker-note{color:#8fa2b8}
+/* 左侧「快捷工具」抽屉：每一块都可折叠（状态记忆与自动展开见 web/assets/js/rail-fold.js） */
+.studio-left>.rail-fold{margin:7px 0}
+.rail-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-12px -12px 0;padding:10px 12px;border-radius:4px;background:#1d2231;list-style-position:inside}
+.rail-fold[open]>summary{margin-bottom:10px;border-bottom:1px solid #2c3550;border-radius:4px 4px 0 0}
+.rail-fold>summary::marker{color:#9eb1ca}
+.rail-fold>summary>b,.rail-fold>summary .rail-fold-title b{font-size:13px;color:#e7edf7}
+.rail-fold-title{display:grid;gap:2px;min-width:0}
+.rail-fold-state{flex:none;max-width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8fa2b8;font-size:11px;text-align:right}
+.rail-fold-body{min-width:0}
+.studio-left>.rail-fold>.rail-fold-body{margin:0}
+/* 左侧悬浮快捷跳转条固定贴窗口左边（约 46px），给折叠标题让出这段宽度，标题就不会被压住。 */
+.studio-left .rail-fold>summary{padding-left:48px}
+@media(max-width:700px){.studio-left .rail-fold>summary{padding-left:44px}}
+.studio-left .rail-fold .input-size-row{max-width:none;margin:0;padding:0;border:0;background:transparent}
+.rail-mount{margin:7px 0}
+.studio-left .transparent-output-panel{margin:0;padding:12px;border-radius:5px;background:#151a27;box-shadow:inset 3px 0 #78b5ff}

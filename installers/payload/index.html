@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=48">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=49">
 
 </head>
 <body>
@@ -45,16 +45,25 @@
   <div class="studio-layout" id="studioLayout">
   <aside class="studio-rail studio-left" aria-label="快捷工具">
   <div class="studio-rail-title"><span>快捷工具</span><span>Quick Tools</span></div>
-  <div class="input-size-row"><span>输入框字号</span><input id="inputFontSize" type="range" min="11" max="24" step="1" value="15" oninput="applyInputFontSize(this.value)" title="调节所有输入框 / 文本域 / 下拉框的文字大小"><output id="inputFontSizeValue">15px</output></div>
+  <details class="card rail-fold rail-fold-size" id="railFontSizeFold" data-rail-fold>
+    <summary><b>输入框字号</b><output id="inputFontSizeValue">15px</output></summary>
+    <div class="rail-fold-body input-size-row"><input id="inputFontSize" type="range" min="11" max="24" step="1" value="15" oninput="applyInputFontSize(this.value)" title="调节所有输入框 / 文本域 / 下拉框的文字大小"><span class="small">拖动调整所有输入框 / 文本域 / 下拉框的字号</span></div>
+  </details>
 
-  <section class="card custom-feature-card" id="customFeatureCard">
-    <div class="field-title"><b>我的功能</b><button class="secondary custom-feature-edit" type="button" onclick="openFeatureEditor()">编辑</button></div>
-    <div id="customFeatureList" class="custom-feature-list"></div>
-    <button id="customFeatureEmpty" class="custom-feature-empty" type="button" onclick="openFeatureEditor(true)">＋ 添加第一个自定义功能</button>
-  </section>
+  <details class="card custom-feature-card rail-fold" id="customFeatureCard" data-rail-fold>
+    <summary><b>我的功能</b><span class="rail-fold-state" id="customFeatureState">快捷入口</span></summary>
+    <div class="rail-fold-body">
+      <div class="field-title"><span>自定义快捷入口</span><button class="secondary custom-feature-edit" type="button" onclick="openFeatureEditor()">编辑</button></div>
+      <div id="customFeatureList" class="custom-feature-list"></div>
+      <button id="customFeatureEmpty" class="custom-feature-empty" type="button" onclick="openFeatureEditor(true)">＋ 添加第一个自定义功能</button>
+    </div>
+  </details>
 
-  <section class="card prompt-card">
-    <div class="field-title"><b>中文描述转换</b><span class="small">常用词会转成英文标签 · <span id="translationFamilyMode">检测模型中…</span></span></div>
+  <div id="railTransparentMount" class="rail-mount"></div>
+
+  <details class="card prompt-card rail-fold" id="translationCard" data-rail-fold>
+    <summary><b>中文描述转换</b><span class="rail-fold-state" id="translationFamilyMode">检测模型中…</span></summary>
+    <div class="rail-fold-body">
     <div class="two"><div><div class="field-title"><span>转换模式</span><span class="small" id="instructionModeHint">常规：按模型族把中文转成英文标签</span></div><select id="promptInstructionMode"><option value="standard">常规转换</option><option value="advanced">高级覆写（状态变化：破损 / 换装 / 附着物 / 材质重构）</option></select></div><div class="small" style="align-self:end">覆写模式会先清除与目标状态冲突的旧属性词，再按结构 / 展现 / 痕迹三层重写，并额外给出一阶段与二阶段（denoise 0.45~0.60）两套提示词。</div></div>
     <textarea id="zhPrompt" placeholder="例如：蓝发成年女性，白衬衫、轻薄尼龙丝袜，在窗边的全身像"></textarea>
     <div class="field-title"><span>DeepSeek 网页版</span><span class="small">不用 API / 不保存密钥 · 自动复制适配当前模型的转换指令</span></div>
@@ -74,15 +83,19 @@
         <div class="actions token-library-actions"><button class="secondary" onclick="undoToken()">撤销上一个词条</button><button class="secondary" onclick="copyPrompt()">复制提示词</button><button class="danger" onclick="resetPrompt()">重置为初始提示词</button></div>
       </div>
     </details>
-  </section>
+    </div>
+  </details>
 
-  <section class="card prompt-card">
-    <div class="field-title"><b>读取 AI 图片参数（读图还原）</b><span class="small">像 CivitAI / spell.novelai.dev 一样读取图片内嵌的提示词与生成参数，可一键填入面板</span></div>
+  <details class="card prompt-card rail-fold" id="imageReadCard" data-rail-fold>
+    <summary><b>读取 AI 图片参数（读图还原）</b><span class="rail-fold-state" id="imageReadState">上传或选输出图</span></summary>
+    <div class="rail-fold-body">
+    <div class="small">像 CivitAI / spell.novelai.dev 一样读取图片内嵌的提示词与生成参数，可一键填入面板。</div>
     <div class="two"><div><div class="field-title"><span>上传图片</span><span class="small">PNG / JPG / WEBP</span></div><input id="imgReadFile" type="file" accept="image/png,image/jpeg,image/webp" onchange="readImageInfo()"></div><div><div class="field-title"><span>或选择本面板输出</span></div><select id="imgReadOutput" onchange="readOutputImage()"><option value="">— 从最近生成结果选择 —</option></select></div></div>
     <div id="imgReadPreview" class="small" style="margin:8px 0"></div>
     <div id="imgReadResult" class="small" style="white-space:pre-line;margin:6px 0"></div>
     <div class="actions"><button class="secondary" onclick="fillPanelFromImage()">填入生成面板</button><button class="secondary" onclick="clearImageRead()">清空</button></div>
-  </section>
+    </div>
+  </details>
 
   </aside>
 
@@ -376,8 +389,9 @@
 <script src="/assets/js/shared-state.js?v=1"></script>
 <script src="/assets/js/clarity-analysis.js?v=4"></script>
 <script src="/assets/js/feature-editor.js?v=1"></script>
-<script src="/assets/js/model-advanced.js?v=7"></script>
+<script src="/assets/js/model-advanced.js?v=8"></script>
 <script src="/assets/js/size-selector.js?v=2"></script>
+<script src="/assets/js/rail-fold.js?v=1"></script>
 <script src="/assets/js/anima-refine.js?v=3"></script>
 <script src="/assets/js/anima-highres.js?v=9"></script>
 <script src="/assets/js/camera-control.js?v=6"></script>
