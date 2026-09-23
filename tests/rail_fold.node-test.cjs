@@ -62,9 +62,9 @@ test('applyFoldState：记住 true 才展开，其它一律默认折叠', () => 
 
 test('index.html 里每一块抽屉面板都带 data-rail-fold 与 summary', () => {
   const blocks = html.match(/<details[^>]*data-rail-fold[^>]*>/g) || []
-  assert.equal(blocks.length, 4)
+  assert.equal(blocks.length, 3)
   blocks.forEach((block) => {
-    assert.ok(/id="(railFontSizeFold|customFeatureCard|translationCard|imageReadCard)"/.test(block), block)
+    assert.ok(/id="(customFeatureCard|translationCard|imageReadCard)"/.test(block), block)
     assert.ok(!/\sopen(\s|>)/.test(block), `默认必须折叠：${block}`)
   })
   assert.ok(html.includes('id="railTransparentMount"'))

@@ -22,7 +22,7 @@ class ClarityAnalysisTests(unittest.TestCase):
 
     def test_clarity_panel_is_automatic_and_can_be_retested(self):
         for marker in (
-            "/assets/js/clarity-analysis.js?v=4",
+            "/assets/js/clarity-analysis.js?v=5",
             'id = "clarityAnalysisPanel"',
             "自动清晰度检测",
             "重新检测",

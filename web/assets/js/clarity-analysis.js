@@ -15,7 +15,7 @@
     panel.innerHTML = `
       <header><div><span class="studio-kicker">像素检查</span><b>自动清晰度检测</b></div><button class="secondary" type="button" onclick="analyzeGeneratedClarity(true)">重新检测</button></header>
       <div id="clarityAnalysisResult" class="small">生成图片后自动检测；只评估像素锐度，不判断手、脸或肢体结构是否正确。</div>`;
-    result.parentNode.insertBefore(panel, result);
+    result.parentNode.insertBefore(panel, result.nextSibling); // 放在图片下方：预览栏首屏留给图片本身
     const action = document.createElement("section");
     action.id = "clarityUpscalePanel";
     action.className = "clarity-upscale-panel";

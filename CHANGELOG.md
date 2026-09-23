@@ -1,5 +1,12 @@
 # Easy Panel 更新记录
 
+## 预览栏首屏留给图片 + 顶部「⋯ 更多」+ 字号收进界面小菜单（2026-09-23）
+
+- **预览栏（P1）**：宽高滑块、当前队列、采样/调度标签全部收进标题栏右侧的「⚙ 预览设置」弹层；图片区域紧跟标题栏（进度条只在生成时出现），并在预览栏可见高度里居中（`.preview-card` 改 flex 纵向 + `.result{flex:1 1 auto;min-height:var(--preview-height)}`）。清晰度检测面板也从图片上方改排到图片下方，首屏不再被工具栏挤占。
+- **顶部「⋯ 更多」（P1）**：≤1340px 时以前 `.studio-header-actions{display:none}`，框宽 / 功能编辑 / 打开 ComfyUI 直接消失；现在统一挂在 `#studioMoreMenu` 里——宽屏（≥1341px）由 `header-menu.js` 设 open 平铺、隐藏 summary，窄屏默认收起成下拉（点外部/Esc 收起）。≤820px 的手机排版也保留入口（品牌行右侧）。
+- **字号设置（P2）**：输入框字号不再占抽屉第一块卡片，收进抽屉标题栏的「⚙ 界面」小菜单（`#railAppearanceMenu`），拖动即时生效、仍只存在本机。
+- 新增 `tests/test_header_menu.py`（7 项，含预览栏收纳 / 更多菜单 / 界面菜单 / payload 逐字节）与 `tests/header_menu.node-test.cjs`（4 项）；`test_ui_progress.py` 改为断言「进度在图片区之前、宽高/队列/标签在 ⚙ 预览设置 里」；版本：panel.css?v=50、clarity-analysis.js?v=5、新增 header-menu.js?v=1。
+
 ## 左侧快捷工具抽屉全部可折叠 + 透明背景角色 PNG 归位（2026-09-23）
 
 - **透明背景角色 PNG 移进左侧抽屉**：原来固定在生成设置页顶部，现在挂在左侧「快捷工具」的 `#railTransparentMount`（生成设置页不再重复出现），切换「编辑提示词 / 生成设置」标签页也能随时调；面板本身改成可折叠，摘要右侧常驻当前档位（关闭 / 自动抠图 / 精细边缘）。

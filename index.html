@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=49">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=50">
 
 </head>
 <body>
@@ -27,6 +27,9 @@
       <button type="button" onclick="jumpToPanelSection('loraSection')">LoRA 与模型</button>
     </nav>
     <div class="studio-header-actions">
+      <details class="studio-more" id="studioMoreMenu">
+        <summary title="框宽 / 功能编辑 / 打开 ComfyUI">⋯ 更多</summary>
+        <div class="studio-more-body">
       <button class="studio-comfy-link" type="button" onclick="openFeatureEditor()">🧩 功能编辑</button>
       <details class="layout-size-menu">
         <summary>↔ 框宽</summary>
@@ -40,15 +43,20 @@
         </div>
       </details>
       <button class="studio-comfy-link comfy-only-link" type="button" onclick="window.open('http://127.0.0.1:8188','_blank')">打开 ComfyUI ↗</button>
+        </div>
+      </details>
     </div>
   </header>
   <div class="studio-layout" id="studioLayout">
   <aside class="studio-rail studio-left" aria-label="快捷工具">
-  <div class="studio-rail-title"><span>快捷工具</span><span>Quick Tools</span></div>
-  <details class="card rail-fold rail-fold-size" id="railFontSizeFold" data-rail-fold>
-    <summary><b>输入框字号</b><output id="inputFontSizeValue">15px</output></summary>
-    <div class="rail-fold-body input-size-row"><input id="inputFontSize" type="range" min="11" max="24" step="1" value="15" oninput="applyInputFontSize(this.value)" title="调节所有输入框 / 文本域 / 下拉框的文字大小"><span class="small">拖动调整所有输入框 / 文本域 / 下拉框的字号</span></div>
-  </details>
+  <div class="studio-rail-title"><span>快捷工具</span><details class="rail-appearance" id="railAppearanceMenu">
+      <summary title="外观 / 界面设置：输入框字号">⚙ 界面</summary>
+      <div class="rail-appearance-body">
+        <div class="field-title"><span>输入框字号</span><output id="inputFontSizeValue">15px</output></div>
+        <label class="input-size-row"><input id="inputFontSize" type="range" min="11" max="24" step="1" value="15" oninput="applyInputFontSize(this.value)" title="调节所有输入框 / 文本域 / 下拉框的文字大小"></label>
+        <p class="small">低频全局设置：拖动即时生效，只保存在当前浏览器。</p>
+      </div>
+    </details></div>
 
   <details class="card custom-feature-card rail-fold" id="customFeatureCard" data-rail-fold>
     <summary><b>我的功能</b><span class="rail-fold-state" id="customFeatureState">快捷入口</span></summary>
@@ -216,7 +224,22 @@
       <details><summary>严格 LoRA 对比实验室</summary><div class="color-panel"><div class="small">点击创建时冻结当前模型、最终提示词、seed、尺寸、采样器和全部增强参数；每个变体只改变 LoRA 顺序或一个 LoRA 的权重。</div><div class="two" style="margin-top:8px"><div><div class="field-title"><span>实验类型</span></div><select id="experimentMode" onchange="renderExperimentControls()"><option value="order">全部 LoRA 顺序排列</option><option value="weight">单个 LoRA 权重扫描</option></select></div><div><div class="field-title"><span>每个变体的种子数</span></div><input id="experimentSeeds" type="number" min="1" max="4" step="1" value="1"></div></div><div id="experimentWeightControls"><div class="field-title"><span>扫描对象</span></div><select id="experimentLora"></select><div class="field-title"><span>权重列表</span><span class="small">逗号分隔，最多 8 个</span></div><input id="experimentWeights" value="0.50, 0.65, 0.80, 0.95"></div><div class="actions"><button type="button" onclick="createStrictExperiment()">冻结基线并加入对比队列</button></div><div id="experimentInfo" class="small"></div></div></details>
       <details><summary>生成快照与完全复现</summary><div class="actions"><button class="secondary" type="button" onclick="loadSnapshots()">刷新快照</button></div><div id="snapshotList" class="snapshot-list small">尚未读取快照。</div></details>
     </section>
-    <aside class="card preview-card"><div class="preview-heading"><div><span class="studio-kicker">画布</span><b>生成预览</b></div><span class="small">点击图片可放大查看</span></div><div class="generation-progress" id="generationProgress" data-connection="offline" hidden><div class="generation-progress-heading"><b id="generationProgressLabel">生成进度</b><span id="generationProgressPercent">0%</span></div><progress id="generationProgressBar" max="100" value="0">0%</progress><div class="small" id="generationProgressDetail">等待提交任务…</div></div><div class="preview-controls"><label class="preview-size">宽度<input id="previewWidth" type="range" min="360" max="900" step="20" value="520" oninput="applyPreviewSize()"><output id="previewWidthValue">520px</output></label><label class="preview-size">高度<input id="previewHeight" type="range" min="420" max="1080" step="20" value="680" oninput="applyPreviewSize()"><output id="previewHeightValue">680px</output></label></div><div class="result" id="result">尚未生成</div><p class="small">当前队列：<span id="queue">读取中</span></p><div><span class="tag" id="samplerBadge">DPM++ 2M SDE</span><span class="tag" id="schedulerBadge">Karras</span><span class="tag">本机 127.0.0.1</span></div></aside>
+    <aside class="card preview-card">
+      <div class="preview-heading"><div><span class="studio-kicker">画布</span><b>生成预览</b></div>
+        <details class="preview-settings" id="previewSettingsMenu">
+          <summary title="预览设置：图片区域宽高、队列与采样标签">⚙ 预览设置</summary>
+          <div class="preview-settings-body">
+            <label class="preview-size">宽度<input id="previewWidth" type="range" min="360" max="900" step="20" value="520" oninput="applyPreviewSize()"><output id="previewWidthValue">520px</output></label>
+            <label class="preview-size">高度<input id="previewHeight" type="range" min="420" max="1080" step="20" value="680" oninput="applyPreviewSize()"><output id="previewHeightValue">680px</output></label>
+            <p class="small">当前队列：<span id="queue">读取中</span></p>
+            <div class="preview-settings-tags"><span class="tag" id="samplerBadge">DPM++ 2M SDE</span><span class="tag" id="schedulerBadge">Karras</span><span class="tag">本机 127.0.0.1</span></div>
+            <p class="small">点击图片可放大查看；这里的宽高只改预览区域大小，不影响出图尺寸。</p>
+          </div>
+        </details>
+      </div>
+      <div class="generation-progress" id="generationProgress" data-connection="offline" hidden><div class="generation-progress-heading"><b id="generationProgressLabel">生成进度</b><span id="generationProgressPercent">0%</span></div><progress id="generationProgressBar" max="100" value="0">0%</progress><div class="small" id="generationProgressDetail">等待提交任务…</div></div>
+      <div class="result" id="result">尚未生成</div>
+    </aside>
   </div>
   </div>
   <aside id="studioToolDrawer" class="studio-tool-drawer" aria-hidden="true">
@@ -387,11 +410,12 @@
 <script src="/assets/js/panel.js?v=79"></script>
 <script src="/assets/js/prompt-mode.js?v=1"></script>
 <script src="/assets/js/shared-state.js?v=1"></script>
-<script src="/assets/js/clarity-analysis.js?v=4"></script>
+<script src="/assets/js/clarity-analysis.js?v=5"></script>
 <script src="/assets/js/feature-editor.js?v=1"></script>
 <script src="/assets/js/model-advanced.js?v=8"></script>
 <script src="/assets/js/size-selector.js?v=2"></script>
 <script src="/assets/js/rail-fold.js?v=1"></script>
+<script src="/assets/js/header-menu.js?v=1"></script>
 <script src="/assets/js/anima-refine.js?v=3"></script>
 <script src="/assets/js/anima-highres.js?v=9"></script>
 <script src="/assets/js/camera-control.js?v=6"></script>

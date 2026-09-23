@@ -25,7 +25,7 @@ PAYLOAD_CSS = ROOT / "installers/payload/web/assets/css/panel.css"
 ADVANCED = ROOT / "web/assets/js/model-advanced.js"
 PAYLOAD_ADVANCED = ROOT / "installers/payload/web/assets/js/model-advanced.js"
 
-FOLD_IDS = ["railFontSizeFold", "customFeatureCard", "translationCard", "imageReadCard"]
+FOLD_IDS = ["customFeatureCard", "translationCard", "imageReadCard"]
 
 
 class RailFoldMarkupTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class RailFoldMarkupTests(unittest.TestCase):
     def test_every_rail_block_is_a_collapsible_details(self):
         for page in self.pages:
             tags = list(re.finditer(r"<details[^>]*data-rail-fold[^>]*>", page))
-            self.assertEqual(4, len(tags), "左侧抽屉应恰好有 4 块可折叠面板")
+            self.assertEqual(3, len(tags), "左侧抽屉应有 3 块静态可折叠面板（透明背景由脚本移入）")
             found = []
             for tag in tags:
                 block = tag.group(0)
