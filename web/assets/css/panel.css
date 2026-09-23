@@ -263,3 +263,9 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .rail-appearance-body p{margin:0}
 .rail-appearance-body .input-size-row{display:flex;align-items:center;gap:8px;max-width:none;margin:0;padding:0;border:0;background:transparent}
 .rail-appearance-body .input-size-row input{flex:1;min-width:0;padding:0}
+/* 任务批处理控制（从生成列移到左侧抽屉折叠）：摘要显示「执行中 / 排队 / 失败」短标签 */
+.studio-left .task-toolbar{margin:0;padding:0;border:0;background:transparent}
+.studio-left .task-toolbar-heading{color:#8fa2b8}
+.studio-left .task-toolbar-actions button{font-size:11px;padding:5px 8px}
+.studio-left .task-toolbar-switches .switch b{font-size:12px}
+.studio-left .task-list{max-height:220px;overflow:auto}

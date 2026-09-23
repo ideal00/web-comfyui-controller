@@ -123,6 +123,41 @@
     badge.textContent = result || preview ? "已读取参数" : "上传或选输出图";
   }
 
+  /** 服务端队列计数（“排队中 0 · 执行中 1 · 已完成 12 …”）→ 折叠摘要短标签。 */
+  function summarizeTaskCounts(text) {
+    const raw = String(text || "").trim();
+    if (!raw || raw === "读取中…") return "读取中…";
+    const pick = (label) => {
+      const match = new RegExp(label + "\\s*(\\d+)").exec(raw);
+      return match ? Number(match[1]) : 0;
+    };
+    const parts = [];
+    const running = pick("执行中");
+    const pending = pick("排队中");
+    const failed = pick("失败");
+    if (running) parts.push(`执行中 ${running}`);
+    if (pending) parts.push(`排队 ${pending}`);
+    if (failed) parts.push(`失败 ${failed}`);
+    return parts.length ? parts.join(" · ") : "空闲";
+  }
+
+  function updateTaskQueueState() {
+    const badge = byId("taskQueueSummary");
+    if (!badge) return;
+    badge.textContent = summarizeTaskCounts(byId("taskQueueServerCounts")?.textContent);
+  }
+
+  /** 队列计数是其它脚本按 id 写入的：监听它刷新折叠摘要。 */
+  function observeTaskCounts() {
+    const source = byId("taskQueueServerCounts");
+    if (!source || typeof MutationObserver === "undefined" || source.dataset.railTaskBound === "1") return;
+    source.dataset.railTaskBound = "1";
+    new MutationObserver(() => updateTaskQueueState()).observe(source, {
+      childList: true, characterData: true, subtree: true,
+    });
+    updateTaskQueueState();
+  }
+
   function bindNode(node) {
     if (node.dataset.railFoldBound === "1") return;
     node.dataset.railFoldBound = "1";
@@ -139,6 +174,8 @@
     });
     updateCustomFeatureState();
     updateImageReadState();
+    updateTaskQueueState();
+    observeTaskCounts();
     observeRail();
     return true;
   }
@@ -198,6 +235,7 @@
     rememberFold,
     foldNodes,
     applyFoldState,
+    summarizeTaskCounts,
     reveal,
     install,
   };

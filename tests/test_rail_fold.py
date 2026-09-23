@@ -25,7 +25,7 @@ PAYLOAD_CSS = ROOT / "installers/payload/web/assets/css/panel.css"
 ADVANCED = ROOT / "web/assets/js/model-advanced.js"
 PAYLOAD_ADVANCED = ROOT / "installers/payload/web/assets/js/model-advanced.js"
 
-FOLD_IDS = ["customFeatureCard", "translationCard", "imageReadCard"]
+FOLD_IDS = ["customFeatureCard", "taskQueueFold", "translationCard", "imageReadCard"]
 
 
 class RailFoldMarkupTests(unittest.TestCase):
@@ -38,13 +38,13 @@ class RailFoldMarkupTests(unittest.TestCase):
 
     def test_both_pages_install_the_fold_layer(self):
         for page in self.pages:
-            self.assertIn('<script src="/assets/js/rail-fold.js?v=1"></script>', page)
+            self.assertIn('<script src="/assets/js/rail-fold.js?v=2"></script>', page)
             self.assertIn('id="railTransparentMount"', page)
 
     def test_every_rail_block_is_a_collapsible_details(self):
         for page in self.pages:
             tags = list(re.finditer(r"<details[^>]*data-rail-fold[^>]*>", page))
-            self.assertEqual(3, len(tags), "左侧抽屉应有 3 块静态可折叠面板（透明背景由脚本移入）")
+            self.assertEqual(4, len(tags), "左侧抽屉应有 4 块静态可折叠面板（透明背景由脚本移入）")
             found = []
             for tag in tags:
                 block = tag.group(0)
@@ -74,6 +74,24 @@ class RailFoldMarkupTests(unittest.TestCase):
         # 旧的独立标题块已经被折叠摘要取代
         self.assertNotIn('class="transparent-output-heading"', self.advanced)
 
+    def test_task_toolbar_moved_into_the_rail(self):
+        for page in self.pages:
+            fold_start = page.index('id="taskQueueFold"')
+            fold = page[fold_start : page.index("</details>", fold_start)]
+            for marker in (
+                'id="taskQueueToolbar"',
+                'id="taskQueueServerCounts"',
+                'id="taskRunBtn"', 'id="taskPauseBtn"', 'id="taskCancelCurrentBtn"',
+                'id="taskCancelPendingBtn"', 'id="taskCleanFailedBtn"', 'id="taskCleanFinishedBtn"',
+                'id="taskAutoSkip"', 'id="taskSelectOnly"',
+                'id="taskQueueNotice"', 'id="taskQueueServerList"',
+            ):
+                self.assertIn(marker, fold, f"{marker} 应该在任务批处理折叠块里")
+            self.assertIn('id="taskQueueSummary"', fold)
+            # 生成列里不再有任务工具栏（避免两处各一份）
+            generation = page[page.index('id="generationSection"') : page.index('id="studioToolDrawer"')]
+            self.assertNotIn('id="taskQueueToolbar"', generation)
+
     def test_fold_layer_behaviour(self):
         for marker in (
             'const FOLD_STORAGE_KEY = "easyPanelRailFoldV1"',
@@ -82,6 +100,9 @@ class RailFoldMarkupTests(unittest.TestCase):
             "function writeFoldState(state)",
             "function rememberFold(node, open)",
             "function reveal(target)",
+            "function summarizeTaskCounts(text)",
+            "function updateTaskQueueState()",
+            "function observeTaskCounts()",
             'node.open = false; // 默认折叠',
             "window.easyPanelRevealRail = reveal;",
         ):

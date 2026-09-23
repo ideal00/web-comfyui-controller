@@ -1,5 +1,11 @@
 # Easy Panel 更新记录
 
+## 任务批处理控制移入左侧抽屉折叠（2026-09-23）
+
+- 「任务批处理控制」（运行 / 暂停 / 取消当前 / 取消后续 / 清理失败 / 清理已结束 + 失败自动跳过 + 只运行入选实验 + 任务清单）从生成列搬到左侧抽屉，和「透明背景角色 PNG」一样是可折叠块（`#taskQueueFold`，默认折叠，状态同样记在 `easyPanelRailFoldV1`）；生成列不再重复占位。
+- 折叠摘要右侧常驻短标签：只显示非零项（`执行中 1 · 排队 2 · 失败 3`），队列空闲显示「空闲」——摘要里的旧计数行改为纯文本，由 `rail-fold.js::summarizeTaskCounts()` 从 `#taskQueueServerCounts` 派生（监听其变化自动刷新），`task-control.js` 不用改。
+- 测试：`tests/test_rail_fold.py` 新增「任务工具栏在抽屉里、生成列不再有」断言并校验全部按钮/开关/清单 id；`tests/rail_fold.node-test.cjs` 新增 `summarizeTaskCounts` 用例（含空值、全零、只有排队）。
+
 ## 预览栏首屏留给图片 + 顶部「⋯ 更多」+ 字号收进界面小菜单（2026-09-23）
 
 - **预览栏（P1）**：宽高滑块、当前队列、采样/调度标签全部收进标题栏右侧的「⚙ 预览设置」弹层；图片区域紧跟标题栏（进度条只在生成时出现），并在预览栏可见高度里居中（`.preview-card` 改 flex 纵向 + `.result{flex:1 1 auto;min-height:var(--preview-height)}`）。清晰度检测面板也从图片上方改排到图片下方，首屏不再被工具栏挤占。

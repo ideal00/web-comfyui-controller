@@ -62,10 +62,25 @@ test('applyFoldState：记住 true 才展开，其它一律默认折叠', () => 
 
 test('index.html 里每一块抽屉面板都带 data-rail-fold 与 summary', () => {
   const blocks = html.match(/<details[^>]*data-rail-fold[^>]*>/g) || []
-  assert.equal(blocks.length, 3)
+  assert.equal(blocks.length, 4)
   blocks.forEach((block) => {
-    assert.ok(/id="(customFeatureCard|translationCard|imageReadCard)"/.test(block), block)
+    assert.ok(/id="(customFeatureCard|taskQueueFold|translationCard|imageReadCard)"/.test(block), block)
     assert.ok(!/\sopen(\s|>)/.test(block), `默认必须折叠：${block}`)
   })
   assert.ok(html.includes('id="railTransparentMount"'))
+  // 任务批处理控制已从生成列搬进抽屉
+  const generation = html.slice(html.indexOf('id="generationSection"'), html.indexOf('id="studioToolDrawer"'))
+  assert.ok(!generation.includes('id="taskQueueToolbar"'))
+})
+
+test('队列计数 → 折叠摘要短标签', () => {
+  assert.equal(
+    fold.summarizeTaskCounts('排队中 2 · 执行中 1 · 已完成 12 · 失败 3 · 已取消 0 · 已跳过 0'),
+    '执行中 1 · 排队 2 · 失败 3',
+  )
+  assert.equal(fold.summarizeTaskCounts('排队中 0 · 执行中 0 · 已完成 4 · 失败 0 · 已取消 0 · 已跳过 0'), '空闲')
+  assert.equal(fold.summarizeTaskCounts('读取中…'), '读取中…')
+  assert.equal(fold.summarizeTaskCounts(''), '读取中…')
+  assert.equal(fold.summarizeTaskCounts(undefined), '读取中…')
+  assert.equal(fold.summarizeTaskCounts('排队中 5'), '排队 5')
 })

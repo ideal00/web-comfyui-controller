@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=50">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=51">
 
 </head>
 <body>
@@ -68,6 +68,29 @@
   </details>
 
   <div id="railTransparentMount" class="rail-mount"></div>
+
+  <details class="card rail-fold" id="taskQueueFold" data-rail-fold>
+    <summary><b>任务批处理控制</b><span class="rail-fold-state" id="taskQueueSummary">读取中…</span></summary>
+    <div class="rail-fold-body">
+      <section id="taskQueueToolbar" class="task-toolbar" aria-label="任务批处理控制">
+        <div class="task-toolbar-heading"><span class="small" id="taskQueueServerCounts">读取中…</span></div>
+        <div class="actions task-toolbar-actions">
+          <button class="secondary" type="button" id="taskRunBtn">▶ 运行</button>
+          <button class="secondary" type="button" id="taskPauseBtn">⏸ 暂停</button>
+          <button class="secondary" type="button" id="taskCancelCurrentBtn" title="中断 ComfyUI 当前执行的任务">⛔ 取消当前</button>
+          <button class="secondary" type="button" id="taskCancelPendingBtn" title="取消还没开始执行的后续任务">🚫 取消后续</button>
+          <button class="secondary" type="button" id="taskCleanFailedBtn">🧹 清理失败任务</button>
+          <button class="secondary" type="button" id="taskCleanFinishedBtn" title="清理已完成 / 失败 / 取消 / 跳过的全部任务">🧽 清理已结束</button>
+        </div>
+        <div class="task-toolbar-switches">
+          <label class="switch"><input id="taskAutoSkip" type="checkbox" checked><div><b>失败自动跳过</b><div class="small">单个任务失败（例如 CUDA OOM）只标记该任务，队列继续跑后面的；关闭后失败会暂停队列。</div></div></label>
+          <label class="switch"><input id="taskSelectOnly" type="checkbox"><div><b>只运行入选实验</b><div class="small">只执行勾选的任务／实验项，其余自动跳过。</div></div></label>
+        </div>
+        <div id="taskQueueNotice" class="small"></div>
+        <div id="taskQueueServerList" class="task-list small">尚未读取任务队列。</div>
+      </section>
+    </div>
+  </details>
 
   <details class="card prompt-card rail-fold" id="translationCard" data-rail-fold>
     <summary><b>中文描述转换</b><span class="rail-fold-state" id="translationFamilyMode">检测模型中…</span></summary>
@@ -203,23 +226,6 @@
       <button class="primary" id="generate" onclick="generate()">生成图片</button>
       <div class="actions" style="margin-top:6px"><button class="secondary" type="button" onclick="enqueueJob()">＋ 加入任务队列</button><button class="secondary" type="button" onclick="openBatchExperiment()" title="固定其它参数，只改动一个变量批量对比">单变量实验</button><button class="secondary" type="button" onclick="sendJobQueue()">发送队列（<span id="jobQueueCount">0</span>）</button><button class="secondary" type="button" onclick="clearJobQueue()">清空队列</button></div>
       <div id="jobQueueList" class="small" style="margin-top:6px"></div>
-      <section id="taskQueueToolbar" class="task-toolbar" aria-label="任务批处理控制">
-        <div class="task-toolbar-heading"><b>任务批处理控制</b><span class="small" id="taskQueueServerCounts">读取中…</span></div>
-        <div class="actions task-toolbar-actions">
-          <button class="secondary" type="button" id="taskRunBtn">▶ 运行</button>
-          <button class="secondary" type="button" id="taskPauseBtn">⏸ 暂停</button>
-          <button class="secondary" type="button" id="taskCancelCurrentBtn" title="中断 ComfyUI 当前执行的任务">⛔ 取消当前</button>
-          <button class="secondary" type="button" id="taskCancelPendingBtn" title="取消还没开始执行的后续任务">🚫 取消后续</button>
-          <button class="secondary" type="button" id="taskCleanFailedBtn">🧹 清理失败任务</button>
-          <button class="secondary" type="button" id="taskCleanFinishedBtn" title="清理已完成 / 失败 / 取消 / 跳过的全部任务">🧽 清理已结束</button>
-        </div>
-        <div class="task-toolbar-switches">
-          <label class="switch"><input id="taskAutoSkip" type="checkbox" checked><div><b>失败自动跳过</b><div class="small">单个任务失败（例如 CUDA OOM）只标记该任务，队列继续跑后面的；关闭后失败会暂停队列。</div></div></label>
-          <label class="switch"><input id="taskSelectOnly" type="checkbox"><div><b>只运行入选实验</b><div class="small">只执行勾选的任务／实验项，其余自动跳过。</div></div></label>
-        </div>
-        <div id="taskQueueNotice" class="small"></div>
-        <div id="taskQueueServerList" class="task-list small">尚未读取任务队列。</div>
-      </section>
       </div>
       <details><summary>严格 LoRA 对比实验室</summary><div class="color-panel"><div class="small">点击创建时冻结当前模型、最终提示词、seed、尺寸、采样器和全部增强参数；每个变体只改变 LoRA 顺序或一个 LoRA 的权重。</div><div class="two" style="margin-top:8px"><div><div class="field-title"><span>实验类型</span></div><select id="experimentMode" onchange="renderExperimentControls()"><option value="order">全部 LoRA 顺序排列</option><option value="weight">单个 LoRA 权重扫描</option></select></div><div><div class="field-title"><span>每个变体的种子数</span></div><input id="experimentSeeds" type="number" min="1" max="4" step="1" value="1"></div></div><div id="experimentWeightControls"><div class="field-title"><span>扫描对象</span></div><select id="experimentLora"></select><div class="field-title"><span>权重列表</span><span class="small">逗号分隔，最多 8 个</span></div><input id="experimentWeights" value="0.50, 0.65, 0.80, 0.95"></div><div class="actions"><button type="button" onclick="createStrictExperiment()">冻结基线并加入对比队列</button></div><div id="experimentInfo" class="small"></div></div></details>
       <details><summary>生成快照与完全复现</summary><div class="actions"><button class="secondary" type="button" onclick="loadSnapshots()">刷新快照</button></div><div id="snapshotList" class="snapshot-list small">尚未读取快照。</div></details>
@@ -414,7 +420,7 @@
 <script src="/assets/js/feature-editor.js?v=1"></script>
 <script src="/assets/js/model-advanced.js?v=8"></script>
 <script src="/assets/js/size-selector.js?v=2"></script>
-<script src="/assets/js/rail-fold.js?v=1"></script>
+<script src="/assets/js/rail-fold.js?v=2"></script>
 <script src="/assets/js/header-menu.js?v=1"></script>
 <script src="/assets/js/anima-refine.js?v=3"></script>
 <script src="/assets/js/anima-highres.js?v=9"></script>
