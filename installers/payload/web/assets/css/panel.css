@@ -193,3 +193,25 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .anima-hand-row input[type=range]{max-width:130px}
 .anima-hand-file{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid var(--line);border-radius:8px;background:#242b3d;cursor:pointer}
 .anima-hand-file input[type=file]{max-width:150px;border:0;padding:0;background:transparent}
+/* 尺寸选择器：图片比例 → 长边滑块 → 推荐档位 → 当前尺寸信息（web/assets/js/size-selector.js 注入） */
+.three>.size-field-wide{grid-column:1/-1}
+.size-picker{display:flex;flex-direction:column;gap:6px}
+.size-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.size-picker-title{font-weight:600}
+.size-picker-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.size-picker-label{min-width:52px;color:#9fb2c9;font-size:12px}
+.size-picker-row b{font-variant-numeric:tabular-nums}
+#sizeCurrentMp,.size-picker-vram,#sizeLongEdgeHint{color:#8fa2b8}
+.size-ratio-chips{display:flex;flex-wrap:wrap;gap:5px}
+.size-ratio-chip{padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:#242b3d;color:inherit;cursor:pointer;font-size:12px;font-variant-numeric:tabular-nums}
+.size-ratio-chip:hover{border-color:#6f8fb8}
+.size-ratio-chip.active{border-color:var(--accent);background:#1b2740;color:#fff}
+.size-picker-range input[type=range]{flex:1 1 140px;min-width:120px}
+.size-picker input[type=number]{width:78px}
+.size-picker-custom{display:inline-flex;align-items:center;gap:4px}
+.size-preset-chips{display:flex;flex-wrap:wrap;gap:5px}
+.size-preset-chip{padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:#242b3d;color:inherit;cursor:pointer;font-size:12px;font-variant-numeric:tabular-nums}
+.size-preset-chip:hover{border-color:#6f8fb8}
+.size-preset-chip.active{border-color:var(--accent);background:#1b2740;color:#fff}
+.size-preset-approx{border-style:dashed}
+.size-picker-note{color:#8fa2b8}
