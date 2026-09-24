@@ -6,15 +6,21 @@
 - 调用用户已装好的 Argos venv（`ctranslate2` + 语言包），**不联网、不需要 API Key**；面板不重复安装依赖，也不把模型拷到 C 盘（XDG_* 全部指向工具目录）。
 - 目录探测：`EASY_PANEL_ARGOS_HOME` → `G:\edge download\webp_to_png_converter_v2\argos-translate` → `G:\ComfyUI\argos-translate` → `G:\argos-translate`；探测不到时端点会直接告诉用户放哪里。
 - `POST /api/argos-translate`：`{status:true}` 能力探测 / `{text}` 单段（返回与 Google 直译同形状的 `positive` + `naturalLanguage` 分区）/ `{texts:[...]}` 批量（**一次请求**，最多 32 段）；服务端带 LRU 缓存，重复 tag 不再起子进程。
-- 前端入口：「🧩 离线翻译（Argos）」整段中→英；「🧩 分区中文→英文（离线）」**本地 101 条词表优先 + Argos 兜底**（只翻含中文的片段、保留英文标签与分隔符、实时写回并支持「撤销本次翻译」）。
-- **每个提示词框自带「翻译」按钮**（与「清空 / 粘贴」同排，12 个框全有）：点一下只翻这个框里的中文片段并实时回写，**再点一次撤销**；纯英文框提示「没有中文片段」；翻译中按钮变「翻译中」禁点，状态写到与清空/粘贴同一行的 `#tokenHint`。样式 `.prompt-section-translate`（panel.css v52、offline-translate.js v2）。
+- 前端入口：「🧩 离线翻译（Argos）」整段中→英（**保留**）；「🧩 分区中文→英文（离线）」按钮**已移除**——逐框「翻译」已完全覆盖它，同一张卡上不再摆两个入口。
+- **每个提示词框自带「翻译」按钮**（与「清空 / 粘贴」同排，12 个框全有）：点一下只翻这个框里的中文片段并实时回写，**再点一次撤销**；纯英文框提示「没有中文片段」；翻译中按钮变「翻译中」禁点。
+- 状态提示就在**这个框自己标题行的按钮后面**（`<span class="prompt-section-translate-status" data-translate-status="<字段>">`），不再写全局 `#tokenHint`：哪个框翻了、翻了几段、词表命中几段、怎么撤销，都在该框处可见。
+- 撤销文案明确：按钮 `title` 与状态行都写「再点可撤销上一次翻译，手动修改后会重新翻译当前内容」——手动改过内容后不会莫名其妙回退。
+- **过期快照失效**：清空 / 粘贴 / 手动改框 / 换预设 / 恢复面板后，该框（或全部）的上一次翻译快照立即作废，再点「翻译」是翻新内容而不是撤销；自己写回去的那次不算手改（`writingField` 守卫）。可编程调用 `window.easyPanelInvalidateFieldUndo(fieldId?)`。
+- **长提示词自动分批**：`requestTranslations()` 按 `BATCH_LIMIT = 32` 顺序请求再按原序合并（进度写状态行「翻译中… 第 i/n 批」），逐框翻译、分区翻译、解析词条共用同一实现（`window.easyPanelArgosBatch`）；40 段实测 2 次请求（32 + 8），不再撞后端 32 段上限、也不再静默截断。样式 `.prompt-section-translate-status`（panel.css v53、offline-translate.js v3、prompt-explain.js v2）。
 - 浏览器实测：`white shirt, 轻薄尼龙丝袜, 蓝色长发` → `white shirt, semi-sheer nylon pantyhose, …, blue hair, long hair`（词表 2 段直接命中）；英文框不动；再点一次回到原文。
+- 本轮浏览器实测：12 个框都有独立状态位；`1girl, 蓝色长发, 红色蝴蝶结` → 状态行写在该框旁、`#tokenHint` 不变；再点一次回来；手动改成 `紫色短发` 后点翻译得到 `purple short hair`（不会回退）；40 段自动分 2 批（32+8）且顺序不变；清空后重填再翻也不回退。
 
 ### 🇨🇳 解析词条（`web/assets/js/prompt-explain.js`）
 - 把英文提示词拆成词条并给中文解释，**英文永远是最终提示词**：切分（逗号/分号/换行，短语整体翻）→ 保护结构 token（LoRA / `score_*` / 人数标签 / `artist:name` / 纯数字 / kaomoji 标 🔒 不翻译）→ EN→ZH 批量离线翻译 → 紧凑列表点整行 = 保留/删除 → `serializeTokens()` 实时写回分区。
 - 中文解释质量：先查浏览器词条表（`localStorage easyPanelPromptGlossaryV1`）与**词表反查**（`looking at viewer → 看向观众`、`standing → 站立`），剩下的才交 Argos；每行有 ↻ 重新翻译（清掉该条缓存后重取）。
+- 长区段的批量翻译改走 `easyPanelArgosBatch`（自动分批），不再把词条列表 `.slice(0, 32)` 截断。
 - 其它能力：全保留 / 全删除（🔒 保留）/ 仅看已删除 / 重新解析 / 恢复原文；切换分区下拉即可解析另一个分区；与 prompt_dialect 隔离，不改写 tag 写法。
-- 测试：`tests/test_argos_translate.py`(16) + `tests/offline_translate.node-test.cjs`(11) + `tests/prompt_explain.node-test.cjs`(11)；全量 675 项仅剩 4 项既存失败。
+- 测试：`tests/test_argos_translate.py`(16) + `tests/offline_translate.node-test.cjs`(19) + `tests/prompt_explain.node-test.cjs`(11)；全量 675 项仅剩 4 项既存失败。
 - 浏览器实测：`score_9, 1girl, <lora:pose_x:0.7>, standing, …` → 🔒 三条不翻、其余批量翻；点行删除/恢复实时同步；🔒 行点击无效并提示；全删除后只剩结构词条；恢复原文回到最初文本。
 
 ## FLUX 智能修图（FLUX.2 Klein 4B Distilled，2026-09-24）

@@ -107,6 +107,18 @@ test('页面接线：12 个框各带一个「翻译」按钮（与清空/粘贴�
   const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'css', 'panel.css'), 'utf8')
   assert.ok(css.includes('.prompt-section-translate{'))
   assert.ok(css.includes('.prompt-section-translate:hover'))
+  assert.ok(css.includes('.prompt-section-translate-status{'))
+})
+
+test('按框翻译：每个框都有独立状态位（不再写全局 tokenHint）', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
+  for (const field of ['promptSubject', 'promptAppearance', 'promptExpression', 'promptClothing',
+                       'promptPose', 'promptComposition', 'promptScene', 'promptLighting',
+                       'promptStyle', 'promptNaturalLanguage', 'prompt', 'negative']) {
+    assert.ok(html.includes(`data-translate-status="${field}"`), field)
+  }
+  assert.ok(source.includes('function setFieldHint(fieldId, message, error)'))
+  assert.ok(source.includes('data-translate-status="${fieldId}"'))
 })
 
 test('按框翻译：只翻该框的中文片段，再点一次撤销', () => {
@@ -114,19 +126,95 @@ test('按框翻译：只翻该框的中文片段，再点一次撤销', () => {
   assert.ok(source.includes('async function translateField(fieldId)'))
   assert.ok(source.includes('global.translateArgosField = translateField'))
   assert.ok(source.includes('delete fieldUndo[fieldId]'))
-  assert.ok(source.includes('已撤销${label}分区的翻译'))
+  assert.ok(source.includes('再点可撤销上一次翻译，手动修改后会重新翻译当前内容'))
   assert.ok(source.includes('data-translate-field='))
   // 按框翻译只改动该框：写回的是同一个 field 节点
   assert.ok(source.includes('const field = byId(fieldId)'))
 })
 
-test('页面接线：两个按钮 + 提示位 + 脚本', () => {
+test('过期快照失效：手动改 / 清空 / 粘贴 / 换预设后不再“撤销”', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
+  assert.ok(source.includes('function invalidateFieldUndo(fieldId)'))
+  assert.ok(source.includes('global.easyPanelInvalidateFieldUndo = invalidateFieldUndo'))
+  assert.ok(source.includes('if (writingField === target.id) return;'))
+  assert.ok(source.includes('wrap("clearPromptSection", clearField)'))
+  assert.ok(source.includes('wrap("pastePromptSection", clearField)'))
+  assert.ok(source.includes('wrap("applyPromptPreset", () => invalidateFieldUndo())'))
+})
+
+test('长提示词自动分批：32 段一批顺序请求，结果按原序合并', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
+  assert.ok(source.includes('const BATCH_LIMIT = 32'))
+  assert.ok(source.includes('async function requestTranslations(items, options)'))
+  assert.ok(source.includes('start += BATCH_LIMIT'))
+  assert.ok(source.includes('离线翻译返回的段数与请求不一致'))
+  assert.ok(source.includes('global.easyPanelArgosBatch = (texts, options) => requestTranslations(texts, options)'))
+  // 不再有“只发一次请求”的旧路径
+  assert.ok(!source.includes('await postArgos({ texts: pending })'))
+  assert.ok(!source.includes('await postArgos({ texts })\n'))
+})
+
+test('分批请求实测：33 段 → 2 次请求，结果顺序与输入一一对应', async () => {
+  const calls = []
+  offline.setArgosPoster(async (body) => {
+    calls.push({ count: (body.texts || []).length, first: (body.texts || [])[0] })
+    return { texts: (body.texts || []).map((value) => `en:${value}`) }
+  })
+  try {
+    const items = Array.from({ length: 33 }, (_, index) => `段${index + 1}`)
+    const progress = []
+    const out = await offline.requestTranslations(items, {
+      onProgress: (done, total) => progress.push(`${done}/${total}`),
+    })
+    assert.equal(calls.length, 2)
+    assert.deepEqual(calls.map((call) => call.count), [32, 1])
+    assert.equal(calls[0].first, '段1')
+    assert.equal(calls[1].first, '段33')
+    assert.deepEqual(progress, ['1/2', '2/2'])
+    assert.equal(out.length, 33)
+    assert.equal(out[0], 'en:段1')
+    assert.equal(out[32], 'en:段33')
+  } finally {
+    offline.setArgosPoster(null)
+  }
+})
+
+test('分批请求：32 段以内只发一次，空输入不发请求', async () => {
+  const calls = []
+  offline.setArgosPoster(async (body) => {
+    calls.push((body.texts || []).length)
+    return { texts: (body.texts || []).map((value) => value) }
+  })
+  try {
+    assert.deepEqual(await offline.requestTranslations([], {}), [])
+    assert.equal(calls.length, 0)
+    await offline.requestTranslations(Array.from({ length: 32 }, (_, i) => `t${i}`))
+    assert.deepEqual(calls, [32])
+  } finally {
+    offline.setArgosPoster(null)
+  }
+})
+
+test('分批请求：段数对不上直接报错，不会静默串位', async () => {
+  offline.setArgosPoster(async () => ({ texts: ['只有一个'] }))
+  try {
+    await assert.rejects(
+      () => offline.requestTranslations(['a', 'b']),
+      /段数与请求不一致/,
+    )
+  } finally {
+    offline.setArgosPoster(null)
+  }
+})
+
+test('页面接线：一个入口按钮 + 每框状态位 + 脚本', () => {
   assert.ok(html.includes('/assets/js/offline-translate.js?v='))
   assert.ok(html.includes('translateArgosOffline()'))
-  assert.ok(html.includes('translateArgosSections()'))
   assert.ok(html.includes('id="argosHint"'))
-  assert.ok(html.includes('id="argosSectionHint"'))
-  assert.ok(html.includes('id="argosSectionTranslate"'))
+  // 逐框「翻译」已覆盖分区翻译，保留整段按钮、去掉重复的分区按钮与它的提示位
+  assert.ok(!html.includes('id="argosSectionTranslate"'))
+  assert.ok(!html.includes('id="argosSectionHint"'))
+  assert.ok(!html.includes('translateArgosSections()'))
 })
 
 test('模块对接面板现有流程', () => {

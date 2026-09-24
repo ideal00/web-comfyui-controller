@@ -262,19 +262,25 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
     seedFromReverseMap(state.tokens, glossary);
     const pending = pendingTokens(state.tokens, glossary);
     if (!pending.length) return 0;
-    const texts = [...new Set(pending.map((token) => token.text))].slice(0, MAX_BATCH);
-    const response = await fetch("/api/argos-translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texts, from: "en", to: "zh" }),
-    });
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-    (data.texts || []).forEach((value, index) => {
-      const key = String(texts[index] || "").toLowerCase();
-      const translated = text(value);
+    const texts = [...new Set(pending.map((token) => token.text))];
+    // 后端一次最多 32 段；这里统一走 offline-translate 的分批接口，长提示词也不会撞上限。
+    const batch = typeof global.easyPanelArgosBatch === "function"
+      ? global.easyPanelArgosBatch
+      : async (items) => {
+        const response = await fetch("/api/argos-translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ texts: items.slice(0, MAX_BATCH), from: "en", to: "zh" }),
+        });
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        return data.texts || [];
+      };
+    const translations = await batch(texts, { from: "en", to: "zh" });
+    texts.forEach((key, index) => {
+      const translated = text(translations[index]);
       if (!key || !translated) return;
-      glossary[key] = translated;
+      glossary[key.toLowerCase()] = translated;
     });
     saveGlossary();
     applyGlossary(state.tokens, glossary);

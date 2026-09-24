@@ -188,9 +188,11 @@ class ArgosWiringTests(unittest.TestCase):
         page = (ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn("/assets/js/offline-translate.js?v=", page)
         self.assertIn("translateArgosOffline()", page)
-        self.assertIn("translateArgosSections()", page)
         self.assertIn('id="argosHint"', page)
-        self.assertIn('id="argosSectionHint"', page)
+        # 逐框「翻译」已覆盖分区翻译：保留整段入口，去掉重复的分区按钮与它的提示位
+        self.assertNotIn("translateArgosSections()", page)
+        self.assertNotIn('id="argosSectionTranslate"', page)
+        self.assertNotIn('id="argosSectionHint"', page)
         # 每个带「清空 / 粘贴」的框也带一个「翻译」按钮（共 12 个）
         fields = re.findall(r'data-translate-field="([a-zA-Z]+)"', page)
         self.assertEqual(12, len(fields))
@@ -198,11 +200,19 @@ class ArgosWiringTests(unittest.TestCase):
             self.assertIn(field, fields)
         for field in fields:
             self.assertIn(f"translateArgosField('{field}')", page)
+            # 状态位就挂在同行的「翻译」按钮后面，提示不再写到全局标题栏
+            self.assertIn(f'data-translate-status="{field}"', page)
         script = (ROOT / "web/assets/js/offline-translate.js").read_text(encoding="utf-8")
         for marker in ("/api/argos-translate", "easyPanelUndoOfflineTranslate",
-                       "promptEditorChanged", "naturalLanguage", "global.translateArgosField"):
+                       "promptEditorChanged", "naturalLanguage", "global.translateArgosField",
+                       "function setFieldHint(fieldId, message, error)",
+                       "async function requestTranslations(items, options)",
+                       "global.easyPanelArgosBatch",
+                       "global.easyPanelInvalidateFieldUndo",
+                       "const BATCH_LIMIT = 32"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
+        self.assertNotIn("argosSectionHint", script)
         styles = (ROOT / "web/assets/css/panel.css").read_text(encoding="utf-8")
         self.assertIn(".prompt-section-translate{", styles)
         self.assertIn(".prompt-section-translate:hover", styles)
