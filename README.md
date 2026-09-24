@@ -83,6 +83,7 @@ Easy Panel 预览区
 - 中文自然描述转换为结构化英文提示词。
 - DeepSeek、OpenAI、OpenRouter、硅基流动、Anthropic、Gemini、Ollama 和自定义 AI 接口。
 - 本地常用词转换和 Danbooru 中英文标签搜索；搜索结果的「写入：xxx」可选外貌 / 人物与角色 / 服装与材质 / 姿势 / **表情** / 构图 / 场景 / 光线 / 画风与上色 / 其他补充，点候选标签直接进对应分区。
+- **颜色修饰（写入时的可选修饰词）**：「标签搜索与填入」标题行右侧的「颜色修饰」下拉（无 / 浅 light / 深 dark / 淡 pale / 浓 deep / 明亮 bright / 鲜艳 vivid / 压低 muted / 柔和 soft / 低饱和 desaturated / 浓郁 rich）会在**写入 Prompt 的那一刻**拼到颜色标签前面（`blue_hair` + 深 → `dark_blue_hair`，再按当前模型方言写成 `dark blue hair`）。**可视化词条库**与**标签搜索与填入**两个入口都走同一条写入管线，词条库卡片上的「写入：」也会实时跟着变；修饰词**只在颜色标签上生效**（`long_hair`、`hair_ribbon`、`ice_cream`、`blue_archive` 这类同形标签不受影响），已带修饰词的标签不会叠加（`dark_blue_hair` + 深 → 原样，换成「淡」则替换为 `pale_blue_hair`）。它只是写入形式，标签库与提示词组件存档保存的仍是 Danbooru 原形，状态记在 `localStorage easyPanelColorModifierV1`。
 - 人物、外貌、**表情**、服装、姿势、构图、场景、光线、画风、自然语言等提示词分区。
 - 我的提示词预设支持姿势串 / 画师串 / 构图 / 光线 / 场景 / 服装 / 外貌 / 人物 / **表情** / 负面词 / 其他补充 分类与组合保存；「表情」是独立分类，不会再和“其他补充”混在一起。
 - LoRA 自动触发词、备忘、推荐权重、同名 TXT 说明和多套服装预设。

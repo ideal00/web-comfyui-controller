@@ -746,11 +746,12 @@ class ApiWiringTests(unittest.TestCase):
         self.assertIn("function loadRelatedTags(box, tag)", self.library_js)
 
     def test_v2_dialect_is_the_only_insert_path(self):
-        """V2.4：所有写入都必须经过 formatTag，不允许绕过方言层。"""
+        """V2.4：所有写入都必须经过 formatTag（颜色修饰在其之前），不允许绕过方言层。"""
         self.assertEqual(1, self.library_js.count("window.appendEnglish("))
-        self.assertIn("const formatted = formatTag(tag, kind);", self.library_js)
+        self.assertIn("const composed = composeColorTag(tag);", self.library_js)
+        self.assertIn("const formatted = formatTag(composed, kind);", self.library_js)
         hires_branch = self.library_js.split('mode === "hires"', 1)[1].split("已加入二采补充词", 1)[0]
-        self.assertIn("formatTag(item.tag, item.kind)", hires_branch)
+        self.assertIn("formatTag(composeColorTag(item.tag), item.kind)", hires_branch)
 
     def test_visual_tags_endpoint_supports_paging(self):
         self.assertIn('offset=bounded(query.get("offset", ["0"])[0], 0, 0, 20000)', self.panel_source)

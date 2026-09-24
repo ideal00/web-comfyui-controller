@@ -58,6 +58,12 @@
     return String(tag || "");
   }
 
+  /* 颜色修饰：只改写入用的原形（blue_hair → dark_blue_hair），数据库与组件存档始终是原形。 */
+  function composeColorTag(tag) {
+    const modifier = window.EasyPanelColorModifier;
+    return modifier && typeof modifier.compose === "function" ? modifier.compose(tag) : String(tag || "");
+  }
+
   function dialectLabel() {
     const layer = dialect();
     if (layer && typeof layer.describe === "function") return layer.describe();
@@ -274,10 +280,13 @@
 
   function addTag(tag, kind, sectionOverride) {
     const section = sectionOverride || targetSection();
-    const formatted = formatTag(tag, kind);
+    const composed = composeColorTag(tag);
+    const formatted = formatTag(composed, kind);
     if (typeof window.appendEnglish === "function") window.appendEnglish(formatted, section);
-    const changed = formatted !== tag;
-    setNotice(`${changed ? `${tag} → ${formatted}（按 ${dialectLabel()} 转换）` : `${formatted}`} 已写入「${targetLabel(section)}」。`);
+    const steps = [];
+    if (composed !== tag) steps.push(`${tag} → ${composed}（颜色修饰）`);
+    if (formatted !== composed) steps.push(`${composed} → ${formatted}（按 ${dialectLabel()} 转换）`);
+    setNotice(`${steps.length ? steps.join("；") : `${formatted}`} 已写入「${targetLabel(section)}」。`);
     return formatted;
   }
 
@@ -356,7 +365,7 @@
         setNotice("当前面板没有二采输入框；请先在生成设置里开启高清二采。", "error");
         return;
       }
-      const formatted = state.selected.map((item) => formatTag(item.tag, item.kind));
+      const formatted = state.selected.map((item) => formatTag(composeColorTag(item.tag), item.kind));
       const existing = String(field.value || "").trim();
       field.value = existing ? `${existing}, ${formatted.join(", ")}` : formatted.join(", ");
       field.dispatchEvent(new Event("input", { bubbles: true }));
@@ -365,7 +374,7 @@
       return;
     }
     state.selected.forEach((item) => addTag(item.tag, item.kind));
-    const summary = state.selected.map((item) => formatTag(item.tag, item.kind)).join(", ");
+    const summary = state.selected.map((item) => formatTag(composeColorTag(item.tag), item.kind)).join(", ");
     state.selected = [];
     renderGrid();
     renderFooter();
@@ -378,7 +387,7 @@
       setNotice("先点选卡片再复制。");
       return;
     }
-    const text = state.selected.map((item) => formatTag(item.tag, item.kind)).join(", ");
+    const text = state.selected.map((item) => formatTag(composeColorTag(item.tag), item.kind)).join(", ");
     try {
       await copyText(text);
       setNotice(`已复制：${text}`);
@@ -401,7 +410,8 @@
 
   function localCard(entry) {
     const selected = isSelected(entry.tag);
-    const formatted = entry.formatted || formatTag(entry.tag, entry.kind);
+    // 卡片预览要显示“真正会写进去的东西”：颜色修饰 + 方言（修饰关闭时与原来一致）。
+    const formatted = composeColorTag(entry.formatted || formatTag(entry.tag, entry.kind));
     const converted = formatted !== entry.tag;
     const unmatched = entry.image_status && entry.image_status !== "ready";
     return `<article class="vtl-card${selected ? " selected" : ""}" data-tag="${esc(entry.tag)}" data-kind="${esc(entry.kind || "general")}">
@@ -1230,6 +1240,12 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
     refresh: () => {
       const overlay = typeof document !== "undefined" ? byId("vtlOverlay") : null;
       if (overlay && !overlay.hidden) reload();
+    },
+    // 颜色修饰只改写入形式、不改数据，所以换修饰词时只需重画卡片（不必重新请求）。
+    rerender: () => {
+      if (typeof document === "undefined") return;
+      const overlay = byId("vtlOverlay");
+      if (overlay && !overlay.hidden) renderGrid();
     },
   });
   if (typeof module !== "undefined" && module.exports) module.exports = testApi;

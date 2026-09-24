@@ -116,7 +116,9 @@ class PanelWiringTests(unittest.TestCase):
         self.assertIn('payload["dialect_description"] = prompt_dialect.describe', self.panel_source)
 
     def test_tag_search_insert_goes_through_dialect(self):
-        self.assertIn("EasyPanelDialect?EasyPanelDialect.formatTag(item.tag):item.tag", self.panel_js)
+        # 颜色修饰（color-modifier.js）排在方言层之前：blue_hair → dark_blue_hair → dark blue hair
+        self.assertIn("EasyPanelColorModifier?EasyPanelColorModifier.compose(item.tag)", self.panel_js)
+        self.assertIn("EasyPanelDialect?EasyPanelDialect.formatTag(composed):composed", self.panel_js)
 
     def test_frontend_layer_exposes_same_rules(self):
         for source in (self.dialect_js, self.payload_dialect_js):
