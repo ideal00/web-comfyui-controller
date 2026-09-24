@@ -6,7 +6,9 @@
 - 调用用户已装好的 Argos venv（`ctranslate2` + 语言包），**不联网、不需要 API Key**；面板不重复安装依赖，也不把模型拷到 C 盘（XDG_* 全部指向工具目录）。
 - 目录探测：`EASY_PANEL_ARGOS_HOME` → `G:\edge download\webp_to_png_converter_v2\argos-translate` → `G:\ComfyUI\argos-translate` → `G:\argos-translate`；探测不到时端点会直接告诉用户放哪里。
 - `POST /api/argos-translate`：`{status:true}` 能力探测 / `{text}` 单段（返回与 Google 直译同形状的 `positive` + `naturalLanguage` 分区）/ `{texts:[...]}` 批量（**一次请求**，最多 32 段）；服务端带 LRU 缓存，重复 tag 不再起子进程。
-- 前端两个入口：「🧩 离线翻译（Argos）」整段中→英；「🧩 分区中文→英文（离线）」**本地 101 条词表优先 + Argos 兜底**（只翻含中文的片段、保留英文标签与分隔符、实时写回并支持「撤销本次翻译」）。
+- 前端入口：「🧩 离线翻译（Argos）」整段中→英；「🧩 分区中文→英文（离线）」**本地 101 条词表优先 + Argos 兜底**（只翻含中文的片段、保留英文标签与分隔符、实时写回并支持「撤销本次翻译」）。
+- **每个提示词框自带「翻译」按钮**（与「清空 / 粘贴」同排，12 个框全有）：点一下只翻这个框里的中文片段并实时回写，**再点一次撤销**；纯英文框提示「没有中文片段」；翻译中按钮变「翻译中」禁点，状态写到与清空/粘贴同一行的 `#tokenHint`。样式 `.prompt-section-translate`（panel.css v52、offline-translate.js v2）。
+- 浏览器实测：`white shirt, 轻薄尼龙丝袜, 蓝色长发` → `white shirt, semi-sheer nylon pantyhose, …, blue hair, long hair`（词表 2 段直接命中）；英文框不动；再点一次回到原文。
 
 ### 🇨🇳 解析词条（`web/assets/js/prompt-explain.js`）
 - 把英文提示词拆成词条并给中文解释，**英文永远是最终提示词**：切分（逗号/分号/换行，短语整体翻）→ 保护结构 token（LoRA / `score_*` / 人数标签 / `artist:name` / 纯数字 / kaomoji 标 🔒 不翻译）→ EN→ZH 批量离线翻译 → 紧凑列表点整行 = 保留/删除 → `serializeTokens()` 实时写回分区。

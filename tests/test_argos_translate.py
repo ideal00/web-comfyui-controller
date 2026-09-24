@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -190,15 +191,26 @@ class ArgosWiringTests(unittest.TestCase):
         self.assertIn("translateArgosSections()", page)
         self.assertIn('id="argosHint"', page)
         self.assertIn('id="argosSectionHint"', page)
+        # 每个带「清空 / 粘贴」的框也带一个「翻译」按钮（共 12 个）
+        fields = re.findall(r'data-translate-field="([a-zA-Z]+)"', page)
+        self.assertEqual(12, len(fields))
+        for field in ("promptSubject", "promptPose", "promptScene", "negative"):
+            self.assertIn(field, fields)
+        for field in fields:
+            self.assertIn(f"translateArgosField('{field}')", page)
         script = (ROOT / "web/assets/js/offline-translate.js").read_text(encoding="utf-8")
         for marker in ("/api/argos-translate", "easyPanelUndoOfflineTranslate",
-                       "promptEditorChanged", "naturalLanguage"):
+                       "promptEditorChanged", "naturalLanguage", "global.translateArgosField"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
+        styles = (ROOT / "web/assets/css/panel.css").read_text(encoding="utf-8")
+        self.assertIn(".prompt-section-translate{", styles)
+        self.assertIn(".prompt-section-translate:hover", styles)
 
     def test_payload_copy_stays_byte_identical(self):
         for relative in ("easy_panel.py", "easy_panel_app/integrations/argos.py",
-                         "index.html", "web/assets/js/offline-translate.js"):
+                         "index.html", "web/assets/js/offline-translate.js",
+                         "web/assets/css/panel.css"):
             with self.subTest(relative=relative):
                 self.assertEqual((ROOT / relative).read_bytes(),
                                  (ROOT / "installers" / "payload" / relative).read_bytes())

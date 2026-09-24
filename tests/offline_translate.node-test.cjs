@@ -94,6 +94,32 @@ test('机翻结果做标签化清理', () => {
   assert.equal(offline.cleanTranslatedTag(''), '')
 })
 
+test('页面接线：12 个框各带一个「翻译」按钮（与清空/粘贴同排）', () => {
+  const buttons = [...html.matchAll(/data-translate-field="([a-zA-Z]+)"/g)].map((m) => m[1])
+  assert.equal(buttons.length, 12)
+  for (const field of ['promptSubject', 'promptAppearance', 'promptExpression', 'promptClothing',
+                       'promptPose', 'promptComposition', 'promptScene', 'promptLighting',
+                       'promptStyle', 'promptNaturalLanguage', 'prompt', 'negative']) {
+    assert.ok(buttons.includes(field), field)
+    assert.ok(html.includes(`translateArgosField('${field}')`), field)
+  }
+  assert.ok(html.includes('class="prompt-section-translate"'))
+  const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'css', 'panel.css'), 'utf8')
+  assert.ok(css.includes('.prompt-section-translate{'))
+  assert.ok(css.includes('.prompt-section-translate:hover'))
+})
+
+test('按框翻译：只翻该框的中文片段，再点一次撤销', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
+  assert.ok(source.includes('async function translateField(fieldId)'))
+  assert.ok(source.includes('global.translateArgosField = translateField'))
+  assert.ok(source.includes('delete fieldUndo[fieldId]'))
+  assert.ok(source.includes('已撤销${label}分区的翻译'))
+  assert.ok(source.includes('data-translate-field='))
+  // 按框翻译只改动该框：写回的是同一个 field 节点
+  assert.ok(source.includes('const field = byId(fieldId)'))
+})
+
 test('页面接线：两个按钮 + 提示位 + 脚本', () => {
   assert.ok(html.includes('/assets/js/offline-translate.js?v='))
   assert.ok(html.includes('translateArgosOffline()'))

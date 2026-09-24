@@ -28,6 +28,22 @@
   const CJK_PATTERN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
   const SEGMENT_SPLIT = /[,，;；\n]+/;
 
+  //: 每个带「清空 / 粘贴」按钮的分区也带一个「翻译」按钮（跟 index.html 里的按钮一一对应）。
+  const FIELD_LABELS = Object.freeze({
+    promptSubject: "人物与角色",
+    promptAppearance: "外貌",
+    promptExpression: "表情",
+    promptClothing: "服装与材质",
+    promptPose: "姿势",
+    promptComposition: "构图与镜头",
+    promptScene: "场景",
+    promptLighting: "光线",
+    promptStyle: "画风与上色",
+    promptNaturalLanguage: "自然语言",
+    prompt: "其他补充",
+    negative: "额外负面词",
+  });
+
   function text(value) {
     return String(value == null ? "" : value).trim();
   }
@@ -168,6 +184,7 @@
 
   const testApi = {
     SECTION_FIELDS,
+    FIELD_LABELS,
     hasChinese,
     chineseSegments,
     replaceSegments,
@@ -193,6 +210,14 @@
       hint.textContent = message;
       hint.classList.toggle("diagnostic-error", !!error);
     }
+  }
+
+  /** 每个分区框自己的状态行（与「清空 / 粘贴」同一行提示位）。 */
+  function setTokenHint(message, error) {
+    const hint = byId("tokenHint");
+    if (!hint) return;
+    hint.textContent = message;
+    hint.classList.toggle("diagnostic-error", !!error);
   }
 
   function setResult(message) {
@@ -303,6 +328,68 @@
     }
   }
 
+  /** 每个框自己的「翻译」按钮：只翻这个框里的中文片段，英文标签保留。 */
+  const fieldUndo = {};
+
+  async function translateField(fieldId) {
+    const field = byId(fieldId);
+    if (!field) return false;
+    const label = FIELD_LABELS[fieldId] || fieldId;
+    const button = global.document.querySelector(`[data-translate-field="${fieldId}"]`);
+    const current = String(field.value == null ? "" : field.value);
+    // 再点一次 = 撤销上一次翻译（按钮 title 里写明了）
+    const previous = fieldUndo[fieldId];
+    if (previous && current === previous.translated) {
+      field.value = previous.original;
+      delete fieldUndo[fieldId];
+      if (global.promptEditorChanged) global.promptEditorChanged();
+      setTokenHint(`已撤销${label}分区的翻译。`, false);
+      return true;
+    }
+    if (!current.trim()) {
+      setTokenHint(`${label}分区还是空的：先填入中文，或改用「粘贴」。`, false);
+      return false;
+    }
+    const segments = chineseSegments(current);
+    if (!segments.length) {
+      setTokenHint(`${label}分区里没有中文片段，不需要翻译。`, false);
+      return false;
+    }
+    const { resolved, pending } = splitSegmentsByDictionary(segments);
+    const mapping = { ...resolved };
+    if (button) {
+      button.disabled = true;
+      button.textContent = "翻译中";
+    }
+    setTokenHint(`正在翻译${label}分区（${segments.length} 段）…`, false);
+    try {
+      if (pending.length) {
+        const data = await postArgos({ texts: pending });
+        (data.texts || []).forEach((value, index) => {
+          if (pending[index]) mapping[pending[index]] = cleanTranslatedTag(value);
+        });
+      }
+      const next = replaceSegments(current, mapping);
+      if (next === current) {
+        setTokenHint(`${label}分区翻译后没有变化。`, false);
+        return false;
+      }
+      field.value = next;
+      if (global.promptEditorChanged) global.promptEditorChanged();
+      fieldUndo[fieldId] = { original: current, translated: next };
+      setTokenHint(`已翻译${label}分区：${segments.length} 段中文（本地词表 ${Object.keys(resolved).length} 段，其余离线机翻）；再点一次「翻译」可撤销。`, false);
+      return true;
+    } catch (error) {
+      setTokenHint("离线翻译失败：" + (error && error.message ? error.message : error), true);
+      return false;
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "翻译";
+      }
+    }
+  }
+
   function undoTranslation() {
     if (!undoSnapshot) {
       setHint("没有可撤销的翻译。", false);
@@ -337,6 +424,7 @@
 
   global.translateArgosOffline = translateOffline;
   global.translateArgosSections = translateSections;
+  global.translateArgosField = translateField;
   global.easyPanelUndoOfflineTranslate = undoTranslation;
   global.easyPanelArgosStatus = probeStatus;
   global.easyPanelArgosRefresh = probeStatus;
