@@ -91,6 +91,7 @@ from easy_panel_app.media_storage import (
     save_inpaint_upload,
     save_pose_upload,
     save_reference_upload,
+    save_flux_mask_upload,
     clean_transparent_residue,
     copy_output_to_input,
     split_hires_outputs,
@@ -126,6 +127,13 @@ from easy_panel_app.queueing import (
     expand_generation_jobs,
 )
 from easy_panel_app.fingerprint import fingerprint_summary, generation_fingerprint
+from easy_panel_app.flux_klein_edit import (
+    build_flux_klein_edit_workflow,
+    flux_edit_enabled,
+    flux_edit_request_summary,
+    normalize_flux_edit,
+    snapshot_flux_edit,
+)
 from easy_panel_app.task_queue import TaskQueue, TaskQueueRunner
 from easy_panel_app.rpg_api import (
     RPG_API_VERSION,
@@ -1313,6 +1321,8 @@ def infer_creative_operation(data: dict | None) -> str:
         return normalized
     if explicit.casefold() in {"panel.generate", "rpg.generate"}:
         return "txt2img"
+    if flux_edit_enabled(payload):
+        return "flux_edit"
     if explicit:
         return "unknown"
     section_edit = payload.get("sectionEdit") if isinstance(payload.get("sectionEdit"), dict) else {}
@@ -1373,6 +1383,18 @@ def index_snapshot_best_effort(snapshot: dict, source_request: dict | None = Non
         # The native JSON snapshot is deliberately authoritative.  An index
         # problem must never turn a submitted ComfyUI job into a false failure.
         return {}
+
+
+def index_generation_for_output(name: str) -> str:
+    """按成品文件名反查作品编号（FLUX 修图自动挂父子谱系）。"""
+
+    safe_name = Path(str(name or "").replace("\\", "/")).name
+    if not safe_name:
+        return ""
+    try:
+        return get_creative_index().generation_for_output(safe_name)
+    except Exception:
+        return ""
 
 
 def update_creative_index_status_best_effort(snapshot_id: str, status: dict) -> dict:
@@ -3323,6 +3345,11 @@ def payload_with_unique_prefix(data: dict) -> dict:
 
 
 def build_workflow(data: dict) -> dict:
+    if flux_edit_enabled(data):
+        # FLUX 智能修图是独立路线：不读主模型 / 提示词编译，单独一张官方 Klein 图。
+        flux_edit = normalize_flux_edit(data)
+        return build_flux_klein_edit_workflow(
+            flux_edit, filename_prefix=generation_filename_prefix(data))
     model = str(data.get("model", ""))
     if not model:
         raise ValueError("请选择基础模型。")
@@ -5441,6 +5468,11 @@ def create_generation_snapshot(data: dict, prompt_id: str = "", source_request: 
     # 完成回写时不再从参数反推。
     if isinstance(plan, dict) and plan:
         snapshot["plan"] = _snapshot_safe_value(plan, max_text=32768)
+    if flux_edit_enabled(clean):
+        # 修图请求单独标一条：作品库按 operation=flux_edit 归类父子谱系。
+        flux_edit = normalize_flux_edit(clean)
+        snapshot["workflow"]["operation"] = "flux_edit"
+        snapshot["workflow"]["fluxEdit"] = snapshot_flux_edit(flux_edit)
     items = load_snapshots()
     items.append(snapshot)
     write_snapshots(items)
@@ -6308,7 +6340,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/upload-flux-mask", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -6331,7 +6363,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(SHARED_STATE_STORE.merge(payload, data.get("baseRevision")))
                 return
             if self.path in {"/api/upload-pose", "/api/read-image", "/api/upload-inpaint",
-                             "/api/upload-transparent-source"}:
+                             "/api/upload-transparent-source", "/api/upload-flux-mask"}:
                 size = bounded(self.headers.get("Content-Length"), 0, 0, 30_000_000)
                 if not size:
                     raise ValueError("图片上传为空。")
@@ -6340,6 +6372,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"name": save_pose_upload(self.headers.get("Content-Type", ""), body)})
                 elif self.path == "/api/upload-transparent-source":
                     self.send_json(save_reference_upload(self.headers.get("Content-Type", ""), body))
+                elif self.path == "/api/upload-flux-mask":
+                    self.send_json(save_flux_mask_upload(self.headers.get("Content-Type", ""), body))
                 elif self.path == "/api/upload-inpaint":
                     self.send_json(save_inpaint_upload(self.headers.get("Content-Type", ""), body))
                 else:
@@ -6711,6 +6745,13 @@ class Handler(BaseHTTPRequestHandler):
                             "message": "发现完全相同的生成任务，已跳过。",
                         })
                         return
+                if flux_edit_enabled(data) and not str(data.get("parentGenerationId") or "").strip():
+                    # FLUX 修图的“父版本”就是被修的那张图：按文件名自动挂谱系，
+                    # 前端（含手机端）不需要自己去查作品编号。
+                    auto_parent = index_generation_for_output(
+                        normalize_flux_edit(data).get("source", ""))
+                    if auto_parent:
+                        data["parentGenerationId"] = auto_parent
                 workflow = build_workflow(data)
                 plan = execution_plan(workflow)
                 result = comfy_json("/prompt", "POST", comfy_prompt_body(workflow))

@@ -56,6 +56,7 @@ SUPPORTED_OPERATIONS = frozenset({
     "scene_change",
     "style_change",
     "section_change",
+    "flux_edit",
 })
 KNOWN_STATUSES = frozenset({"queued", "running", "completed", "error", "cancelled", "unknown"})
 _STATUS_ALIASES = {
@@ -1190,10 +1191,15 @@ class CreativeIndex:
         chosen = normalize_operation(explicit, "unknown")
         if chosen != "unknown":
             return chosen
-        if explicit_raw == "unknown" or (explicit_raw and explicit_raw not in {"panel.generate", "rpg.generate"}):
-            return "unknown"
         workflow = snapshot.get("workflow") if isinstance(snapshot.get("workflow"), Mapping) else {}
         raw = str(workflow.get("operation") or snapshot.get("operation") or "").casefold()
+        # 快照自己声明的操作码优先（例如 flux_edit）：以前只认旧列表里的
+        # 几个值，任何新操作都会被降级成 unknown，作品库就丢了这个标签。
+        declared = normalize_operation(raw, "unknown")
+        if declared != "unknown":
+            return declared
+        if explicit_raw == "unknown" or (explicit_raw and explicit_raw not in {"panel.generate", "rpg.generate"}):
+            return "unknown"
         if "upscale" in raw:
             return "upscale"
         if "inpaint" in raw or "repair" in raw:
@@ -2150,6 +2156,33 @@ class CreativeIndex:
                     "note": "变化版只预览恢复参数；换 Seed 后仍必须由用户显式点击生成。",
                 },
             }
+
+    def generation_for_output(self, filename: Any, subfolder: Any = "") -> str:
+        """按成品文件名反查它属于哪条生成（FLUX 修图自动记录父子谱系用）。
+
+        同名多引用时取最新的一条；找不到返回空字符串。
+        """
+
+        name = str(filename or "").replace("\\", "/").strip()
+        if not name:
+            return ""
+        folder = str(subfolder or "").replace("\\", "/").strip("/")
+        rows = None
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT a.generation_id, a.metadata_json FROM artifacts a "
+                "JOIN generations g ON g.generation_id = a.generation_id "
+                "WHERE a.filename = ? AND COALESCE(a.subfolder, '') = ? "
+                "ORDER BY g.created_at DESC, a.created_at DESC LIMIT 4",
+                (name, folder),
+            ).fetchall()
+        for row in rows or []:
+            metadata = _json_value(row["metadata_json"])
+            if isinstance(metadata, dict) and metadata.get("exists") is False:
+                continue
+            return str(row["generation_id"])
+        return str(rows[0]["generation_id"]) if rows else ""
 
     def mark_duplicate_artifacts_missing(self, *, limit: int = 200) -> dict[str, int]:
         """同名图片被多条作品引用时，只保留最新那条，其余标记缺失。

@@ -1,5 +1,15 @@
 # Easy Panel 更新记录
 
+## FLUX 智能修图（FLUX.2 Klein 4B Distilled，2026-09-24）
+
+- 新增 `easy_panel_app/flux_klein_edit.py`：**照 ComfyUI 官方 `image_flux2_klein_image_edit_4b_distilled` 模板逐节点复刻**的 Klein 编辑图（`UNETLoader` + `CLIPLoader(type=flux2)` + `VAELoader` → `ImageScaleToTotalPixels(1MP)` → `GetImageSize`/`EmptyFlux2LatentImage`/`Flux2Scheduler(4 步)` → `CLIPTextEncode` → `ConditioningZeroOut` → `VAEEncode` → `ReferenceLatent`(正/负) → `CFGGuider(cfg=1)` + `KSamplerSelect(euler)` + `RandomNoise` → `SamplerCustomAdvanced` → `VAEDecode` → `SaveImage`）。刻意**不**做 denoise / CFG 滑杆：Klein 是 4 步蒸馏 + 参考潜空间编辑，与 SD 式图生图不是一回事。
+  - ⚠️ 官方 UI 模板里 `ImageScaleToTotalPixels.resolution_steps` 是折叠的高级输入，转成 API 格式**必须显式给值**，否则 ComfyUI 报 `required_input_missing`（本次由真实 `/prompt` 校验抓出）。
+- 两种模式：**整图细化** 与 **局部修复**。局部修复在 Python 侧算蒙版 bbox（外扩 grow + pad + 对齐 8 + 限制 256–1536 边长）→ 裁 ROI → 羽化蒙版 → 写进 ComfyUI input（文件名带内容哈希，重复提交不堆文件）→ Klein 编辑 ROI → `ImageScale` 缩回 ROI 尺寸 → `ImageCompositeMasked` 贴回原图；`resolution_steps=8`、最多 2 张参考图（官方多参考子图 = 正/负 conditioning 各叠一层 `ReferenceLatent`）。
+- 三档语义策略（保守 / 标准 / 重构）+ 六项「保留内容」复选项会拼成最终指令（`Conservative refinement… Preserve … Do not redesign the character`），明确标注为面板的语义预设而非模型参数。
+- 后端接线：`build_workflow` 第一行判定 `fluxEdit` 直接走 Klein 图（不读主模型/提示词编译）；新端点 `POST /api/upload-flux-mask`（只上传蒙版，归一化成灰度 PNG）；`operation=flux_edit` 进 `SUPPORTED_OPERATIONS`；**父版本自动认领**——`CreativeIndex.generation_for_output()` 按被修图片名反查作品编号，前端/手机端都不用自己猜 id。
+- 前端：结果卡新增「✨ FLUX 智能修图」（`result-workbench.js`，`flux-edit.js?v=1`）→ 对话框（原图缩略图 / 模式 / 蒙版行 / 修改描述 / 策略 / 保留内容 / 参考图）；手部工作台新增「✨ 发送到 FLUX 修图」与 `handExportMask()`（导出黑底白区蒙版）；作品库操作筛选项与标签加「FLUX 修图」。
+- 测试：`tests/test_flux_klein_edit.py`（20 项：节点链、无 denoise、ROI 计算/对齐/上限、贴回缩放、参考图、operation、payload 一致性、接线）+ `tests/flux_edit.node-test.cjs`（10 项：表单→fluxEdit、校验、payload、蒙版导出与页面接线）；全量 658 项仅剩 4 项既存失败。
+
 ## 任务批处理控制移入左侧抽屉折叠（2026-09-23）
 
 - 「任务批处理控制」（运行 / 暂停 / 取消当前 / 取消后续 / 清理失败 / 清理已结束 + 失败自动跳过 + 只运行入选实验 + 任务清单）从生成列搬到左侧抽屉，和「透明背景角色 PNG」一样是可折叠块（`#taskQueueFold`，默认折叠，状态同样记在 `easyPanelRailFoldV1`）；生成列不再重复占位。

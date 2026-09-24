@@ -345,7 +345,7 @@
     <div id="creativeLibraryNotice" class="creative-library-notice" role="status" aria-live="polite"></div>
     <section id="creativeLibraryListView" class="creative-library-view">
       <form id="creativeLibraryFilters" class="creative-library-filters">
-        <label>操作<select id="creativeLibraryOperation"><option value="">全部操作</option><option value="txt2img">文生图</option><option value="seed_variant">换 Seed</option><option value="img2img">图生图</option><option value="inpaint">局部重绘</option><option value="face_fix">修脸</option><option value="hand_fix">修手</option><option value="upscale">放大</option><option value="outfit_change">换服装</option><option value="scene_change">换场景</option><option value="style_change">换风格</option><option value="unknown">未知操作</option></select></label>
+        <label>操作<select id="creativeLibraryOperation"><option value="">全部操作</option><option value="txt2img">文生图</option><option value="seed_variant">换 Seed</option><option value="img2img">图生图</option><option value="inpaint">局部重绘</option><option value="face_fix">修脸</option><option value="hand_fix">修手</option><option value="upscale">放大</option><option value="outfit_change">换服装</option><option value="scene_change">换场景</option><option value="style_change">换风格</option><option value="flux_edit">FLUX 修图</option><option value="unknown">未知操作</option></select></label>
         <label>状态<select id="creativeLibraryStatus"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">生成中</option><option value="completed">已完成</option><option value="error">失败</option><option value="cancelled">已取消</option><option value="unknown">未知状态</option></select></label>
         <label>收藏<select id="creativeLibraryFavorite"><option value="">全部作品</option><option value="favorite">★ 已入选</option><option value="unfavorite">未入选</option></select></label>
         <label class="creative-library-group-filter">收藏组<select id="creativeLibraryGroup"><option value="">全部收藏组</option><option value="ungrouped">未加入收藏组</option></select></label>
@@ -368,7 +368,7 @@
   </div>
 </dialog>
 <dialog id="handWorkbench" class="hand-workbench">
-  <div class="hand-workbench-head"><div><h2>手部修复工作台</h2><div class="small">智能选区用于生成 AI 重绘蒙版；像素修图可使用内置 miniPaint 的仿制、画笔、模糊和内容填充。</div></div><button class="secondary" type="button" onclick="closeHandWorkbench()">关闭</button></div>
+  <div class="hand-workbench-head"><div><h2>手部修复工作台</h2><div class="small">智能选区用于生成 AI 重绘蒙版；像素修图可使用内置 miniPaint 的仿制、画笔、模糊和内容填充。</div></div><button class="secondary" type="button" onclick="handSendToFlux()">✨ 发送到 FLUX 修图</button><button class="secondary" type="button" onclick="closeHandWorkbench()">关闭</button></div>
   <div class="hand-source-bar"><input id="handSourceFile" type="file" accept="image/png,image/jpeg,image/webp" onchange="handLoadFile(this.files[0])"><select id="handSourceOutput"><option value="">— 从最近输出选择 —</option></select><button class="secondary" type="button" onclick="handLoadOutput()">载入输出</button></div>
   <div class="hand-tabs"><button id="handTabSelect" class="active" type="button" onclick="setHandTab('select')">智能选区与蒙版</button><button id="handTabPaint" type="button" onclick="setHandTab('paint')">miniPaint 像素修图</button><button id="handTabCompare" type="button" onclick="setHandTab('compare')">前后对比</button></div>
   <section id="handSelectPane" class="hand-pane">
@@ -430,7 +430,8 @@
 <script src="/assets/js/transparent-background.js?v=1"></script>
 <script src="/assets/js/transparent-extract.js?v=1"></script>
 <script src="/assets/js/snapshot-flow.js?v=3"></script>
-<script src="/assets/js/result-workbench.js?v=6"></script>
+<script src="/assets/js/result-workbench.js?v=7"></script>
+<script src="/assets/js/flux-edit.js?v=1"></script>
 <script src="/assets/js/creative-library.js?v=9"></script>
 <script src="/assets/js/preflight-check.js?v=2"></script>
 <script src="/assets/js/batch-experiment.js?v=2"></script>

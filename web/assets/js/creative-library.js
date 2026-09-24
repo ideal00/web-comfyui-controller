@@ -3,7 +3,7 @@
 
   const OPERATIONS = Object.freeze([
     'txt2img', 'seed_variant', 'img2img', 'inpaint', 'face_fix',
-    'hand_fix', 'upscale', 'outfit_change', 'scene_change', 'style_change', 'unknown',
+    'hand_fix', 'upscale', 'outfit_change', 'scene_change', 'style_change', 'flux_edit', 'unknown',
   ]);
   const STATUSES = Object.freeze(['queued', 'running', 'completed', 'error', 'cancelled', 'unknown']);
   const FAVORITES = Object.freeze(['favorite', 'unfavorite']);
@@ -321,7 +321,7 @@
     return {
       txt2img: '文生图', seed_variant: '换 Seed', img2img: '图生图', inpaint: '局部重绘',
       face_fix: '修脸', hand_fix: '修手', upscale: '放大', outfit_change: '换服装',
-      scene_change: '换场景', style_change: '换风格', section_change: '分区替换', unknown: '未知操作',
+      scene_change: '换场景', style_change: '换风格', section_change: '分区替换', flux_edit: 'FLUX 修图', unknown: '未知操作',
     }[asText(value)] || '未知操作';
   }
 

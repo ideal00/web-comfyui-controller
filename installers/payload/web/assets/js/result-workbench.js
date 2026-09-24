@@ -729,6 +729,7 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
         <button class="secondary" type="button" data-swap-section="expression">换表情</button>
         <button class="secondary" type="button" data-workbench="hires">🖼 继续二采</button>
         <button class="secondary" type="button" data-workbench="img2img">♻️ 转整图重绘</button>
+        <button class="secondary" type="button" data-workbench="flux">✨ FLUX 智能修图</button>
         ${lastBaseImages.length ? '<button class="secondary" type="button" data-workbench="compare">🔍 首采 / 二采对照</button>' : ""}
       </div>
       <div class="small workbench-note">${lastSectionEdit ? `本版本变化：${esc(sectionLabel(lastSectionEdit.section))} ${esc(shortText(lastSectionEdit.before, 36) || "空")} → ${esc(shortText(lastSectionEdit.after, 36))}（其余分区、模型、LoRA、采样与二采保持）；` : ""}改动只作用于下一次生成：结果会作为子版本记录在生成快照 / 作品库（可复现、可查看父子谱系）。</div>`;
@@ -757,6 +758,11 @@ dialog.section-swap .small label{display:inline-flex;gap:4px;align-items:center;
       else if (action === "copy") copyParameters();
       else if (action === "hires") continueHires();
       else if (action === "img2img") toImg2img();
+      else if (action === "flux") {
+        // FLUX 智能修图（整图细化 / 局部修复）在 flux-edit.js 里，单独一张 Klein 图。
+        if (typeof window.easyPanelOpenFluxEdit === "function") window.easyPanelOpenFluxEdit();
+        else status("FLUX 智能修图模块未加载；请刷新面板后重试。");
+      }
       else if (action === "compare") openCompare();
     });
   }

@@ -251,6 +251,33 @@ def clean_transparent_residue(name: str, *, tolerance: float = 20, area_limit: i
             "background": [int(value) for value in background]}
 
 
+def save_flux_mask_upload(content_type: str, body: bytes) -> dict:
+    """FLUX 智能修图的蒙版（白=重绘区）：归一化成灰度 PNG 放进 ComfyUI input。
+
+    与 ``save_inpaint_upload`` 的区别：这里只上传一张蒙版（原图是作品库里的成品，
+    由后端自己解析），所以单独一个端点，不强迫前端再造一张底图。
+    """
+
+    mask_bytes = extract_image_upload(content_type, body, "mask")
+    target_dir = COMFY_INPUT / "easy_panel"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    mask_name = f"easy_panel/flux_mask_{uuid.uuid4().hex[:12]}.png"
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(mask_bytes)) as handle:
+            mask = handle.convert("L")
+        size = mask.size
+        mask.save(COMFY_INPUT / mask_name, format="PNG")
+    except Exception:
+        # Pillow 不认这种编码也照原字节存，ComfyUI 自己会读。
+        (COMFY_INPUT / mask_name).write_bytes(mask_bytes)
+        size = None
+    return {"mask": mask_name, "size": size}
+
+
 def save_inpaint_upload(content_type: str, body: bytes) -> dict:
     image_bytes = extract_image_upload(content_type, body, "image")
     mask_bytes = extract_image_upload(content_type, body, "mask")

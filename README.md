@@ -101,7 +101,11 @@ Easy Panel 预览区
 - 自定义收藏组：可以给自己建名的收藏组（例如「成图候选」「需要修手」「参考姿势」）分类作品，**一张图可同时加入多个组**，列表只显示组标签、详情里勾选即同步电脑端与手机端；组可重命名/删除（删除组不会删除作品），新增/改名/删除与加入/移出全部为纯元数据操作，不进入生成参数与快照。
 - 批量单变量实验：任务队列旁的「单变量实验」固定其它参数、只改一项（Seed / CFG / 步数 / 二采倍率 / 二采重绘幅度 / 二采步数 / 二采 CFG），每个取值一个任务并自动带上 `实验 变量=取值` 标签，结果卡与作品库可据此横向对比；加入后可选择是否立即开始生成。
 - 生成前检查 + 显存风险：点「生成图片」前自动汇总模型、LoRA 权重、VAE、ControlNet、多人分区、提示词编译结果与对应模型族预检，存在错误时会直接拦住并保留「返回修改」；同时按分辨率、LoRA 数量、ControlNet、二采与修复器给出**相对**显存等级（基础生成 / 当前二采峰值 / 1.5× 尺寸参考，8GB 基准）与建议，并明确标注不是物理精确预测。检查接口不可用时不会阻止生成。
-- 手部修复工作台：磁性套索、锚点调整、魔棒、选区扩缩/羽化/反选，以及内置 miniPaint 仿制与像素修补。
+- 手部修复工作台：磁性套索、锚点调整、魔棒、选区扩缩/羽化/反选，以及内置 miniPaint 仿制与像素修补；工作台右上角的「✨ 发送到 FLUX 修图」可把当前选区直接交给下面的 FLUX 智能修图（自动带蒙版、自动开「局部修复」模式）。
+- **FLUX 智能修图（FLUX.2 Klein 4B Distilled）**：结果卡上的「✨ FLUX 智能修图」把已有成品当作素材去**细化或局部修复**，而不是又一个文生图模型。两种模式：**整图细化**（保角色/构图，只提升发丝、材质、配饰、光影）与**局部修复**（按蒙版裁出 ROI → Klein 编辑 → 羽化贴回原图，其余像素不变）；三档语义策略（保守 / 标准 / 重构）+ 「保留内容」复选项（角色身份 / 脸部 / 姿势 / 服装 / 构图 / 背景）会拼进最终指令；还能挂 1–2 张参考图做「多参考编辑」。结果作为**子版本**进作品库（`operation=flux_edit`，父版本按被修图片名自动认领，可在作品详情看父子谱系）。
+  - 需要的模型（放 ComfyUI 的 `models/` 下，缺哪个面板会在提交时报哪个）：`diffusion_models/flux-2-klein-4b-fp8.safetensors`（约 3.8GB）、`text_encoders/qwen_3_4b.safetensors`（约 7.5GB）、`vae/flux2-vae.safetensors`（约 320MB）；ComfyUI 需较新版本（0.29 已带 Flux2 / Klein 节点）。
+  - 节点链按官方 `image_flux2_klein_image_edit_4b_distilled` 模板逐节点复刻（`UNETLoader` + `CLIPLoader(type=flux2)` + `VAELoader` → `ImageScaleToTotalPixels` 1MP → `Flux2Scheduler` 4 步 → `CLIPTextEncode` → `ConditioningZeroOut` → `VAEEncode` 参考潜空间 → `ReferenceLatent` 正/负 → `CFGGuider(cfg=1)` + `KSamplerSelect(euler)` + `RandomNoise` → `SamplerCustomAdvanced` → `VAEDecode`），**没有** denoise / CFG 滑杆（Klein 是 4 步蒸馏 + 参考潜空间编辑，不是 SD 式图生图）。
+  - 局部修复的裁剪与羽化在 Python 侧完成（`easy_panel_app/flux_klein_edit.py`）：蒙版 bbox 外扩 + 对齐 8 + 限制 256–1536 边长，写进 ComfyUI input（文件名带内容哈希，重复提交不堆垃圾），贴回前会先把模型输出缩回 ROI 尺寸再合成。
 - Krea 2 底图转 Illustrious / Anima 二次元画风。
 - 读取 ComfyUI、A1111 WebUI、NovelAI 图片元数据并回填参数。
 - LayerStyle 亮度、对比度、RGB、HSV、Gamma 和 Levels 调色。
