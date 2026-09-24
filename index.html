@@ -99,7 +99,8 @@
     <textarea id="zhPrompt" placeholder="例如：蓝发成年女性，白衬衫、轻薄尼龙丝袜，在窗边的全身像"></textarea>
     <div class="field-title"><span>DeepSeek 网页版</span><span class="small">不用 API / 不保存密钥 · 自动复制适配当前模型的转换指令</span></div>
     <div class="small">点击后会打开 DeepSeek。请在网页中粘贴并发送；复制回答后回到这里读取结果。浏览器跨站限制下无法自动替你发送消息。</div>
-    <div class="actions"><button onclick="openDeepSeekWeb()">复制指令并打开 DeepSeek ↗</button><button id="deepSeekManualCopy" class="secondary" style="display:none" onclick="copyDeepSeekInstructionManually()">复制失败？手动复制指令</button><button class="secondary" onclick="readDeepSeekClipboard()">读取 DeepSeek 回答</button><button class="secondary" onclick="convertChinese()">本地常用词转换</button><button class="secondary" onclick="$('zhPrompt').value=''">清空中文输入</button></div>
+    <div class="actions"><button onclick="openDeepSeekWeb()">复制指令并打开 DeepSeek ↗</button><button id="deepSeekManualCopy" class="secondary" style="display:none" onclick="copyDeepSeekInstructionManually()">复制失败？手动复制指令</button><button class="secondary" onclick="readDeepSeekClipboard()">读取 DeepSeek 回答</button><button class="secondary" onclick="convertChinese()">本地常用词转换</button><button class="secondary" onclick="translateArgosOffline()">🧩 离线翻译（Argos）</button><button class="secondary" onclick="$('zhPrompt').value=''">清空中文输入</button></div>
+    <div id="argosHint" class="small"></div>
     <div id="translationResult" class="small"></div>
     <div id="deepSeekManualHelp" class="small deepseek-manual-help" style="display:none">自动复制失败，下面是完整转换指令；请长按文本区域，全选后复制。文本区只包含模型、规则和当前中文描述，不包含 Token 或 API 密钥。</div>
     <textarea id="deepSeekManualInstruction" class="deepseek-manual-instruction" readonly rows="10" spellcheck="false" aria-label="DeepSeek 完整转换指令" style="display:none"></textarea>
@@ -186,6 +187,7 @@
       <section class="memo" id="promptComposer">
         <div class="field-title"><h3>结构化提示词编译器</h3><span id="promptCount" class="counter"></span></div>
         <p class="small">分区、模型质量词、LoRA 触发词和自动负面词会先汇总到下方最终文本；最终正向与负向均可直接编辑，编辑后按原文提交，不会再次自动补词。</p>
+        <div class="actions" style="margin:0 0 6px"><button id="argosSectionTranslate" class="secondary" type="button" onclick="translateArgosSections()">🧩 分区中文→英文（离线）</button><button id="promptExplainButton" class="secondary" type="button" onclick="easyPanelOpenPromptExplainer()">🇨🇳 解析词条</button><span id="argosSectionHint" class="small"></span></div>
         <div class="prompt-tag-search"><div class="field-title"><b>标签搜索与填入</b><span id="tagDataInfo" class="small">正在加载本地标签库…</span></div><div class="tag-target"><input id="tagSearch" class="search" placeholder="搜索标签或中文译名，例如：回眸 / 蓝发 / 黑色丝袜" oninput="searchTags()"><select id="tagTarget" title="搜索结果写入哪个提示词分区"><option value="appearance">写入：外貌</option><option value="subject">写入：人物与角色</option><option value="clothing">写入：服装与材质</option><option value="pose">写入：姿势</option><option value="expression">写入：表情</option><option value="composition">写入：构图</option><option value="scene">写入：场景</option><option value="lighting">写入：光线</option><option value="style">写入：画风与上色</option><option value="manual">写入：其他补充</option></select></div><div id="tagResults" class="tokens"><span class="small">输入内容后显示候选；点击候选会直接写入所选分区。</span></div></div>
         <div class="two"><div><div class="field-title"><span>提示词用途</span></div><select id="promptMode" onchange="promptModeChanged()"><option value="style_test">画风测试（推荐）</option><option value="production">正式出图</option><option value="custom">自定义</option></select></div><div><div class="field-title"><span>安全等级</span></div><select id="safetyLevel" onchange="syncMaturePrompt()"><option value="safe">SFW / safe</option><option value="sensitive">轻度成熟 / sensitive</option><option value="nsfw">NSFW</option><option value="explicit">明确成人 / explicit</option></select><input id="mature" type="checkbox" hidden></div></div>
         <div class="field-title"><span>自动加入</span><span class="small">全部会显示在最终文本中，可删除或改写</span></div><div class="profile-strip"><span class="tag" id="promptProfilePrefix">读取模型前缀…</span><span class="tag" id="promptTriggerSummary">未选择带触发词的 LoRA</span></div>
@@ -432,6 +434,8 @@
 <script src="/assets/js/snapshot-flow.js?v=3"></script>
 <script src="/assets/js/result-workbench.js?v=7"></script>
 <script src="/assets/js/flux-edit.js?v=1"></script>
+<script src="/assets/js/offline-translate.js?v=1"></script>
+<script src="/assets/js/prompt-explain.js?v=1"></script>
 <script src="/assets/js/creative-library.js?v=9"></script>
 <script src="/assets/js/preflight-check.js?v=2"></script>
 <script src="/assets/js/batch-experiment.js?v=2"></script>

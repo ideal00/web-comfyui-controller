@@ -1,5 +1,20 @@
 # Easy Panel 更新记录
 
+## 离线翻译（Argos）+ 🇨🇳 解析词条 Prompt Explainer（2026-09-24）
+
+### 离线翻译（`easy_panel_app/integrations/argos.py`、`web/assets/js/offline-translate.js`）
+- 调用用户已装好的 Argos venv（`ctranslate2` + 语言包），**不联网、不需要 API Key**；面板不重复安装依赖，也不把模型拷到 C 盘（XDG_* 全部指向工具目录）。
+- 目录探测：`EASY_PANEL_ARGOS_HOME` → `G:\edge download\webp_to_png_converter_v2\argos-translate` → `G:\ComfyUI\argos-translate` → `G:\argos-translate`；探测不到时端点会直接告诉用户放哪里。
+- `POST /api/argos-translate`：`{status:true}` 能力探测 / `{text}` 单段（返回与 Google 直译同形状的 `positive` + `naturalLanguage` 分区）/ `{texts:[...]}` 批量（**一次请求**，最多 32 段）；服务端带 LRU 缓存，重复 tag 不再起子进程。
+- 前端两个入口：「🧩 离线翻译（Argos）」整段中→英；「🧩 分区中文→英文（离线）」**本地 101 条词表优先 + Argos 兜底**（只翻含中文的片段、保留英文标签与分隔符、实时写回并支持「撤销本次翻译」）。
+
+### 🇨🇳 解析词条（`web/assets/js/prompt-explain.js`）
+- 把英文提示词拆成词条并给中文解释，**英文永远是最终提示词**：切分（逗号/分号/换行，短语整体翻）→ 保护结构 token（LoRA / `score_*` / 人数标签 / `artist:name` / 纯数字 / kaomoji 标 🔒 不翻译）→ EN→ZH 批量离线翻译 → 紧凑列表点整行 = 保留/删除 → `serializeTokens()` 实时写回分区。
+- 中文解释质量：先查浏览器词条表（`localStorage easyPanelPromptGlossaryV1`）与**词表反查**（`looking at viewer → 看向观众`、`standing → 站立`），剩下的才交 Argos；每行有 ↻ 重新翻译（清掉该条缓存后重取）。
+- 其它能力：全保留 / 全删除（🔒 保留）/ 仅看已删除 / 重新解析 / 恢复原文；切换分区下拉即可解析另一个分区；与 prompt_dialect 隔离，不改写 tag 写法。
+- 测试：`tests/test_argos_translate.py`(16) + `tests/offline_translate.node-test.cjs`(11) + `tests/prompt_explain.node-test.cjs`(11)；全量 675 项仅剩 4 项既存失败。
+- 浏览器实测：`score_9, 1girl, <lora:pose_x:0.7>, standing, …` → 🔒 三条不翻、其余批量翻；点行删除/恢复实时同步；🔒 行点击无效并提示；全删除后只剩结构词条；恢复原文回到最初文本。
+
 ## FLUX 智能修图（FLUX.2 Klein 4B Distilled，2026-09-24）
 
 - 新增 `easy_panel_app/flux_klein_edit.py`：**照 ComfyUI 官方 `image_flux2_klein_image_edit_4b_distilled` 模板逐节点复刻**的 Klein 编辑图（`UNETLoader` + `CLIPLoader(type=flux2)` + `VAELoader` → `ImageScaleToTotalPixels(1MP)` → `GetImageSize`/`EmptyFlux2LatentImage`/`Flux2Scheduler(4 步)` → `CLIPTextEncode` → `ConditioningZeroOut` → `VAEEncode` → `ReferenceLatent`(正/负) → `CFGGuider(cfg=1)` + `KSamplerSelect(euler)` + `RandomNoise` → `SamplerCustomAdvanced` → `VAEDecode` → `SaveImage`）。刻意**不**做 denoise / CFG 滑杆：Klein 是 4 步蒸馏 + 参考潜空间编辑，与 SD 式图生图不是一回事。
