@@ -126,10 +126,26 @@ test('按框翻译：只翻该框的中文片段，再点一次撤销', () => {
   assert.ok(source.includes('async function translateField(fieldId)'))
   assert.ok(source.includes('global.translateArgosField = translateField'))
   assert.ok(source.includes('delete fieldUndo[fieldId]'))
-  assert.ok(source.includes('再点可撤销上一次翻译，手动修改后会重新翻译当前内容'))
+  assert.ok(source.includes('再点可撤销上一次翻译'))
+  assert.ok(source.includes('中文框 → 翻成英文；纯英文框 → 展开中文对照（点词条行可删除）'))
   assert.ok(source.includes('data-translate-field='))
   // 按框翻译只改动该框：写回的是同一个 field 节点
   assert.ok(source.includes('const field = byId(fieldId)'))
+})
+
+test('纯英文框：走「英文→中文对照」而不是写回中文', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
+  assert.ok(source.includes('function explainEnglishField(fieldId)'))
+  assert.ok(source.includes('global.easyPanelAnalyzePromptField'))
+  assert.ok(source.includes('return explainEnglishField(fieldId)'))
+  assert.ok(source.includes('英文词条 → 中文对照已打开（点整行可删除）'))
+  // 纯英文框不许把中文写进框里：explain 分支直接 return，不碰 field.value
+  const branch = source.slice(source.indexOf('const segments = chineseSegments(current)'),
+                              source.indexOf('const { resolved, pending } = splitSegmentsByDictionary(segments)'))
+  assert.ok(!branch.includes('.value ='))
+  // 解析面板写回的是同一个分区，它也得把逐框翻译快照作废
+  const explain = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'prompt-explain.js'), 'utf8')
+  assert.ok(explain.includes('global.easyPanelInvalidateFieldUndo(state.fieldId)'))
 })
 
 test('过期快照失效：手动改 / 清空 / 粘贴 / 换预设后不再“撤销”', () => {
@@ -139,7 +155,18 @@ test('过期快照失效：手动改 / 清空 / 粘贴 / 换预设后不再“�
   assert.ok(source.includes('if (writingField === target.id) return;'))
   assert.ok(source.includes('wrap("clearPromptSection", clearField)'))
   assert.ok(source.includes('wrap("pastePromptSection", clearField)'))
-  assert.ok(source.includes('wrap("applyPromptPreset", () => invalidateFieldUndo())'))
+  assert.ok(source.includes('wrap("applyPromptPreset", () => { markUserTouched(); invalidateFieldUndo(); })'))
+  // 用户主动动过提示词 → 告诉面板，别在启动时拿旧的家庭状态覆盖
+  assert.ok(source.includes('typeof global.markPromptTouched === "function"'))
+})
+
+test('面板：模型目录加载完的“家庭状态恢复”不再顶掉用户刚写的内容', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'panel.js'), 'utf8')
+  assert.ok(source.includes('let promptTouchedSinceLoad=false;'))
+  assert.ok(source.includes('function markPromptTouched(){promptTouchedSinceLoad=true}'))
+  assert.ok(source.includes("document.addEventListener('input',(event)=>{const id=event.target&&event.target.id;"))
+  assert.ok(source.includes('if(firstLoad&&promptTouchedSinceLoad)'))
+  assert.ok(source.includes('else restorePromptFamilyState(nextFamily)'))
 })
 
 test('长提示词自动分批：32 段一批顺序请求，结果按原序合并', () => {

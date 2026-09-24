@@ -246,6 +246,11 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
     const node = byId(state.fieldId);
     if (!node) return false;
     node.value = value;
+    // 解析面板写的也是分区内容：让逐框「翻译」的上一次快照作废，
+    // 否则删完词条再点「翻译」会把已删的内容“撤销”回来。
+    if (typeof global.easyPanelInvalidateFieldUndo === "function") {
+      global.easyPanelInvalidateFieldUndo(state.fieldId);
+    }
     if (typeof global.promptEditorChanged === "function") global.promptEditorChanged();
     return true;
   }
@@ -344,7 +349,7 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
     dialog.innerHTML = `
       <div class="px-head"><b>🇨🇳 解析词条</b>
         <button class="secondary" type="button" data-px="close">关闭</button></div>
-      <div class="small">英文仍然是最终提示词：这里只把整段拆成词条、给中文解释，点整行 = 保留 / 删除，改完实时写回分区。LoRA、score_*、人数标签等结构词条带 🔒 不翻译。</div>
+      <div class="small">英文→中文对照：英文仍然是最终提示词，这里只把整段拆成词条给中文解释，点整行 = 保留 / 删除，改完实时写回分区。LoRA、score_*、人数标签等结构词条带 🔒 不翻译。</div>
       <div class="px-bar">
         <label class="small">分区 <select data-px="field">${SECTION_FIELDS.map(([id, label]) =>
           `<option value="${id}">${label}</option>`).join("")}</select></label>

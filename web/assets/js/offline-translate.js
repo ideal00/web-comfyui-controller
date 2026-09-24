@@ -370,7 +370,14 @@
   /** 每个框自己的「翻译」按钮：只翻这个框里的中文片段，英文标签保留。 */
   const fieldUndo = {};
 
-  /** 过期快照失效：清空 / 粘贴 / 手动改 / 换预设之后，再点「翻译」应该重新翻而不是撤销。 */
+  /** 告诉面板：用户动过提示词了（启动时别拿旧的家庭状态把它顶掉）。 */
+  function markUserTouched() {
+    if (typeof global.markPromptTouched === "function") global.markPromptTouched();
+  }
+
+  /**
+   * 过期快照失效：清空 / 粘贴 / 手动改 / 换预设之后，再点「翻译」应该重新翻而不是撤销。
+   */
   function invalidateFieldUndo(fieldId) {
     if (!fieldId) {
       for (const key of Object.keys(fieldUndo)) delete fieldUndo[key];
@@ -379,9 +386,27 @@
     delete fieldUndo[fieldId];
   }
 
+  /**
+   * 纯英文框的「翻译」：英文 → 中文对照（不把中文写进框里，英文才是最终提示词）。
+   * 对照列表在「解析词条」对话框里，点整行 = 保留 / 删除，改完实时写回该分区。
+   */
+  function explainEnglishField(fieldId) {
+    const analyzeField = global.easyPanelAnalyzePromptField;
+    if (typeof analyzeField !== "function") {
+      setFieldHint(fieldId, "纯英文框：解析词条脚本没加载，刷新页面再试", true);
+      return false;
+    }
+    setFieldHint(fieldId, "英文词条 → 中文对照已打开（点整行可删除）", false);
+    Promise.resolve(analyzeField(fieldId)).catch((error) => {
+      setFieldHint(fieldId, "中文对照失败：" + (error && error.message ? error.message : error), true);
+    });
+    return true;
+  }
+
   async function translateField(fieldId) {
     const field = byId(fieldId);
     if (!field) return false;
+    markUserTouched();
     const button = global.document.querySelector(`[data-translate-field="${fieldId}"]`);
     const current = String(field.value == null ? "" : field.value);
     // 再点一次 = 撤销（仅当内容还是上次翻译的结果；手动改过就重新翻，不会覆盖你的修改）
@@ -404,8 +429,8 @@
     }
     const segments = chineseSegments(current);
     if (!segments.length) {
-      setFieldHint(fieldId, "这个框里没有中文片段", false);
-      return false;
+      // 纯英文框：目标是「看懂英文词再决定删不删」——直接给中文对照，不写回英文框。
+      return explainEnglishField(fieldId);
     }
     const { resolved, pending } = splitSegmentsByDictionary(segments);
     const mapping = { ...resolved };
@@ -477,7 +502,7 @@
       for (const button of global.document.querySelectorAll("[data-translate-field]")) {
         button.disabled = !info.available;
         button.title = info.available
-          ? "把本框中文翻成英文；再点可撤销上一次翻译，手动修改后会重新翻译当前内容"
+          ? "中文框 → 翻成英文；纯英文框 → 展开中文对照（点词条行可删除）。再点可撤销上一次翻译。"
           : "离线翻译不可用：" + label;
       }
       return info;
@@ -524,14 +549,15 @@
     // 清空 / 粘贴：作废那个框的快照并清空它自己的状态位；换预设 / 恢复面板：全部作废。
     const clearField = (fieldId) => {
       if (typeof fieldId !== "string" || !ids.has(fieldId)) return;
+      markUserTouched();
       delete fieldUndo[fieldId];
       setFieldHint(fieldId, "", false);
     };
     wrap("clearPromptSection", clearField);
     wrap("pastePromptSection", clearField);
-    wrap("applyPromptPreset", () => invalidateFieldUndo());
-    wrap("resetPrompt", () => invalidateFieldUndo());
-    wrap("restorePayloadToPanel", () => invalidateFieldUndo());
+    wrap("applyPromptPreset", () => { markUserTouched(); invalidateFieldUndo(); });
+    wrap("resetPrompt", () => { markUserTouched(); invalidateFieldUndo(); });
+    wrap("restorePayloadToPanel", () => { markUserTouched(); invalidateFieldUndo(); });
   }
 
   installUndoInvalidation();

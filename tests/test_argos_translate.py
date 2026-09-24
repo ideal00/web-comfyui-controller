@@ -209,6 +209,8 @@ class ArgosWiringTests(unittest.TestCase):
                        "async function requestTranslations(items, options)",
                        "global.easyPanelArgosBatch",
                        "global.easyPanelInvalidateFieldUndo",
+                       "function explainEnglishField(fieldId)",
+                       "global.easyPanelAnalyzePromptField",
                        "const BATCH_LIMIT = 32"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)
