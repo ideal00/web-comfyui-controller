@@ -12,8 +12,10 @@
   const previewCache = new Map();
   let chipPicker = null;
   let advancedSequence = 0;
+  let relatedSequence = 0;
   let previewSequence = 0;
   let previewTimer = null;
+  let suppressTouchMouseUntil = 0;
 
   function escapeHtml(value) {
     return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -22,7 +24,13 @@
   function normalized(value) { return String(value || '').trim().toLowerCase().replace(/_/g,' ').replace(/\s+/g,' '); }
   function searchable(value) { const term = String(value || '').trim(); return term.length >= 2 || /[\u3400-\u9fff]/.test(term); }
   function fieldForKey(key) { const id = Object.keys(FIELD_KEYS).find(candidate => FIELD_KEYS[candidate] === key); return id ? document.getElementById(id) : null; }
-  function currentTerms(field) { return new Set(String(field?.value || '').split(/[,;\n]+/).map(normalized).filter(Boolean)); }
+  function baseTag(value) {
+    let tag = String(value || '').trim();
+    const source = global.EasyPanelPromptVariations?.translationSource;
+    tag = source ? source(tag) : tag.replace(/^\((.+):[\d.]+\)$/,'$1');
+    return normalized(tag.replace(/^@/, ''));
+  }
+  function currentTerms(field) { return new Set(String(field?.value || '').split(/[,;\n]+/).map(baseTag).filter(Boolean)); }
   function formatTag(item) {
     const canonical = String(item?.tag || '').trim().replace(/ /g,'_');
     const colored = global.EasyPanelColorModifier?.compose(canonical) || canonical;
@@ -62,9 +70,12 @@
   function mergeResults(local, dictionary, localMatched) {
     const seen = new Map();
     const featured = [];
+    const localByTag = new Map((Array.isArray(local) ? local : []).filter(entry => entry.tag).map(entry => [normalized(entry.tag), entry]));
+    let weakFeatured = 0;
     for (const entry of (Array.isArray(local) ? local : [])) {
       if (featured.length >= 60) break;
       if (!entry.tag || seen.has(normalized(entry.tag))) continue;
+      if (Number(entry.score || 100) < 15 && ++weakFeatured > 8) continue;
       const item = {tag:entry.tag,translation:entry.name_zh || '',category:entry.category || '',
         kind:entry.kind,description:entry.description || '',imageId:entry.image_status === 'ready' ? entry.id : '',source:'local',localMatched:Number(localMatched ?? local.length)};
       featured.push(item); seen.set(normalized(item.tag), item);
@@ -75,7 +86,10 @@
       const key = normalized(entry.tag), featuredItem = seen.get(key);
       if (featuredItem) { featuredItem.count = entry.count; if (!featuredItem.translation) featuredItem.translation = entry.translation || ''; return; }
       if (rest.some(item => normalized(item.tag) === key)) return;
-      rest.push({...entry,source:'index'});
+      const localEntry = localByTag.get(key);
+      rest.push({...entry,source:localEntry ? 'local' : 'index',
+        imageId:localEntry?.image_status === 'ready' ? localEntry.id : '',
+        description:localEntry?.description || ''});
     });
     return [...featured, ...rest];
   }
@@ -92,23 +106,32 @@
     else { const input = document.getElementById('tagSearch'); if (input) input.value = tag; global.EasyPanelVisualTags?.open(); }
   }
   function connectImageButtons(completion, field) {
-    const listener = event => {
-      const all = event.target.closest?.('[data-autocomplete-all]');
+    const action = target => {
+      const related = target.closest?.('[data-autocomplete-related]');
+      if (related) {
+        const selected = completion.dropdown.getActiveItem() || completion.dropdown.items[0];
+        if (selected) showRelated(field, completion, selected.searchResult.data.tag);
+        return true;
+      }
+      const all = target.closest?.('[data-autocomplete-all]');
       if (all) {
-        event.preventDefault(); event.stopPropagation();
         const query = queryAtCursor(field);
         if (query) openVisual({tag:query,source:'local'}, completion);
-        return;
+        return true;
       }
-      const button = event.target.closest?.('[data-autocomplete-image]');
-      if (!button) return;
-      event.preventDefault(); event.stopPropagation();
+      const button = target.closest?.('[data-autocomplete-image]');
+      if (!button) return false;
       const entry = completion.dropdown.items.find(item => item.searchResult.data.tag === button.dataset.autocompleteImage);
       if (entry) openVisual(entry.searchResult.data, completion);
+      return true;
+    };
+    const listener = event => {
+      if (Date.now() < suppressTouchMouseUntil) return;
+      if (action(event.target)) { event.preventDefault(); event.stopPropagation(); }
     };
     completion.dropdown.el.addEventListener('mousedown', listener, true);
-    completion.dropdown.el.addEventListener('touchstart', listener, true);
     completion.dropdown.el.addEventListener('click', listener, true);
+    return action;
   }
   function hidePreview() {
     previewSequence++;
@@ -116,7 +139,7 @@
     document.getElementById('easyTagPreview')?.remove();
   }
   async function previewFor(item) {
-    if (item.imageId) return {url:'/api/visual-tags/image?' + new URLSearchParams({id:item.imageId,size:'thumb',px:'360'}),source:'本地可视化图库'};
+    if (item.imageId) return {url:'/api/visual-tags/image?' + new URLSearchParams({id:item.imageId,size:'thumb',px:'320'}),source:'本地可视化图库'};
     const key = normalized(item.tag);
     if (!previewCache.has(key)) {
       const request = (async () => {
@@ -127,7 +150,7 @@
             const exact = (data.results || []).find(entry => normalized(entry.tag) === key && entry.image_status === 'ready');
             if (exact) {
               item.imageId = exact.id; item.source = 'local';
-              return {url:'/api/visual-tags/image?' + new URLSearchParams({id:exact.id,size:'thumb',px:'360'}),source:'本地可视化图库'};
+              return {url:'/api/visual-tags/image?' + new URLSearchParams({id:exact.id,size:'thumb',px:'320'}),source:'本地可视化图库'};
             }
           }
           const cloud = await fetch('/api/danbooru/posts?' + new URLSearchParams({tags:item.tag.replace(/ /g,'_'),limit:'1',rating:'general'}));
@@ -165,9 +188,15 @@
       body.append(img, source);
       if (item.description) { const note = document.createElement('p'); note.textContent = item.description; box.append(note); }
     });
-    if (item.imageId) load(); else previewTimer = setTimeout(load, 150);
+    if (item.imageId) load(); else previewTimer = setTimeout(load, 60);
   }
   function positionPreview(box, completion) {
+    if (matchMedia('(pointer:coarse)').matches || document.documentElement.classList.contains('easy-panel-mobile')) {
+      const headerBottom = document.querySelector('.studio-header')?.getBoundingClientRect().bottom || 0;
+      box.style.left = Math.max(8, innerWidth - 182) + 'px';
+      box.style.top = Math.max(8, Math.min(headerBottom + 6, innerHeight - 190)) + 'px';
+      return;
+    }
     const rect = completion.dropdown.el.getBoundingClientRect(), width = Math.min(300, innerWidth - 16);
     const left = rect.right + width + 8 <= innerWidth ? rect.right + 8 : rect.left - width - 8;
     box.style.left = Math.max(8, Math.min(left, innerWidth - width - 8)) + 'px';
@@ -226,17 +255,60 @@
     if (row.top < viewport.top + header) dropdown.el.scrollTop += row.top - viewport.top - header;
     else if (row.bottom > viewport.bottom - footer) dropdown.el.scrollTop += row.bottom - viewport.bottom + footer;
   }
-  function connectPreview(completion) {
+  function connectPreview(completion, touchAction) {
+    const dropdown = completion.dropdown;
+    let touch = null;
+    function itemAt(target) {
+      const row = target?.closest?.('.textcomplete-item');
+      return dropdown.items.find(item => item.el === row);
+    }
+    function previewAt(target) {
+      const item = itemAt(target);
+      if (item) { item.activate(); showPreview(item.searchResult.data, completion); }
+      return item;
+    }
     completion.dropdown.el.addEventListener('mousemove', event => {
-      const row = event.target.closest?.('.textcomplete-item');
-      const active = completion.dropdown.items.find(item => item.el === row);
-      if (active) { active.activate(); showPreview(active.searchResult.data, completion); }
+      previewAt(event.target);
     });
+    dropdown.el.addEventListener('touchstart', event => {
+      const point = event.touches[0];
+      touch = event.touches.length === 1 ? {x:point.clientX,y:point.clientY,moved:false} : null;
+    }, {passive:true});
+    dropdown.el.addEventListener('touchmove', event => {
+      if (!touch || event.touches.length !== 1) return;
+      const point = event.touches[0];
+      if (Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > 8) touch.moved = true;
+    }, {passive:true});
+    dropdown.el.addEventListener('touchend', event => {
+      if (!touch) return;
+      const point = event.changedTouches[0];
+      const moved = touch.moved || Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > 8;
+      touch = null;
+      suppressTouchMouseUntil = Date.now() + 700;
+      const target = document.elementFromPoint(point.clientX, point.clientY);
+      if (moved) { previewAt(target); return; }
+      event.preventDefault();
+      if (touchAction(target)) return;
+      const item = itemAt(target);
+      if (!item) return;
+      const alreadyPreviewed = document.getElementById('easyTagPreview')?.dataset.tag === normalized(item.searchResult.data.tag);
+      item.activate();
+      if (alreadyPreviewed) dropdown.select(item);
+      else showPreview(item.searchResult.data, completion);
+    });
+    dropdown.el.addEventListener('touchcancel', () => { touch = null; });
+    dropdown.el.addEventListener('mousedown', event => {
+      if (Date.now() < suppressTouchMouseUntil) { event.preventDefault(); event.stopPropagation(); }
+    }, true);
+    dropdown.el.addEventListener('click', event => {
+      if (Date.now() < suppressTouchMouseUntil) { event.preventDefault(); event.stopPropagation(); }
+    }, true);
     completion.dropdown.el.addEventListener('mouseleave', hidePreview);
     completion.dropdown.on('hidden', hidePreview);
     completion.dropdown.on('rendered', () => {
       completion.dropdown.items.forEach(item => {
         item.el.removeEventListener('mouseover', item.onMouseover);
+        item.el.removeEventListener('touchstart', item.onClick);
         item.activate = () => activateWithoutScroll(item);
       });
       completion.dropdown.el.scrollTop = 0;
@@ -256,7 +328,8 @@
         },
         footer(items) {
           const local = items.find(item => item.source === 'local');
-          return local ? `<button type="button" data-autocomplete-all="local">在本地图鉴查看全部 ${Number(local.localMatched || 0).toLocaleString()} 条匹配</button>` : '';
+          return `<span class="easy-tag-shortcuts">↑↓ 选择 · Enter/Tab 插入 · 🖼 看图</span><span class="easy-tag-touch-hint">上下滑动看图 · 轻点预览 · 再点插入</span><button type="button" data-autocomplete-related="true">🔗 查看所选标签的相关词</button>`
+            + (local ? `<button type="button" data-autocomplete-all="local">在本地图鉴查看全部 ${Number(local.localMatched || 0).toLocaleString()} 条匹配</button>` : '');
         }}
     });
     completion.register([{
@@ -266,7 +339,7 @@
         if (field.dataset.composing === '1' || !searchable(query) || !/^\s*(?:[,;\n]|$)/.test(field.value.slice(field.selectionEnd))) { callback([]); return; }
         search(query).then(items => {
           const used = onChipInsert ? currentTerms(fieldForKey(onChipInsert)) : currentTerms(field);
-          callback(items.slice(0, 180).map(item => ({...item, existing:used.has(normalized(item.tag))})));
+          callback(items.slice(0, 180).map(item => ({...item, existing:used.has(baseTag(item.tag))})));
         }, () => callback([]));
       },
       template(item) { return `<span class="easy-tag-result${item.existing ? ' existing' : ''}">${resultMarkup(item)}</span>`; },
@@ -284,8 +357,8 @@
         closeChipPicker();
       }
     });
-    connectImageButtons(completion, field);
-    connectPreview(completion);
+    const touchAction = connectImageButtons(completion, field);
+    connectPreview(completion, touchAction);
     connectPositioning(field, completion, editor);
     field.addEventListener('keydown', event => {
       if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && completion.dropdown.shown) {
@@ -311,6 +384,7 @@
   function openChipPicker(key, anchor) {
     closeChipPicker();
     const node = document.createElement('div'); node.className = 'easy-chip-picker';
+    node.dataset.sectionKey = key;
     node.innerHTML = '<textarea rows="1" placeholder="输入英文或中文标签…" aria-label="搜索并添加标签"></textarea><button type="button" data-picker="raw" title="添加未收录的英文标签">添加原文</button><button type="button" data-picker="close" aria-label="关闭">×</button>';
     document.body.append(node);
     const rect = anchor.getBoundingClientRect();
@@ -359,8 +433,9 @@
       row.append(insert,image); root.append(row);
     });
   }
-  async function showRelated(field, completion) {
-    const tag = tagAtCursor(field); if (!tag) return;
+  async function showRelated(field, completion, tagOverride) {
+    const tag = tagOverride || tagAtCursor(field); if (!tag) return;
+    const sequence = ++relatedSequence;
     let box = document.getElementById('easyTagRelated');
     if (!box) { box = document.createElement('div'); box.id = 'easyTagRelated'; box.className = 'easy-tag-related'; document.body.append(box); }
     completion?.hide();
@@ -372,7 +447,7 @@
     try {
       const response = await fetch('/api/danbooru/related?' + new URLSearchParams({tag:tag.replace(/ /g,'_'),limit:'12'}));
       const data = await response.json();
-      if (box.hidden || expected !== tagAtCursor(field)) return;
+      if (box.hidden || sequence !== relatedSequence || (!tagOverride && expected !== tagAtCursor(field))) return;
       if (data.error) throw Error(data.error);
       box.replaceChildren();
       const head = document.createElement('div'); head.className = 'easy-related-head'; head.textContent = `「${tag}」的相关标签`;
@@ -381,8 +456,9 @@
         const button = document.createElement('button'); button.type = 'button'; button.textContent = item.tag.replace(/_/g,' ');
         button.onclick = () => {
           const formatted = formatTag(item);
-          const key = FIELD_KEYS[field.id];
-          if (key && global.appendEnglish) global.appendEnglish(formatted, key);
+          const key = chipPicker?.node.contains(field) ? chipPicker.node.dataset.sectionKey : FIELD_KEYS[field.id];
+          if (key && chipPicker?.node.contains(field)) { global.EasyPanelPromptVariations?.addTag(key, formatted); closeChipPicker(); }
+          else if (key && global.appendEnglish) global.appendEnglish(formatted, key);
           box.hidden = true;
         };
         box.append(button);
@@ -407,7 +483,7 @@
       if (related && !related.hidden && !related.contains(event.target)) related.hidden = true;
     });
   }
-  global.EasyPanelTagAutocomplete = {search, mergeResults, searchable, formatTag, queryAtCursor, tagAtCursor, activateWithoutScroll, keepActiveVisible, openChipPicker, closeChipPicker, init};
+  global.EasyPanelTagAutocomplete = {search, mergeResults, searchable, baseTag, currentTerms, formatTag, queryAtCursor, tagAtCursor, activateWithoutScroll, keepActiveVisible, openChipPicker, closeChipPicker, init};
   if (typeof module !== 'undefined' && module.exports) module.exports = global.EasyPanelTagAutocomplete;
   if (typeof document === 'undefined') return;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

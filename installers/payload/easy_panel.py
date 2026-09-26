@@ -2674,8 +2674,11 @@ def search_tags(query: str, limit: int = 28) -> list[dict]:
     query = query.strip().lower()
     if not query:
         return []
-    normalized = query.replace("_", " ")
+    normalized = re.sub(r"\s+", " ", query.replace("_", " ")).strip()
+    parts = [part for part in re.split(r"[\s,，、/]+", normalized) if part]
+    chinese = set(re.findall(r"[\u3400-\u9fff]", normalized))
     candidates: list[tuple[tuple, dict]] = []
+    exact_tags: set[str] = set()
     for item in TAG_INDEX:
         tag = item["search"]
         translation = item["translation"].lower()
@@ -2691,7 +2694,29 @@ def search_tags(query: str, limit: int = 28) -> list[dict]:
         else:
             continue
         candidates.append(((rank, -item["count"], item["tag"]), item))
+        exact_tags.add(item["tag"])
     candidates.sort(key=lambda pair: pair[0])
+    if len(candidates) < limit:
+        fallback: list[tuple[tuple, dict]] = []
+        for item in TAG_INDEX:
+            if item["tag"] in exact_tags:
+                continue
+            tag = item["search"]
+            translation = item["translation"].lower()
+            aliases = " ".join(item["aliases"]).replace("_", " ").lower()
+            searchable_text = " ".join((tag, aliases, translation)) if len(parts) > 1 else ""
+            hits = sum(part in searchable_text for part in parts) if searchable_text else 0
+            if len(parts) > 1 and hits == len(parts):
+                fallback.append(((4, -item["count"], item["tag"]), item))
+            elif len(chinese) >= 2 and translation:
+                translated_chars = set(re.findall(r"[\u3400-\u9fff]", translation))
+                overlap = len(chinese & translated_chars)
+                if overlap >= 2 and overlap * 2 >= len(chinese) and overlap * 3 >= len(translated_chars) * 2:
+                    fallback.append(((5, -(overlap * 2 - len(translated_chars)), -item["count"], item["tag"]), item))
+            elif len(parts) > 1 and hits:
+                fallback.append(((6, -hits, -item["count"], item["tag"]), item))
+        fallback.sort(key=lambda pair: pair[0])
+        candidates.extend(fallback[:limit - len(candidates)])
     return [{"tag": item["tag"].replace("_", " "), "translation": item["translation"],
              "count": item["count"], "category": TAG_CATEGORIES.get(item["category"], "其他")}
             for _, item in candidates[:limit]]

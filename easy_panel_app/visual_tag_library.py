@@ -421,7 +421,7 @@ def _rows() -> list[dict]:
 # 查询
 # --------------------------------------------------------------------------- #
 def _normalize(text: object) -> str:
-    return unicodedata.normalize("NFKC", str(text or "")).strip().lower()
+    return " ".join(unicodedata.normalize("NFKC", str(text or "")).lower().replace("_", " ").split())
 
 
 def _score(entry: dict, needle: str) -> int:
@@ -450,6 +450,28 @@ def _score(entry: dict, needle: str) -> int:
         best = max(best, 30)
     if _normalize(entry.get("category")) == needle:
         best = max(best, 25)
+    if best:
+        return best
+    tag_text = _normalize(entry.get("tags") or entry.get("tag"))
+    fields = " ".join((tag_text, name,
+                       description, group, _normalize(entry.get("category"))))
+    parts = [part for part in re.split(r"[\s,，、/]+", needle) if part]
+    if len(parts) > 1:
+        if all(part in tag_text for part in parts):
+            return 38
+        if all(part in name for part in parts):
+            return 34
+        hits = sum(part in fields for part in parts)
+        if hits == len(parts):
+            return 22
+        if hits:
+            return 10 + hits
+    chinese = set(re.findall(r"[\u3400-\u9fff]", needle))
+    if len(chinese) >= 2:
+        name_chars = set(re.findall(r"[\u3400-\u9fff]", name))
+        overlap = len(chinese & name_chars)
+        if overlap >= 2 and overlap * 2 >= len(chinese) and overlap * 3 >= len(name_chars) * 2:
+            return 15 + overlap
     return best
 
 

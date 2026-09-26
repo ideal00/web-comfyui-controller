@@ -39,6 +39,15 @@ test('selected tags pass through color modifier and current prompt dialect', () 
   delete global.EasyPanelDialect;
 });
 
+test('weighted and dialect variants count as the same existing tag', () => {
+  const terms = autocomplete.currentTerms({value:'(blue hair:1.2), (blue_hair:0.8), @artist name, red_eyes'});
+  assert.equal(terms.has(autocomplete.baseTag('blue_hair')), true);
+  assert.equal(terms.has(autocomplete.baseTag('blue hair')), true);
+  assert.equal(terms.has(autocomplete.baseTag('artist_name')), true);
+  assert.equal(terms.has(autocomplete.baseTag('red eyes')), true);
+  assert.equal(terms.has(autocomplete.baseTag('green eyes')), false);
+});
+
 test('broad query retains dozens of local and dictionary candidates for scrolling', async () => {
   global.fetch = async url => url.startsWith('/api/visual-tags?')
     ? {ok:true,json:async () => ({matched:246,results:Array.from({length:80},(_,i) => ({tag:`local_${i}`,name_zh:`本地${i}`,id:`id-${i}`,image_status:'ready'}))})}
@@ -50,6 +59,21 @@ test('broad query retains dozens of local and dictionary candidates for scrollin
   assert.equal(items[59].source, 'local');
   assert.equal(items[60].source, 'index');
   assert.equal(items[179].tag, 'global 119');
+});
+
+test('dictionary candidates retain local images beyond the first sixty featured tags', () => {
+  const local = Array.from({length:70},(_,i) => ({tag:`local_${i}`,id:`image-${i}`,image_status:'ready'}));
+  const items = autocomplete.mergeResults(local,[{tag:'local_65',count:10},{tag:'remote_tag',count:5}],70);
+  assert.equal(items[60].tag, 'local_65');
+  assert.equal(items[60].imageId, 'image-65');
+  assert.equal(items[60].source, 'local');
+  assert.equal(items[61].source, 'index');
+});
+
+test('weak local keyword hits leave room for exact dictionary tags', () => {
+  const local = Array.from({length:80},(_,i) => ({tag:`local_${i}`,score:11,id:`image-${i}`,image_status:'ready'}));
+  const items = autocomplete.mergeResults(local,[{tag:'blue_hair',count:100}],80);
+  assert.equal(items[8].tag, 'blue_hair');
 });
 
 test('mouse activation leaves scroll position alone; arrow navigation reveals hidden rows', () => {
