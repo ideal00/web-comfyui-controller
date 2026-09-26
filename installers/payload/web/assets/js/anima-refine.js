@@ -35,7 +35,7 @@
   }
 
   function installPanel() {
-    const anchor = byId("animaPromptPanel");
+    const anchor = byId("animaGenerationEnhancementMount") || byId("animaHighresMount") || byId("animaPromptPanel");
     if (!anchor || byId("animaRefinePanel")) return;
     const block = document.createElement("details");
     block.id = "animaRefinePanel";
@@ -66,7 +66,7 @@
         <div class="actions"><button class="secondary" type="button" onclick="animaRefineClearPrompt()">清空</button></div>
         <div id="animaRefineNote" class="small"></div>
       </div>`;
-    // 挂在 Anima 面板内部：切换创作标签页时它会跟着一起移动。
+    // 挂在生成设置的同一挂载点：与高清重建并列，避免把生成级细节控制埋在提示词输入区。
     anchor.appendChild(block);
     byId("animaRefineEnabled")?.addEventListener("change", animaRefineRefresh);
     byId("animaRefineDenoise")?.addEventListener("input", animaRefineRefresh);

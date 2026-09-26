@@ -56,7 +56,7 @@ input,select,textarea{border-color:#303a52;border-radius:4px;background:#0f1420}
 
 .prompt-tag-search{margin:10px 0 13px;padding:10px;border:1px solid #34415a;border-radius:5px;background:#101621}.prompt-tag-search .field-title{margin-top:0}.prompt-tag-search .search{margin-bottom:0}.prompt-tag-search #tagResults{max-height:150px;margin-top:8px;overflow:auto}.prompt-tag-search .token{padding:5px 8px}
 .memo-apply-mode{display:flex;align-items:flex-start;gap:9px;margin:8px 0 10px;padding:9px 10px;border:1px solid #47617f;border-radius:5px;background:#111c2a;cursor:pointer}.memo-apply-mode:has(input:checked){border-color:#6b9bd8;background:#172a40;box-shadow:inset 3px 0 #7fb2fb}.memo-apply-mode input{flex:none;width:18px;height:18px;margin:1px 0 0;accent-color:#7fb2fb}.memo-apply-mode>span{display:grid;gap:2px;min-width:0}.memo-apply-mode b{color:#eaf3ff;font-size:12px}.memo-apply-mode small{color:#9eb1ca;font-size:10px;line-height:1.35}
-.prompt-section-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:10px 0 3px;padding:3px;border:1px solid #303b52;border-radius:5px;background:#0e141f}.prompt-section-tabs button{padding:7px;background:transparent;color:#909db2}.prompt-section-tabs button.active{background:#273955;color:#eaf3ff;box-shadow:inset 0 0 0 1px #5279ad}.prompt-section-label{display:inline-flex;align-items:center;gap:5px}.prompt-section-clear,.prompt-section-paste,.prompt-section-translate{min-width:0;padding:1px 6px;border:1px solid #3f4d66;border-radius:4px;background:#202a3b;color:#9eacc1;font-size:10px;line-height:17px}.prompt-section-clear:hover{border-color:#d57986;background:#4a2932;color:#ffdce1}.prompt-section-paste:hover{border-color:#6d9ad9;background:#243d60;color:#e0efff}.prompt-section-translate:hover{border-color:#5fb08a;background:#1f3b31;color:#d6ffe9}.prompt-section-translate-status{font-size:10px;line-height:17px;color:#7f8ea6}.prompt-section-translate-status.diagnostic-error{color:#ff9aa8}.prompt-section-grid.prompt-tab-character>div:nth-child(n+5){display:none}.prompt-section-grid.prompt-tab-visual>div:nth-child(-n+4){display:none}.prompt-extra-fields{padding:8px 10px;border:1px solid #303b52;border-radius:5px;background:#101621}.prompt-extra-fields>summary{color:#bac6da}
+.prompt-section-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:10px 0 3px;padding:3px;border:1px solid #303b52;border-radius:5px;background:#0e141f}.prompt-section-tabs button{padding:7px;background:transparent;color:#909db2}.prompt-section-tabs button.active{background:#273955;color:#eaf3ff;box-shadow:inset 0 0 0 1px #5279ad}.prompt-section-label{display:inline-flex;align-items:center;gap:5px}.prompt-section-clear,.prompt-section-paste,.prompt-section-translate{min-width:0;padding:1px 6px;border:1px solid #3f4d66;border-radius:4px;background:#202a3b;color:#9eacc1;font-size:10px;line-height:17px}.prompt-section-clear:hover{border-color:#d57986;background:#4a2932;color:#ffdce1}.prompt-section-paste:hover{border-color:#6d9ad9;background:#243d60;color:#e0efff}.prompt-section-translate:hover{border-color:#5fb08a;background:#1f3b31;color:#d6ffe9}.prompt-section-translate-status{font-size:10px;line-height:17px;color:#7f8ea6}.prompt-section-translate-status.diagnostic-error{color:#ff9aa8}.prompt-extra-fields{padding:8px 10px;border:1px solid #303b52;border-radius:5px;background:#101621}.prompt-extra-fields>summary{color:#bac6da}
 .studio-lora .lora-row{cursor:pointer}.studio-lora .lora-row.memo-active{border-color:#72a8f4;background:#18263a;box-shadow:inset 3px 0 #7fb2fb}.studio-lora .lora-row.memo-active .lora-select{border-color:#6f9fe7}.studio-lora .lora-row.lora-disabled{border-color:#b66e45;background:#291d18;box-shadow:inset 3px 0 #e4925e;opacity:.76}.studio-lora .lora-row.lora-disabled .lora-select,.studio-lora .lora-row.lora-disabled .lora-strength{color:#8f929c;text-decoration:line-through}.studio-lora .lora-row.lora-disabled .lora-enabled-toggle{border-color:#f09a68;background:#8d402a;color:#fff3ec;box-shadow:0 0 0 1px #f09a6855}.studio-lora #memoActiveLora{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8fbcff}
 .lora-memo-dialog{position:fixed;inset:0;width:min(94vw,1180px);height:min(90vh,920px);max-width:none;max-height:none;margin:auto;padding:0;border:1px solid #52617e;border-radius:8px;background:#111722;color:#eef2fa;box-shadow:0 32px 110px #000d;overflow:hidden}.lora-memo-dialog::backdrop{background:#05070bd9;backdrop-filter:blur(5px)}.lora-memo-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 18px;border-bottom:1px solid #303b52;background:#171e2b}.lora-memo-dialog-head h2{margin:3px 0 0;font-size:18px}.lora-memo-dialog .memo-editor{display:block!important;height:calc(100% - 67px);margin:0;padding:0;border:0;overflow:hidden}.lora-memo-dialog .memo-editor-layout{display:grid;grid-template-columns:minmax(0,3fr) minmax(310px,2fr);height:100%;min-height:0}.lora-memo-dialog .memo-edit-scroll{min-width:0;min-height:0;padding:16px 18px 82px;overflow:auto;overscroll-behavior:contain}.lora-memo-dialog .memo-edit-scroll>label{margin:14px 0 6px;color:#c7d1e3}.lora-memo-dialog .memo-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lora-memo-dialog .memo-outfit-edit{padding:14px;border-color:#46536d;background:#0d131e}.lora-memo-dialog .memo-outfit-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px}.lora-memo-dialog .memo-section-row{grid-template-columns:105px minmax(0,1fr)}.lora-memo-dialog .memo-section-row textarea{min-height:90px;padding:9px 10px;font-size:var(--input-font-size,15px)}.lora-memo-dialog .memo-dialog-actions{position:sticky;bottom:0;z-index:2;margin:18px -18px 0;padding:12px 18px;border-top:1px solid #303b52;background:#171e2bf2}.lora-memo-dialog .memo-dialog-actions button{min-width:140px}.memo-sidecar-reference{display:flex;flex-direction:column;min-width:0;min-height:0;border-left:1px solid #38445b;background:#0b1019}.memo-sidecar-reference>header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 14px;border-bottom:1px solid #303b52;background:#151c29}.memo-sidecar-reference h3{max-width:290px;margin:3px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.memo-sidecar-reference pre{flex:1;min-height:0;margin:0;padding:14px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;background:#090d14;color:#dce3ef;font:13px/1.55 ui-monospace,Consolas,monospace}.memo-sidecar-warning,.memo-sidecar-empty{padding:10px 14px;color:#e6c98a;background:#2b2416;font-size:12px}.memo-sidecar-empty{flex:1;background:#0b1019;color:var(--muted)}
 .studio-tool-drawer{--drawer-width:min(720px,calc(100vw - 24px));position:fixed;top:58px;left:0;bottom:0;z-index:85;width:0}.studio-tool-drawer-backdrop{position:fixed;top:58px;right:0;bottom:0;left:var(--drawer-width);display:none;background:#0000}.studio-tool-drawer-panel{position:absolute;z-index:1;top:0;left:0;width:var(--drawer-width);height:100%;padding:0 14px 30px;border-right:1px solid #50607c;background:#101620f7;box-shadow:20px 0 60px #000a;overflow:auto;transform:translateX(-100%);transition:transform .22s ease;backdrop-filter:blur(12px)}.studio-tool-drawer-panel>header{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 -14px 10px;padding:13px 15px;border-bottom:1px solid #303b52;background:#171e2bf5}.studio-tool-drawer-panel h2{margin:2px 0 0;font-size:18px}.studio-tool-drawer.open .studio-tool-drawer-backdrop{display:block}.studio-tool-drawer.open .studio-tool-drawer-panel{transform:translateX(0)}#studioToolDrawerContent{display:grid;gap:8px}#studioToolDrawerContent>.route1-panel,#studioToolDrawerContent>.memo,#studioToolDrawerContent>details{margin:0}#studioToolDrawerContent>.memo{background:#151c29}
@@ -269,3 +269,149 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .studio-left .task-toolbar-actions button{font-size:11px;padding:5px 8px}
 .studio-left .task-toolbar-switches .switch b{font-size:12px}
 .studio-left .task-list{max-height:220px;overflow:auto}
+
+/* 四栏工作台：左右资源栏可以收起，但不会改写用户保存的手动宽度。 */
+.studio-layout{scroll-padding-bottom:124px}
+.studio-generation{min-width:0;padding-bottom:118px}
+.studio-heading-status{display:flex;align-items:center;justify-content:flex-end;gap:8px;color:#8fa2b8;font-size:11px;white-space:nowrap}
+.studio-status-chip{padding:4px 7px;border:1px solid #344863;border-radius:999px;background:#152033;color:#b9cae2}
+.studio-rail-title{align-items:center;justify-content:space-between}
+.studio-rail-title-actions,.resource-panel-heading-actions{display:flex;align-items:center;gap:5px;margin-left:auto}
+.rail-collapse-toggle,.panel-collapse-toggle{display:grid;place-items:center;min-width:28px;min-height:27px;padding:3px 7px;border:1px solid #405373;border-radius:5px;background:#1b2940;color:#d8e8ff;font-weight:800;cursor:pointer}
+.rail-collapse-toggle:hover,.panel-collapse-toggle:hover{border-color:#8bbcff;background:#294262}
+.resource-panel-body{min-width:0}
+.model-path-info{margin:5px 0 8px;overflow:hidden;color:#8292aa;text-overflow:ellipsis;white-space:nowrap}
+.embedding-picker{margin-top:10px}
+.embedding-picker-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;list-style:none;cursor:pointer}
+.embedding-picker-summary::-webkit-details-marker{display:none}
+.embedding-picker-summary>span:first-child{display:grid;gap:2px}
+.embedding-picker-summary small{color:#8798b1;font-size:10px;font-weight:400}
+.embedding-picker[open] .embedding-picker-summary{margin-bottom:8px;color:#eaf2ff}
+.embedding-picker-body{display:grid;gap:6px}
+.resource-panel-heading-actions .studio-panel-icon{display:block}
+.studio-layout.left-rail-collapsed{grid-template-columns:minmax(46px,48px) minmax(500px,1fr) minmax(280px,340px) minmax(280px,320px)}
+.studio-layout.panel-widths-custom.left-rail-collapsed{grid-template-columns:48px minmax(480px,var(--generation-panel-width)) minmax(280px,var(--preview-panel-width)) minmax(280px,var(--lora-panel-width))}
+.studio-layout.resource-panel-collapsed{grid-template-columns:minmax(230px,260px) minmax(500px,1fr) minmax(320px,1fr) 46px}
+.studio-layout.panel-widths-custom.resource-panel-collapsed{grid-template-columns:minmax(220px,var(--left-panel-width)) minmax(480px,var(--generation-panel-width)) minmax(280px,var(--preview-panel-width)) 46px}
+.studio-layout.left-rail-collapsed.resource-panel-collapsed{grid-template-columns:48px minmax(500px,1fr) minmax(320px,1fr) 46px}
+.studio-layout.panel-widths-custom.left-rail-collapsed.resource-panel-collapsed{grid-template-columns:48px minmax(480px,var(--generation-panel-width)) minmax(280px,var(--preview-panel-width)) 46px}
+.studio-layout.left-rail-collapsed .studio-left{overflow:visible;padding-right:0}
+.studio-layout.left-rail-collapsed .studio-rail-title{justify-content:center;padding-left:2px;padding-right:2px}
+.studio-layout.left-rail-collapsed .studio-rail-title>span,.studio-layout.left-rail-collapsed .rail-appearance{display:none}
+.studio-layout.left-rail-collapsed .studio-rail-title-actions{margin:0}
+.studio-layout.left-rail-collapsed .studio-left>.rail-fold .rail-fold-body,.studio-layout.left-rail-collapsed .studio-left>.rail-mount>*{display:none!important}
+.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary{justify-content:center;padding:10px 4px}
+.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary>b,.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary>.rail-fold-state{display:none}
+.studio-layout.left-rail-collapsed #customFeatureCard>summary::before{content:'★';color:#b9caff}
+.studio-layout.left-rail-collapsed #taskQueueFold>summary::before{content:'≡';color:#b9caff}
+.studio-layout.left-rail-collapsed #translationCard>summary::before{content:'文';color:#b9caff}
+.studio-layout.left-rail-collapsed #imageReadCard>summary::before{content:'▣';color:#b9caff}
+.studio-layout.resource-panel-collapsed .resource-panel-body{display:none}
+.studio-layout.resource-panel-collapsed .studio-lora .studio-panel-heading{justify-content:center;min-height:44px;padding-left:4px;padding-right:4px}
+.studio-layout.resource-panel-collapsed .studio-lora .studio-panel-heading>div:first-child,.studio-layout.resource-panel-collapsed .studio-lora .studio-panel-icon{display:none}
+.studio-layout.resource-panel-collapsed .resource-panel-heading-actions{margin:0}
+.studio-layout.resource-panel-collapsed .panel-collapse-toggle{min-width:35px;min-height:34px}
+
+/* 提示词主输入优先：分区先出现，标签搜索和用途设置紧随其后；说明与预设保持按需展开。 */
+#promptComposer.prompt-composer-modern{display:flex;flex-direction:column}
+#promptComposer.prompt-composer-modern>*{order:10}
+#promptComposer.prompt-composer-modern>.field-title:first-child{order:0}
+#promptComposer.prompt-composer-modern>.prompt-section-tabs{order:1}
+#promptComposer.prompt-composer-modern>#promptSectionGrid{order:2}
+#promptComposer.prompt-composer-modern>.prompt-primary-search{order:3}
+#promptComposer.prompt-composer-modern>.prompt-context-controls{order:4}
+#promptComposer.prompt-composer-modern>.prompt-profile-label,#promptComposer.prompt-composer-modern>.profile-strip{order:5}
+#promptComposer.prompt-composer-modern>.prompt-explain-action{order:6}
+#promptComposer.prompt-composer-modern>.user-preset-panel{order:7}
+#promptComposer.prompt-composer-modern>.prompt-extra-fields{order:8}
+#promptComposer.prompt-composer-modern>.prompt-help{order:20}
+.prompt-help{margin:0 0 7px;border:1px solid #2e3d56;border-radius:5px;background:#111a29}
+.prompt-help>summary{padding:7px 9px;color:#a9c2e5;font-size:11px;cursor:pointer;list-style:none}
+.prompt-help>summary::-webkit-details-marker{display:none}
+.prompt-help>p{margin:0;padding:0 9px 8px}
+.prompt-composer-modern .prompt-primary-search{margin-top:0;padding:8px}
+.prompt-composer-modern .prompt-context-controls{margin:0}
+.prompt-composer-modern #promptSectionGrid{width:100%}
+.prompt-section-grid.prompt-tab-character>div,.prompt-section-grid.prompt-tab-visual>div{display:block}
+.prompt-section-grid.prompt-tab-character>div[data-prompt-group="visual"],.prompt-section-grid.prompt-tab-visual>div[data-prompt-group="character"]{display:none}
+.prompt-section-grid.prompt-tab-character>div[data-prompt-group="character"],.prompt-section-grid.prompt-tab-visual>div[data-prompt-group="visual"]{display:block}
+.prompt-section-grid textarea{min-height:76px}
+
+/* SDXL / Illustrious：基础参数之后是模式，再是常用高清参数，高级二采项默认收起。 */
+#illustriousSettingsMount{display:grid;gap:8px}
+#illustriousPanel{margin:0}
+#hiresControls{display:grid;gap:8px}
+.hires-common-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.hires-advanced-controls{margin:0;border:1px solid #34415a;border-radius:5px;background:#111a29}
+.hires-advanced-controls>summary{padding:8px 10px;color:#b5c8e5;cursor:pointer;list-style:none}
+.hires-advanced-controls>summary::-webkit-details-marker{display:none}
+.hires-advanced-body{display:grid;gap:8px;padding:0 9px 9px}
+.hires-advanced-controls[open]>summary{border-bottom:1px solid #2d3c54;color:#f0f6ff}
+.settings-mount{display:grid;gap:8px}
+.anima-refine-panel>summary,.anima-highres-panel>summary{padding:9px 10px;cursor:pointer}
+.anima-refine-panel,.anima-highres-panel{margin:0}
+
+/* 高级工具默认紧凑；同一张图清晰度入口仍在预览栏，不移入这里。 */
+#poseMemo{margin:0}
+#poseMemo>.field-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#poseMemo>.field-title>h3{margin:0}
+#poseMemo>.advanced-tool-body{display:none}
+#poseMemo.advanced-tool-expanded>.advanced-tool-body{display:block}
+.advanced-tool-toggle{margin-left:auto;padding:4px 8px;font-size:11px}
+#poseMemo .advanced-tool-body{margin-top:8px}
+.generation-secondary-actions{align-items:center}
+.queue-inline-status{color:#8193ad;font-size:11px}
+.studio-action-dock{bottom:12px}
+
+@media(max-width:1100px){.studio-layout.left-rail-collapsed,.studio-layout.panel-widths-custom.left-rail-collapsed,.studio-layout.resource-panel-collapsed,.studio-layout.panel-widths-custom.resource-panel-collapsed,.studio-layout.left-rail-collapsed.resource-panel-collapsed,.studio-layout.panel-widths-custom.left-rail-collapsed.resource-panel-collapsed{grid-template-columns:1fr}.studio-left,.studio-generation,.preview-card,.studio-lora{grid-column:1;grid-row:auto}.studio-layout.left-rail-collapsed .studio-left,.studio-layout.resource-panel-collapsed .studio-lora{width:auto}.studio-layout.left-rail-collapsed .studio-left>.rail-fold .rail-fold-body,.studio-layout.left-rail-collapsed .studio-left>.rail-mount>*{display:none!important}.studio-layout.resource-panel-collapsed .resource-panel-body{display:none}.studio-layout.left-rail-collapsed .studio-rail-title>span,.studio-layout.left-rail-collapsed .rail-appearance{display:inline}.studio-layout.left-rail-collapsed .studio-rail-title{justify-content:space-between}.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary>b,.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary>.rail-fold-state{display:inline}.hires-common-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.studio-heading-status{justify-content:flex-start;white-space:normal}.studio-generation{padding-bottom:124px}.hires-common-controls{grid-template-columns:1fr}.studio-action-dock{bottom:8px}}
+
+/* 折叠左栏时保留每个低频工具的可见入口；点击摘要会先展开整列，再按 details 的原生行为开合。 */
+.rail-mount-launcher{display:none;align-items:center;justify-content:center;gap:5px;width:100%;min-height:38px;padding:6px 4px;border:1px solid #4b5f80;border-radius:5px;background:#18263b;color:#dceaff;font-size:10px;font-weight:700}
+.rail-mount-launcher span:first-child{font-size:10px;letter-spacing:-.3px}
+.studio-layout.left-rail-collapsed .studio-left>.rail-mount{display:grid;gap:7px}
+.studio-layout.left-rail-collapsed .studio-left>.rail-mount>[data-rail-fold]{display:none!important}
+.studio-layout.left-rail-collapsed .studio-left>.rail-mount>.rail-mount-launcher{display:flex!important}
+.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary{cursor:pointer}
+.studio-layout.left-rail-collapsed .studio-left>.rail-fold>summary::after{content:'点击展开';display:block;margin-top:3px;color:#8195b5;font-size:9px;font-weight:500;line-height:1}
+
+/* 固定底栏的真实安全区：四个桌面列和页面根滚动都预留同一段空间，展开参数或滚到底部时不被 dock 盖住。 */
+:root{--studio-dock-reserve:108px}
+html,body{scroll-padding-bottom:var(--studio-dock-reserve)}
+.app{padding-bottom:var(--studio-dock-reserve)}
+.studio-layout{scroll-padding-bottom:var(--studio-dock-reserve)}
+.studio-generation,.preview-card,.studio-lora,.studio-left{padding-bottom:var(--studio-dock-reserve)}
+.studio-generation{padding-bottom:calc(var(--studio-dock-reserve) + 14px)}
+#jobQueueList,#generationProgress,#generationProgressDetail,#status{scroll-margin-bottom:var(--studio-dock-reserve)}
+.studio-action-dock{bottom:12px}
+@media(max-width:700px){:root{--studio-dock-reserve:120px}.app{padding-bottom:var(--studio-dock-reserve)}.studio-generation,.preview-card,.studio-lora,.studio-left{padding-bottom:var(--studio-dock-reserve)}.studio-generation{padding-bottom:calc(var(--studio-dock-reserve) + 12px)}.studio-action-dock{bottom:8px}}
+
+/* dock 独立占用底部布局行：四栏在上方自己的滚动视口内滚动，不再让 fixed 元素盖住内容。 */
+html,body{height:100%;overflow:hidden}
+.app{height:100vh;min-height:100vh;margin:0 auto;display:flex;flex-direction:column;padding-bottom:0}
+.studio-content-viewport{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.studio-content-viewport>.studio-layout{min-height:100%;height:max-content}
+.studio-content-viewport .studio-left,.studio-content-viewport .preview-card,.studio-content-viewport .studio-lora{top:8px}
+.studio-content-viewport .studio-main-heading{top:0}
+.studio-content-viewport .studio-generation{scroll-margin-top:8px}
+.studio-generation,.preview-card,.studio-lora,.studio-left{padding-bottom:0}
+.studio-action-dock{position:relative;right:auto;bottom:auto;left:auto;transform:none;width:min(760px,calc(100% - 32px));margin:12px auto;flex:0 0 auto}
+@media(max-width:700px){.app{height:100vh;min-height:100vh;padding-bottom:0}.studio-content-viewport .studio-main-heading{top:0}.studio-action-dock{bottom:auto;left:auto;right:auto;width:calc(100% - 16px);margin:8px auto}}
+
+/* 刷新时也保持壳层三行布局：顶部、独立滚动内容、底部操作栏。 */
+.app{display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden}
+.app{position:fixed;inset:0;width:100%;height:100vh;height:100dvh;min-height:0;max-width:none}
+.studio-content-viewport{grid-row:2}
+.studio-action-dock{grid-row:3;display:grid;visibility:visible;opacity:1}
+
+/* 左侧快捷跳转可拖动；按钮仍保留原本的点击行为。 */
+.panel-quick-jumps{touch-action:none;cursor:grab}
+.panel-quick-jumps.is-dragging{cursor:grabbing;user-select:none}
+.panel-quick-jumps.is-dragging button{cursor:grabbing}
+.app.left-rail-collapsed .panel-quick-jumps button{width:44px;min-width:44px;padding-left:0;padding-right:0}
+.app.left-rail-collapsed .panel-quick-jumps button span:last-child{display:none}
+
+/* 最终兜底：操作栏只固定在浏览器视口底部，绝不参与顶部导航的布局。 */
+.studio-action-dock{position:fixed!important;top:auto!important;right:50%!important;bottom:12px!important;left:auto!important;z-index:78;display:grid!important;width:min(760px,calc(100vw - 32px));margin:0;transform:translateX(50%)!important;grid-row:auto}
+.studio-content-viewport{padding-bottom:calc(var(--studio-dock-reserve) + 14px);scroll-padding-bottom:calc(var(--studio-dock-reserve) + 14px)}
+@media(max-width:700px){.studio-action-dock{top:auto!important;right:8px!important;bottom:8px!important;left:8px!important;width:auto;transform:none!important;margin:0}.studio-content-viewport{padding-bottom:calc(var(--studio-dock-reserve) + 10px);scroll-padding-bottom:calc(var(--studio-dock-reserve) + 10px)}}

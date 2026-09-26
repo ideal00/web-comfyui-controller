@@ -13,6 +13,26 @@
   const FOLD_STORAGE_KEY = "easyPanelRailFoldV1";
 
   const byId = (id) => (typeof document === "undefined" ? null : document.getElementById(id));
+  const railLabel = (node) => {
+    const label = node?.querySelector?.(":scope > summary b")?.textContent || node?.id || "快捷工具";
+    return String(label).replace(/\s+/g, " ").trim();
+  };
+
+  function ensureRailVisible(node) {
+    const layout = byId("studioLayout");
+    if (!node?.closest?.(".studio-left") || !layout?.classList.contains("left-rail-collapsed")) return;
+    if (typeof window.toggleLeftRail === "function") window.toggleLeftRail(false);
+    else layout.classList.remove("left-rail-collapsed");
+  }
+
+  function handleRailSummaryClick(event, node) {
+    const layout = byId("studioLayout");
+    const wasCollapsed = layout?.classList.contains("left-rail-collapsed");
+    const preserveOpen = wasCollapsed && node.open;
+    if (preserveOpen) event.preventDefault();
+    ensureRailVisible(node);
+    if (preserveOpen) node.open = true;
+  }
 
   /* ---------- 状态（可被 node 测试直接调用） ---------- */
 
@@ -91,6 +111,7 @@
     const node = typeof target === "string" ? byId(target) : target;
     if (!node) return null;
     const panel = node.matches?.("details[data-rail-fold]") ? node : node.closest?.("details[data-rail-fold]") || node;
+    ensureRailVisible(panel);
     let current = panel;
     while (current && current.tagName === "DETAILS") {
       if (!current.open) {
@@ -161,6 +182,13 @@
   function bindNode(node) {
     if (node.dataset.railFoldBound === "1") return;
     node.dataset.railFoldBound = "1";
+    const summary = node.querySelector(":scope > summary");
+    if (summary) {
+      const label = railLabel(node);
+      summary.title = `${label}：点击展开快捷工具栏`;
+      summary.setAttribute("aria-label", `${label}（点击展开）`);
+      summary.addEventListener("click", (event) => handleRailSummaryClick(event, node));
+    }
     node.addEventListener("toggle", () => rememberFold(node, node.open));
   }
 
@@ -223,8 +251,8 @@
     wrapGlobal("readDeepSeekClipboard", () => reveal("translationCard"));
     wrapGlobal("convertChinese", () => reveal("translationCard"));
     wrapGlobal("copyDeepSeekInstructionManually", () => reveal("translationCard"));
-    wrapGlobal("readImageInfo", () => setTimeout(updateImageReadState, 0));
-    wrapGlobal("readOutputImage", () => setTimeout(updateImageReadState, 0));
+    wrapGlobal("readImageInfo", () => setTimeout(() => { reveal("imageReadCard"); updateImageReadState(); }, 0));
+    wrapGlobal("readOutputImage", () => setTimeout(() => { reveal("imageReadCard"); updateImageReadState(); }, 0));
     wrapGlobal("openTransparentMaskEditor", () => reveal("transparentOutputPanel"));
   }
 
@@ -238,6 +266,7 @@
     summarizeTaskCounts,
     reveal,
     install,
+    handleRailSummaryClick,
   };
 
   window.EasyPanelRailFold = testApi;

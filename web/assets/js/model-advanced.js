@@ -252,6 +252,7 @@
     const workflowHeading = byId("illustriousPanel")?.querySelector("h3");
     if (workflowHeading) workflowHeading.textContent = "SDXL / Illustrious 精准生成";
     const hiresControls = byId("hiresControls");
+    const hiresAdvancedBody = byId("hiresAdvancedBody") || hiresControls;
     if (hiresControls && !byId("hiresStrengthPanel")) {
       const block = document.createElement("div");
       block.id = "hiresStrengthPanel";
@@ -287,7 +288,7 @@
       row.className = "two";
       row.style.marginTop = "8px";
       row.innerHTML = `<div><div class="field-title"><span>二次采样器</span>${help("高清重绘阶段使用的去噪算法。默认推荐自动，跟随当前模型专属配置；只有做固定参数 A/B 时才手动覆盖。")}</div><select id="hiresSampler" onchange="applyIllustriousMode()"><option value="auto">自动（按模型预设，推荐）</option></select></div><div><div class="field-title"><span>二次调度器</span>${help("高清重绘阶段的噪声曲线。默认推荐自动；错误调度器可能造成柔糊、噪点或模型风格偏移。")}</div><select id="hiresScheduler" onchange="applyIllustriousMode()"><option value="auto">自动（按模型预设，推荐）</option></select></div>`;
-      hiresControls.appendChild(row);
+      hiresAdvancedBody?.appendChild(row);
       if (byId("sampler")) byId("hiresSampler").innerHTML = byId("sampler").innerHTML;
       if (byId("scheduler")) byId("hiresScheduler").innerHTML = byId("scheduler").innerHTML;
     }
@@ -311,7 +312,7 @@
         <div class="actions"><button class="secondary" type="button" onclick="insertHiresPromptTemplate('detail')">＋ 细节强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('hair')">＋ 发丝强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('clothing')">＋ 服装强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('expression')">＋ 表情强化</button><button class="secondary" type="button" onclick="insertHiresPromptTemplate('lighting')">＋ 光影强化</button></div>
         <div class="switch" style="margin-top:6px"><input id="hiresCompositionLock" type="checkbox" checked onchange="hiresCompositionLockChanged()"><div><b>优先保持首采构图</b><div class="small">勾选后把二采重绘幅度上限锁到 0.35（前端与后端都限制）。注意 0.35 已经是「局部重绘」上限：真正只补细节请把 denoise 保持在 0.15–0.26；不建议再写镜头、景别、构图类提示词。</div></div></div>
         <div id="hiresPromptHint" class="small" style="margin-top:6px"></div>`;
-      hiresControls.appendChild(promptBlock);
+      hiresAdvancedBody?.appendChild(promptBlock);
       window.hiresPromptModeChanged(true);
       window.hiresCompositionLockChanged(true);
     }

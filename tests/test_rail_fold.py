@@ -38,8 +38,9 @@ class RailFoldMarkupTests(unittest.TestCase):
 
     def test_both_pages_install_the_fold_layer(self):
         for page in self.pages:
-            self.assertIn('<script src="/assets/js/rail-fold.js?v=2"></script>', page)
+            self.assertIn('<script src="/assets/js/rail-fold.js?v=3"></script>', page)
             self.assertIn('id="railTransparentMount"', page)
+            self.assertIn('id="railTransparentLauncher"', page)
 
     def test_every_rail_block_is_a_collapsible_details(self):
         for page in self.pages:
@@ -100,6 +101,11 @@ class RailFoldMarkupTests(unittest.TestCase):
             "function writeFoldState(state)",
             "function rememberFold(node, open)",
             "function reveal(target)",
+            "function ensureRailVisible(node)",
+            "toggleLeftRail(false)",
+            "const preserveOpen = wasCollapsed && node.open",
+            "if (preserveOpen) event.preventDefault()",
+            "if (preserveOpen) node.open = true",
             "function summarizeTaskCounts(text)",
             "function updateTaskQueueState()",
             "function observeTaskCounts()",

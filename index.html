@@ -9,7 +9,7 @@
       document.documentElement.classList.add('easy-panel-mobile');
     }
   </script>
-    <link rel="stylesheet" href="/assets/css/panel.css?v=53">
+    <link rel="stylesheet" href="/assets/css/panel.css?v=59">
 
 </head>
 <body>
@@ -47,16 +47,17 @@
       </details>
     </div>
   </header>
+  <div class="studio-content-viewport" id="studioContentViewport">
   <div class="studio-layout" id="studioLayout">
   <aside class="studio-rail studio-left" aria-label="快捷工具">
-  <div class="studio-rail-title"><span>快捷工具</span><details class="rail-appearance" id="railAppearanceMenu">
+  <div class="studio-rail-title"><span>快捷工具</span><div class="studio-rail-title-actions"><button id="leftRailToggle" class="rail-collapse-toggle" type="button" onclick="toggleLeftRail()" aria-controls="studioLayout" aria-expanded="true" title="折叠快捷工具栏">⇤</button><details class="rail-appearance" id="railAppearanceMenu">
       <summary title="外观 / 界面设置：输入框字号">⚙ 界面</summary>
       <div class="rail-appearance-body">
         <div class="field-title"><span>输入框字号</span><output id="inputFontSizeValue">15px</output></div>
         <label class="input-size-row"><input id="inputFontSize" type="range" min="11" max="24" step="1" value="15" oninput="applyInputFontSize(this.value)" title="调节所有输入框 / 文本域 / 下拉框的文字大小"></label>
         <p class="small">低频全局设置：拖动即时生效，只保存在当前浏览器。</p>
       </div>
-    </details></div>
+    </details></div></div>
 
   <details class="card custom-feature-card rail-fold" id="customFeatureCard" data-rail-fold>
     <summary><b>我的功能</b><span class="rail-fold-state" id="customFeatureState">快捷入口</span></summary>
@@ -67,7 +68,7 @@
     </div>
   </details>
 
-  <div id="railTransparentMount" class="rail-mount"></div>
+  <div id="railTransparentMount" class="rail-mount"><button id="railTransparentLauncher" class="rail-mount-launcher" type="button" onclick="revealRailTool('transparentOutputPanel')" aria-controls="transparentOutputPanel" title="透明背景 PNG：点击展开快捷工具栏"><span aria-hidden="true">PNG</span><span>透明 PNG</span></button></div>
 
   <details class="card rail-fold" id="taskQueueFold" data-rail-fold>
     <summary><b>任务批处理控制</b><span class="rail-fold-state" id="taskQueueSummary">读取中…</span></summary>
@@ -133,20 +134,23 @@
 
   <div class="grid" id="workspaceGrid">
     <section class="card studio-lora" id="loraSection">
-      <div class="studio-panel-heading"><div><span class="studio-kicker">资源栏</span><b>模型与 LoRA</b></div><span class="studio-panel-icon">◫</span></div>
+      <div class="studio-panel-heading"><div><span class="studio-kicker">资源栏</span><b>模型与 LoRA</b></div><div class="resource-panel-heading-actions"><button id="loraPanelToggle" class="panel-collapse-toggle" type="button" onclick="toggleResourcePanel()" aria-controls="loraPanelBody" aria-expanded="true" title="折叠模型与 LoRA 资源栏">⇥</button><span class="studio-panel-icon">◫</span></div></div>
+      <div id="loraPanelBody" class="resource-panel-body">
       <div class="field-title"><span>基础模型</span><span id="modelInfo" class="small"></span></div>
       <select id="model" onchange="modelChanged()"></select>
+      <div id="modelPathInfo" class="small model-path-info" title="当前模型完整路径"></div>
       <div class="actions"><button onclick="addLora()">+ 添加 LoRA</button><button id="loraFavoritesQuick" class="secondary lora-favorites-quick" type="button" onclick="showFavoriteLoras()">☆ 我的收藏 <span id="loraFavoriteCount">0</span></button><button onclick="clearLoras()">清空 LoRA</button></div>
       <div class="lora-search"><input id="loraSearch" type="search" autocomplete="off" placeholder="搜索 LoRA 文件名中的文字…" aria-label="搜索 LoRA" oninput="refreshLoraSelects()"><button id="loraSearchClear" class="secondary" type="button" onclick="clearLoraSearch()">清除</button></div>
       <div class="small lora-order-help">LoRA 从上到下依次加载，自动触发词也使用同一顺序。可拖动“↕序号”，或使用 ↑ / ↓ 调整。</div>
       <div class="row lora-filter"><span class="field-title">LoRA 分类</span><select id="loraFolder" onchange="refreshLoraSelects()"></select><span id="loraFilterInfo" class="small"></span></div>
       <div id="loras"></div>
-      <section class="memo embedding-picker" id="embeddingSection"><div class="field-title"><h3>Embedding 嵌入</h3><span class="small">按用途自动写入对应提示词分区</span></div><select id="embeddingFolder" onchange="refreshEmbeddingSelect()"><option value="">全部分类</option></select><select id="embeddingSelect" onchange="updateEmbeddingInfo()" style="margin-top:8px"><option value="">请选择 Embedding</option></select><div id="embeddingInfo" class="small" style="margin-top:7px">正在读取本地 Embedding…</div><div class="actions"><button type="button" onclick="applySelectedEmbedding()">应用到提示词</button><button class="secondary" type="button" onclick="removeSelectedEmbedding()">从提示词移除</button></div></section>
+      <details class="memo embedding-picker" id="embeddingSection"><summary class="embedding-picker-summary"><span><b>Embedding 嵌入</b><small>低频资源：按用途自动写入对应提示词分区</small></span><span id="embeddingSummary" class="small">默认收起</span></summary><div class="embedding-picker-body"><div class="field-title"><span>筛选与选择</span><span class="small">选中后再应用</span></div><select id="embeddingFolder" onchange="refreshEmbeddingSelect()"><option value="">全部分类</option></select><select id="embeddingSelect" onchange="updateEmbeddingInfo()" style="margin-top:8px"><option value="">请选择 Embedding</option></select><div id="embeddingInfo" class="small" style="margin-top:7px">正在读取本地 Embedding…</div><div class="actions"><button type="button" onclick="applySelectedEmbedding()">应用到提示词</button><button class="secondary" type="button" onclick="removeSelectedEmbedding()">从提示词移除</button></div></div></details>
       <section class="memo" id="loraMemo"><div class="field-title"><h3>LoRA 备忘与服装预设</h3><span id="memoActiveLora" class="small">选中任一 LoRA 后显示</span></div><label class="memo-apply-mode"><input id="memoOutfitOverwriteMode" type="checkbox" checked onchange="toggleMemoOutfitOverwriteMode()"><span><b>同主类覆盖模式</b><small id="memoOutfitModeInfo">开启：跨 LoRA 只替换相同主类，不同主类并存</small></span></label><div id="memoDisplay" class="small">尚未选择 LoRA。</div><div class="actions"><button id="memoEditButton" class="secondary" type="button" onclick="showMemoEditor()" disabled>放大编辑此 LoRA 备忘</button></div></section>
+      </div>
     </section>
 
     <section class="card studio-generation" id="generationSection">
-      <div class="studio-panel-heading studio-main-heading"><div><span class="studio-kicker">创作区</span><b>提示词与生成</b></div><div class="studio-heading-actions"><button class="studio-enqueue-top" type="button" onclick="enqueueJob()">＋ 加入队列</button><button class="studio-generate-top" type="button" onclick="quickGenerateImage()">生成图片</button></div></div>
+      <div class="studio-panel-heading studio-main-heading"><div><span class="studio-kicker">创作区</span><b>提示词与生成</b></div><div class="studio-heading-status"><span class="studio-status-chip">生成入口在底部固定栏</span><span id="studioHeaderQueueStatus">队列 0</span></div></div>
       <nav class="studio-create-tabs" role="tablist" aria-label="创作区视图">
         <button id="studioPromptTab" class="active" type="button" role="tab" aria-selected="true" aria-controls="studioPromptView" onclick="setStudioCreationTab('prompt')">① 编辑提示词</button>
         <button id="studioSettingsTab" type="button" role="tab" aria-selected="false" aria-controls="studioSettingsView" onclick="setStudioCreationTab('settings')">② 生成设置</button>
@@ -225,8 +229,8 @@
       <div class="status" id="status">正在读取 ComfyUI 模型…</div>
       <div id="pendingDerivation" class="pending-derivation" hidden role="status" aria-live="polite"><span id="pendingDerivationText"></span><button class="secondary" type="button" onclick="clearPendingDerivationContext()">取消派生关联</button></div>
       <div id="generationChainSummary" class="small" style="margin:6px 0" hidden></div>
-      <button class="primary" id="generate" onclick="generate()">生成图片</button>
-      <div class="actions" style="margin-top:6px"><button class="secondary" type="button" onclick="enqueueJob()">＋ 加入任务队列</button><button class="secondary" type="button" onclick="openBatchExperiment()" title="固定其它参数，只改动一个变量批量对比">单变量实验</button><button class="secondary" type="button" onclick="sendJobQueue()">发送队列（<span id="jobQueueCount">0</span>）</button><button class="secondary" type="button" onclick="clearJobQueue()">清空队列</button></div>
+      <button class="primary" id="generate" hidden onclick="generate()">生成图片</button>
+      <div class="actions generation-secondary-actions" style="margin-top:6px"><button class="secondary" type="button" onclick="openBatchExperiment()" title="固定其它参数，只改动一个变量批量对比">单变量实验</button><button class="secondary" type="button" onclick="clearJobQueue()">清空队列</button><span class="queue-inline-status">队列 <span id="jobQueueCount">0</span> · 发送与生成请用底部固定栏</span></div>
       <div id="jobQueueList" class="small" style="margin-top:6px"></div>
       </div>
       <details><summary>严格 LoRA 对比实验室</summary><div class="color-panel"><div class="small">点击创建时冻结当前模型、最终提示词、seed、尺寸、采样器和全部增强参数；每个变体只改变 LoRA 顺序或一个 LoRA 的权重。</div><div class="two" style="margin-top:8px"><div><div class="field-title"><span>实验类型</span></div><select id="experimentMode" onchange="renderExperimentControls()"><option value="order">全部 LoRA 顺序排列</option><option value="weight">单个 LoRA 权重扫描</option></select></div><div><div class="field-title"><span>每个变体的种子数</span></div><input id="experimentSeeds" type="number" min="1" max="4" step="1" value="1"></div></div><div id="experimentWeightControls"><div class="field-title"><span>扫描对象</span></div><select id="experimentLora"></select><div class="field-title"><span>权重列表</span><span class="small">逗号分隔，最多 8 个</span></div><input id="experimentWeights" value="0.50, 0.65, 0.80, 0.95"></div><div class="actions"><button type="button" onclick="createStrictExperiment()">冻结基线并加入对比队列</button></div><div id="experimentInfo" class="small"></div></div></details>
@@ -248,6 +252,7 @@
       <div class="generation-progress" id="generationProgress" data-connection="offline" hidden><div class="generation-progress-heading"><b id="generationProgressLabel">生成进度</b><span id="generationProgressPercent">0%</span></div><progress id="generationProgressBar" max="100" value="0">0%</progress><div class="small" id="generationProgressDetail">等待提交任务…</div></div>
       <div class="result" id="result">尚未生成</div>
     </aside>
+  </div>
   </div>
   </div>
   <aside id="studioToolDrawer" class="studio-tool-drawer" aria-hidden="true">
@@ -304,17 +309,17 @@
     </form>
   </div>
 </dialog>
-<nav class="panel-quick-jumps" aria-label="生成面板快速跳转">
+<nav class="panel-quick-jumps" aria-label="生成面板快速跳转（按住可拖动）">
   <button id="studioToolDrawerToggle" class="studio-tool-drawer-toggle" type="button" onclick="toggleStudioToolDrawer()" aria-expanded="false" title="展开或收起高级创作工具"><span aria-hidden="true">◧</span><span>高级工具</span></button>
   <button type="button" onclick="jumpToPanelSection('loraSection')" title="跳转到基础模型与 LoRA 切换区域"><span aria-hidden="true">◈</span><span>LoRA 设置</span></button>
   <button type="button" onclick="jumpToPanelBottom()" title="滚动到生成面板底部"><span aria-hidden="true">↓</span><span>到底部</span></button>
-  <button id="quickGenerate" class="quick-generate" type="button" onclick="quickGenerateImage()" title="使用当前参数直接生成图片"><span aria-hidden="true">▶</span><span>直接生成</span></button>
+  <button type="button" onclick="jumpToPanelBottom()" title="滚动到生成状态与任务队列"><span aria-hidden="true">≡</span><span>队列状态</span></button>
 </nav>
-<nav class="studio-action-dock" aria-label="固定生成操作">
+<nav id="studioActionDock" class="studio-action-dock" aria-label="固定生成操作">
   <button type="button" onclick="setStudioCreationTab('prompt',true)"><span aria-hidden="true">✎</span><span>提示词</span></button>
   <button type="button" onclick="setStudioCreationTab('settings',true)"><span aria-hidden="true">⚙</span><span>生成设置</span></button>
   <button class="dock-enqueue" type="button" onclick="enqueueJob()"><span aria-hidden="true">＋</span><span>加入队列</span></button>
-  <button id="dockGenerate" class="dock-generate" type="button" onclick="quickGenerateImage()"><span aria-hidden="true">▶</span><span>立即生成</span></button>
+  <button id="quickGenerate" class="dock-generate quick-generate" type="button" onclick="quickGenerateImage()"><span aria-hidden="true">▶</span><span>立即生成</span></button>
   <button class="dock-send" type="button" onclick="sendJobQueue()"><span>发送队列</span><strong id="jobQueueDockCount" aria-label="队列任务数量">0</strong></button>
 </nav>
 <dialog id="panelImageViewer" class="panel-image-viewer" aria-label="生成图片查看器" onclick="panelImageViewerBackdrop(event)" onclose="panelImageViewerClosed()">
@@ -416,16 +421,16 @@
 <script src="/assets/js/prompt-library.js?v=5"></script>
 <script src="/assets/js/prompt-dialect.js?v=1"></script>
 <script src="/assets/js/color-modifier.js?v=1"></script>
-<script src="/assets/js/panel.js?v=81"></script>
+<script src="/assets/js/panel.js?v=88"></script>
 <script src="/assets/js/prompt-mode.js?v=1"></script>
 <script src="/assets/js/shared-state.js?v=1"></script>
 <script src="/assets/js/clarity-analysis.js?v=5"></script>
 <script src="/assets/js/feature-editor.js?v=1"></script>
-<script src="/assets/js/model-advanced.js?v=8"></script>
+<script src="/assets/js/model-advanced.js?v=9"></script>
 <script src="/assets/js/size-selector.js?v=2"></script>
-<script src="/assets/js/rail-fold.js?v=2"></script>
+<script src="/assets/js/rail-fold.js?v=3"></script>
 <script src="/assets/js/header-menu.js?v=1"></script>
-<script src="/assets/js/anima-refine.js?v=3"></script>
+<script src="/assets/js/anima-refine.js?v=4"></script>
 <script src="/assets/js/anima-highres.js?v=9"></script>
 <script src="/assets/js/camera-control.js?v=6"></script>
 <script src="/assets/js/generation-chain.js?v=1"></script>

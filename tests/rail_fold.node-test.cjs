@@ -60,6 +60,37 @@ test('applyFoldState：记住 true 才展开，其它一律默认折叠', () => 
   assert.equal(node.open, false)
 })
 
+test('折叠栏中点击已展开摘要会展开整列但保留 details 内容', () => {
+  const classes = new Set(['left-rail-collapsed'])
+  const layout = {
+    classList: {
+      contains: (name) => classes.has(name),
+      remove: (name) => classes.delete(name),
+    },
+  }
+  const previousDocument = global.document
+  const previousToggle = global.toggleLeftRail
+  global.document = { getElementById: (id) => (id === 'studioLayout' ? layout : null) }
+  global.toggleLeftRail = (force) => {
+    assert.equal(force, false)
+    classes.delete('left-rail-collapsed')
+  }
+  try {
+    const node = {
+      open: true,
+      closest: (selector) => (selector === '.studio-left' ? {} : null),
+    }
+    let prevented = false
+    fold.handleRailSummaryClick({ preventDefault: () => { prevented = true } }, node)
+    assert.equal(prevented, true)
+    assert.equal(node.open, true)
+    assert.equal(classes.has('left-rail-collapsed'), false)
+  } finally {
+    global.document = previousDocument
+    global.toggleLeftRail = previousToggle
+  }
+})
+
 test('index.html 里每一块抽屉面板都带 data-rail-fold 与 summary', () => {
   const blocks = html.match(/<details[^>]*data-rail-fold[^>]*>/g) || []
   assert.equal(blocks.length, 4)

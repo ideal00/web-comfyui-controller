@@ -108,7 +108,7 @@ class SizePresetTests(unittest.TestCase):
 
 
 class StudioHeaderDensityTests(unittest.TestCase):
-    """创作区头部按钮横向排版 + Anima 提示词分层默认折叠。"""
+    """创作区头部保持轻量状态提示 + Anima 提示词分层默认折叠。"""
 
     @classmethod
     def setUpClass(cls):
@@ -119,23 +119,14 @@ class StudioHeaderDensityTests(unittest.TestCase):
         cls.css = (ROOT / "web/assets/css/panel.css").read_text(encoding="utf-8")
         cls.payload_css = (ROOT / "installers/payload/web/assets/css/panel.css").read_text(encoding="utf-8")
 
-    def test_header_actions_are_horizontal(self):
-        # `.studio-panel-heading>div` 的 grid 会盖掉单类选择器，必须用更高特异性压成一行。
-        self.assertIn(
-            ".studio-panel-heading>.studio-heading-actions{display:flex;flex-flow:row nowrap",
-            self.css,
-        )
-        self.assertIn(
-            ".studio-heading-actions button{min-height:36px;padding:7px 14px;white-space:nowrap}",
-            self.css,
-        )
+    def test_header_keeps_status_without_duplicate_generation_buttons(self):
         for html in self.pages:
-            for marker in (
-                '<div class="studio-heading-actions">',
-                '<button class="studio-enqueue-top" type="button" onclick="enqueueJob()">＋ 加入队列</button>',
-                '<button class="studio-generate-top" type="button" onclick="quickGenerateImage()">生成图片</button>',
-            ):
-                self.assertIn(marker, html)
+            self.assertIn('<div class="studio-heading-status">', html)
+            self.assertIn('<span id="studioHeaderQueueStatus">队列 0</span>', html)
+            self.assertNotIn('<button class="studio-enqueue-top"', html)
+            self.assertNotIn('<button class="studio-generate-top"', html)
+            self.assertIn('<button class="primary" id="generate" hidden', html)
+            self.assertIn('id="quickGenerate"', html)
 
     def test_narrow_screens_may_wrap_header_actions(self):
         self.assertIn(
