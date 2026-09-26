@@ -415,3 +415,48 @@ html,body{height:100%;overflow:hidden}
 .studio-action-dock{position:fixed!important;top:auto!important;right:50%!important;bottom:12px!important;left:auto!important;z-index:78;display:grid!important;width:min(760px,calc(100vw - 32px));margin:0;transform:translateX(50%)!important;grid-row:auto}
 .studio-content-viewport{padding-bottom:calc(var(--studio-dock-reserve) + 14px);scroll-padding-bottom:calc(var(--studio-dock-reserve) + 14px)}
 @media(max-width:700px){.studio-action-dock{top:auto!important;right:8px!important;bottom:8px!important;left:8px!important;width:auto;transform:none!important;margin:0}.studio-content-viewport{padding-bottom:calc(var(--studio-dock-reserve) + 10px);scroll-padding-bottom:calc(var(--studio-dock-reserve) + 10px)}}
+.prompt-variation-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:8px 0 10px}
+.prompt-variation-bar label{display:flex;align-items:center;gap:5px;font-size:12px}
+.prompt-variation-bar select{width:auto;min-width:130px;padding:5px}
+.prompt-variation-bar .small{flex-basis:100%}
+.prompt-variation-preview{border:1px solid var(--line);border-radius:10px;padding:10px;margin:0 0 10px;background:rgba(91,116,169,.1)}
+.prompt-variation-preview[hidden],.prompt-chip-list[hidden]{display:none!important}
+.prompt-variation-list{display:grid;gap:7px;margin-bottom:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+.prompt-variation-list>div{padding:7px;border:1px solid var(--line);border-radius:7px}
+.prompt-variation-preview button{margin-right:5px}
+.prompt-chip-controls{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
+.prompt-chip-controls button{padding:2px 5px;font-size:11px;line-height:1.4;white-space:nowrap}
+.prompt-chip-list{display:flex;align-content:flex-start;flex-wrap:wrap;gap:6px;min-height:64px;padding:8px;border:1px solid var(--line);border-radius:8px}
+.prompt-chip{display:inline-flex;max-width:100%;border:1px solid var(--line);border-radius:15px;background:rgba(110,133,177,.16);overflow:hidden}
+.prompt-chip button{border:0;background:transparent;color:inherit;padding:3px 7px;font-size:12px;overflow-wrap:anywhere}
+.prompt-chip>button:nth-child(2){display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:2px 7px;text-align:left;min-width:0;flex:1 1 auto}
+.prompt-chip-en{font-weight:600}
+.prompt-chip-zh{color:#85d7ca;font-size:11px;font-weight:400;letter-spacing:.01em}
+.prompt-chip button:last-child{border-left:1px solid var(--line)}
+.prompt-chip-lora,.prompt-chip-embedding{background:rgba(153,101,191,.22)}
+.prompt-chip-structure{background:rgba(183,142,67,.24)}
+.prompt-chip-weight{background:rgba(72,152,134,.22)}
+.prompt-chip-phrase{background:rgba(91,126,183,.23)}
+.prompt-chip-add{align-self:center;padding:4px 7px;font-size:12px}
+.prompt-chip-selection-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 10px;padding:8px;border:1px solid var(--line);border-radius:8px;background:#202a3d;font-size:12px}
+.prompt-chip-selection-bar[hidden]{display:none!important}
+.prompt-chip-selection-bar label{display:inline-flex;align-items:center;gap:4px}
+.prompt-chip-selection-bar select{width:auto;min-width:90px;padding:4px;font-size:12px}
+.prompt-chip-selection-bar button{padding:5px 7px;font-size:12px}
+.prompt-chip-select{width:14px;height:14px;min-width:14px;margin:5px 2px 5px 7px;padding:0;accent-color:#9b8bfa;align-self:center}
+.prompt-chip.selected{border-color:#b2a0ff;box-shadow:0 0 0 1px #b2a0ff}
+.prompt-chip.locked{border-color:#c9a35e}
+.prompt-chip .prompt-chip-lock,.prompt-chip .prompt-chip-dice,.prompt-chip .prompt-chip-search{padding:3px 4px;font-size:11px;border-left:1px solid var(--line)}
+.prompt-chip-editor{width:min(94vw,420px);max-height:90vh;overflow:auto;padding:15px;border:1px solid var(--line);border-radius:12px;background:#171e2c;color:#f5f6fb}
+.prompt-chip-editor::backdrop{background:rgba(0,0,0,.65)}
+.prompt-chip-editor-head,.prompt-chip-editor-actions{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:12px}
+.prompt-chip-editor>label{display:grid;gap:5px;margin:10px 0;font-size:12px;color:var(--muted)}
+.prompt-chip-editor input,.prompt-chip-editor select{padding:7px;font-size:13px}
+.prompt-chip-editor-zh{color:#85d7ca;font-size:12px;overflow-wrap:anywhere}
+.prompt-chip-editor-weight{display:flex;align-items:center;gap:8px;margin:10px 0}
+.prompt-chip-editor-weight[hidden],.prompt-chip-editor>label[hidden]{display:none!important}
+.prompt-chip-editor-weight label{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:12px}
+.prompt-chip-editor-weight input[type=checkbox]{width:15px;height:15px;margin:0;accent-color:#9b8bfa}
+.prompt-chip-editor-weight input[type=number]{max-width:100px}
+.prompt-chip-editor-actions{justify-content:flex-start;flex-wrap:wrap;margin:14px 0 0}
+.prompt-chip-editor-actions button,.prompt-chip-editor-head button{padding:6px 8px;font-size:12px}

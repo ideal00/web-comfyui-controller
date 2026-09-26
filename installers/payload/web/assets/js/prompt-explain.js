@@ -232,6 +232,8 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
     }
   }
 
+  loadGlossary();
+
   function labelFor(fieldId) {
     const found = SECTION_FIELDS.find(([id]) => id === fieldId);
     return found ? found[1] : fieldId;
@@ -262,10 +264,10 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
     node.classList.toggle("diagnostic-error", !!error);
   }
 
-  async function translatePending() {
+  async function translateTokenList(tokens) {
     // 词表反查（本地手写中文）先填一批，剩下的才走批量离线翻译。
-    seedFromReverseMap(state.tokens, glossary);
-    const pending = pendingTokens(state.tokens, glossary);
+    seedFromReverseMap(tokens, glossary);
+    const pending = pendingTokens(tokens, glossary);
     if (!pending.length) return 0;
     const texts = [...new Set(pending.map((token) => token.text))];
     // 后端一次最多 32 段；这里统一走 offline-translate 的分批接口，长提示词也不会撞上限。
@@ -288,8 +290,18 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
       glossary[key.toLowerCase()] = translated;
     });
     saveGlossary();
-    applyGlossary(state.tokens, glossary);
+    applyGlossary(tokens, glossary);
     return texts.length;
+  }
+
+  function translatePending() { return translateTokenList(state.tokens); }
+
+  async function translateLabels(labels) {
+    const unique = [...new Set((labels || []).map(text).filter(Boolean))];
+    const tokens = unique.map(value => ({text:value, protected:isProtectedToken(value), translation:''}));
+    applyGlossary(tokens, glossary);
+    await translateTokenList(tokens);
+    return Object.fromEntries(tokens.map(token => [token.text, token.translation]));
   }
 
   function visibleTokens() {
@@ -508,4 +520,5 @@ dialog.prompt-explain .px-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:c
   global.easyPanelOpenPromptExplainer = openForActiveField;
   global.easyPanelAnalyzePromptField = (fieldId) => analyze(fieldId);
   Object.assign(global.EasyPanelPromptExplainer, { analyze, apply, restore, open: openForActiveField });
+  global.EasyPanelPromptExplainer.translateLabels = translateLabels;
 })(typeof window !== "undefined" ? window : globalThis);
