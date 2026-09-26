@@ -1213,6 +1213,19 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
     if (search) setTimeout(() => search.focus(), 30);
   }
 
+  function openTag(tag, source = "local") {
+    state.query = String(tag || "").trim();
+    state.page = 1;
+    state.category = "";
+    state.source = source;
+    const search = byId("tagSearch");
+    if (search) search.value = state.query;
+    const librarySearch = byId("vtlSearch");
+    if (librarySearch) librarySearch.value = state.query;
+    saveState();
+    open();
+  }
+
   function close() {
     const overlay = byId("vtlOverlay");
     if (overlay) overlay.hidden = true;
@@ -1233,7 +1246,7 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
     LOCAL_API, CLOUD_API, IMAGE_API, LOCAL_LIMIT, CLOUD_LIMIT,
     RATINGS, SORTS, RATING_BADGE, GROUP_LABELS,
     formatTag, dialectLabel, targetSection, targetLabel, promptFieldId, state,
-    open, close, reload,
+    open, openTag, close, reload,
     canonicalTag, openBundleDialog, closeBundleDialog, saveBundle, bundleCategories,
   };
   window.EasyPanelVisualTags = Object.assign(testApi, {

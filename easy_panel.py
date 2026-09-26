@@ -6209,8 +6209,10 @@ class Handler(BaseHTTPRequestHandler):
                 hub.start()
                 self.send_json({"ok": True, **hub.snapshot()})
             elif parsed.path == "/api/tags":
-                query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0]
-                self.send_json({"tags": search_tags(query[:100]), "total": len(TAG_INDEX)})
+                params = urllib.parse.parse_qs(parsed.query)
+                query = params.get("q", [""])[0]
+                limit = bounded(params.get("limit", ["28"])[0], 28, 1, 200)
+                self.send_json({"tags": search_tags(query[:100], limit=limit), "total": len(TAG_INDEX)})
             elif parsed.path == "/api/visual-tags":
                 query = urllib.parse.parse_qs(parsed.query)
                 if query.get("stats", [""])[0] in {"1", "true", "yes"}:

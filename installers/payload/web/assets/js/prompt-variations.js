@@ -107,6 +107,14 @@
     if (typeof global.promptEditorChanged === 'function') global.promptEditorChanged();
   }
   function write(key, tokens) { field(key).value = serialize(tokens); changed(); }
+  function addTag(key, value) {
+    if (!SECTIONS[key]) return false;
+    const incoming = tokenize(value), existing = tokenize(field(key).value);
+    const known = new Set(existing.map(normalized));
+    const added = incoming.filter(token => { const id = normalized(token); if (!id || known.has(id)) return false; known.add(id); return true; });
+    if (!added.length) { status('该分区已有这个标签。'); return false; }
+    write(key, [...existing, ...added]); status(`已向${LABELS[key]}加入 ${added.length} 个标签。`); return true;
+  }
   function colorizedToken(value, modifier) {
     const color = global.EasyPanelColorModifier;
     if (!color || modifier === 'keep') return value;
@@ -199,9 +207,9 @@
       search.title = '在可视化词条库中搜索'; search.onclick = () => {
         const library = global.EasyPanelVisualTags;
         if (!library?.open) return;
-        const searchInput = document.getElementById('tagSearch');
-        if (searchInput) searchInput.value = translationSource(token);
-        library.open();
+      const searchInput = document.getElementById('tagSearch');
+      if (searchInput) searchInput.value = translationSource(token);
+      if (library.openTag) library.openTag(translationSource(token), 'local'); else library.open();
       };
       chip.append(select, label, lock, dice, search, remove);
       chip.ondragstart = event => { drag = {key, index}; event.dataTransfer.setData('text/plain', token); event.dataTransfer.effectAllowed = 'move'; };
@@ -211,7 +219,10 @@
       host.append(chip);
     });
     const add = document.createElement('button'); add.type = 'button'; add.className = 'prompt-chip-add'; add.textContent = '＋ 添加标签';
-    add.onclick = () => { const value = global.prompt('添加词条（可输入多个，用逗号分隔）', ''); if (value?.trim()) write(key, [...tokenize(input.value), ...tokenize(value)]); };
+    add.onclick = () => {
+      if (global.EasyPanelTagAutocomplete?.openChipPicker) global.EasyPanelTagAutocomplete.openChipPicker(key, add);
+      else status('标签补全器尚未就绪，请先切到源码模式输入。');
+    };
     host.append(add);
   }
   function moveChip(fromKey, fromIndex, toKey, toIndex) {
@@ -374,7 +385,8 @@
       const library = global.EasyPanelVisualTags;
       if (!editingChip || !library?.open) return;
       const search = document.getElementById('tagSearch'); if (search) search.value = translationSource(editingChip.original);
-      dialog.close(); library.open();
+      dialog.close();
+      if (library.openTag) library.openTag(translationSource(editingChip.original), 'local'); else library.open();
     };
     dialog.onclose = () => { editingChip = null; };
     document.body.append(dialog);
@@ -423,6 +435,6 @@
       chips.ondrop = event => { event.preventDefault(); if (drag) moveChip(drag.key, drag.index, key, tokenize(field(key).value).length); drag = null; };
     });
   }
-  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, init};
+  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, init};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })(window);

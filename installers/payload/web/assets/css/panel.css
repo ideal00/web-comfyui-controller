@@ -460,3 +460,37 @@ html,body{height:100%;overflow:hidden}
 .prompt-chip-editor-weight input[type=number]{max-width:100px}
 .prompt-chip-editor-actions{justify-content:flex-start;flex-wrap:wrap;margin:14px 0 0}
 .prompt-chip-editor-actions button,.prompt-chip-editor-head button{padding:6px 8px;font-size:12px}
+.easy-advanced-tag-search{margin:7px 0;border:1px solid #34415a;border-radius:8px;background:#101621}
+.easy-advanced-tag-search>summary{padding:8px 10px;color:#b9cbea;font-size:12px;cursor:pointer}
+.easy-advanced-tag-search>.prompt-tag-search{margin:0;border:0;padding:2px 9px 9px;background:transparent}
+.easy-advanced-result{display:flex;gap:4px;align-items:stretch}
+.easy-advanced-result>button:first-child{display:flex;gap:8px;flex:1 1 auto;align-items:center;justify-content:space-between;text-align:left;padding:5px 7px;font-size:12px}
+.easy-advanced-result>button:last-child{padding:5px 7px}
+.easy-tag-dropdown{box-sizing:border-box;list-style:none;max-width:min(480px,94vw);max-height:min(390px,65vh);overflow:auto;margin:0;padding:4px;background:#172033;border:1px solid #63708f;border-radius:9px;box-shadow:0 12px 32px #0009;color:#f5f6fb;scrollbar-color:#8194bd #172033}
+.easy-tag-dropdown .textcomplete-header{position:sticky;top:0;z-index:1;padding:5px 7px;background:#24324b;color:#b9cbea;font-size:11px}
+.easy-tag-dropdown .textcomplete-footer{position:sticky;bottom:0;z-index:1;background:#24324b}
+.easy-tag-dropdown .textcomplete-footer:empty{display:none}
+.easy-tag-dropdown .textcomplete-footer button{width:100%;padding:7px;color:#d4e2ff;background:transparent;border:0;text-align:left;font-size:11px;cursor:pointer}
+.easy-tag-dropdown .textcomplete-footer button:hover{background:#37456a}
+.easy-advanced-tag-search #tagResults{max-height:440px;overflow:auto}
+.easy-tag-dropdown .textcomplete-item{margin:0;padding:0;border-radius:5px}
+.easy-tag-dropdown .textcomplete-item.active{background:#37456a}
+.easy-tag-dropdown .textcomplete-item>a{display:flex;align-items:center;gap:8px;min-width:220px;padding:6px 7px;color:inherit;text-decoration:none;cursor:pointer}
+.easy-tag-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600}
+.easy-tag-meta{flex:0 1 auto;color:#9fd5ce;font-size:11px;text-align:right}
+.easy-tag-image{flex:none;padding:3px 4px;border-radius:4px;cursor:pointer}
+.easy-tag-image:hover{background:#526082}
+.easy-tag-result.existing{opacity:.48}
+.easy-tag-preview{position:fixed;z-index:10002;box-sizing:border-box;pointer-events:none;width:min(300px,calc(100vw - 16px));max-height:min(360px,calc(100vh - 16px));overflow:hidden;padding:10px;background:#192337;border:1px solid #7688b5;border-radius:10px;box-shadow:0 14px 35px #000b;color:#f5f6fb}
+.easy-tag-preview>strong{display:block;overflow-wrap:anywhere;font-size:13px}
+.easy-tag-preview>small,.easy-tag-preview-body>small{display:block;margin:3px 0 6px;color:#9fd5ce;font-size:11px}
+.easy-tag-preview-body{min-height:34px;font-size:12px;color:#b9cbea}
+.easy-tag-preview-body img{display:block;max-width:100%;max-height:250px;margin:auto;border-radius:6px;object-fit:contain}
+.easy-tag-preview p{margin:5px 0 0;max-height:48px;overflow:hidden;color:#cbd4e8;font-size:11px}
+.easy-chip-picker{position:fixed;z-index:9999;display:flex;gap:4px;align-items:flex-start;width:min(340px,calc(100vw - 16px));padding:7px;background:#1a2333;border:1px solid #6d79a0;border-radius:9px;box-shadow:0 12px 30px #0008}
+.easy-chip-picker textarea{flex:1 1 auto;min-width:0;width:auto;min-height:32px;height:34px;padding:6px;resize:none;font-size:12px}
+.easy-chip-picker button{flex:none;padding:6px;font-size:11px}
+.easy-tag-related{position:fixed;z-index:10001;display:flex;flex-wrap:wrap;gap:5px;width:min(390px,94vw);max-height:240px;overflow:auto;padding:8px;background:#1a2333;border:1px solid #6d79a0;border-radius:9px;box-shadow:0 12px 30px #0008}
+.easy-tag-related[hidden]{display:none!important}
+.easy-tag-related .easy-related-head{display:flex;flex-basis:100%;justify-content:space-between;align-items:center;color:#9fd5ce;font-size:12px}
+.easy-tag-related button{padding:4px 6px;font-size:11px}
