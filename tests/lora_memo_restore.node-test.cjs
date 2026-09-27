@@ -82,6 +82,43 @@ test('desktop refresh keeps the LoRA removal linked to its memo terms', () => {
   assert.equal(fields.promptClothing.value, '');
 });
 
+test('generation payload carries LoRA memo provenance and work library restore reattaches it', () => {
+  const payloadLine = line('payload');
+  assert.ok(payloadLine.includes('appliedOutfits:snapshotAppliedOutfits()'));
+  const rows = [{name:'character.safetensors', weight:'0.7', enabled:true}];
+  const saved = {key:'character.safetensors', item:{name:'swimsuit',clothing:'white bikini'}, signature:'memo', state:{active:{clothing:true},added:{clothing:['white bikini']},removed:{}}};
+  const fields = {
+    model:{value:'anima.safetensors',options:[{value:'anima.safetensors'}]},
+    loras:{set innerHTML(value){if(value==='')rows.length=0}},
+    size:{options:[]}, seed:{value:''}, steps:{value:''}, cfg:{value:''},
+    sampler:{options:[]}, scheduler:{options:[]},
+    promptClothing:{value:''}, negative:{value:''},
+  };
+  const context = vm.createContext({
+    $:id=>fields[id], sessionStorage:storage(), document:{querySelector:()=>null},
+    PROMPT_SECTION_IDS:{clothing:'promptClothing'}, LORA_STATE_STORAGE:'easyPanelLorasV1',
+    noteKey:value=>value, selectedLoraPayload:()=>rows.filter(row=>row.enabled), allLoraState:()=>rows,
+    addLora:(name,weight)=>rows.push({name,weight,enabled:true}),
+    modelChanged:()=>{}, setFinalPromptMode:()=>{}, setFinalPromptText:()=>{},
+    updateSizeInfo:()=>{}, renderExperimentControls:()=>{}, promptEditorChanged:()=>{},
+    renderLoraMemo:()=>{}, removeOutfitSections:(item)=>{fields.promptClothing.value=fields.promptClothing.value.replace(item.clothing,'').trim()},
+  });
+  vm.runInContext(`let appliedOutfits=[${JSON.stringify(saved)}],mobilePanelReady=false,mobilePanelRestoring=false;
+    ${line('snapshotAppliedOutfits')}
+    ${line('setAppliedOutfits')}
+    ${line('reconcileAppliedOutfitsAfterRestore')}
+    ${line('removeAppliedOutfitsForLora')}
+    ${line('restorePayloadToPanel')}`, context);
+  const snapshot = vm.runInContext('snapshotAppliedOutfits()', context);
+  assert.equal(snapshot.length, 1);
+  context.restored = {model:'anima.safetensors',loras:[{name:'character.safetensors',weight:'0.7'}],promptSections:{clothing:'white bikini'},appliedOutfits:snapshot};
+  vm.runInContext('appliedOutfits=[];restorePayloadToPanel(restored)', context);
+  assert.equal(vm.runInContext('appliedOutfits.length', context), 1);
+  assert.equal(fields.promptClothing.value, 'white bikini');
+  assert.equal(vm.runInContext("removeAppliedOutfitsForLora('character.safetensors')", context), 1);
+  assert.equal(fields.promptClothing.value, '');
+});
+
 test('initial load keeps saved LoRAs and memo records until model and prompt restoration finishes', () => {
   const loadLine = source.split('\n').find((item) => item.startsWith('async function load('));
   assert.ok(loadLine);

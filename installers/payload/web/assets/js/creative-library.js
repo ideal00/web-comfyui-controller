@@ -295,6 +295,7 @@
     galleryNumber: 0,
     imageUrls: new Map(),
     lastFocus: null,
+    listScrollTop: 0,
     groups: [],
     filters: {
       operation: '', status: '', favorite: '', group: '', model: '', sort: 'created_at', order: 'desc',
@@ -859,7 +860,9 @@
     const images = entries.map((entry) => ({ src: entry.src, name: entry.name, label: entry.name }));
     const requestNumber = state.requestNumber;
     const galleryNumber = ++state.galleryNumber;
+    let currentPosition = index;
     const onChange = async (position) => {
+      currentPosition = position;
       const entry = entries[position];
       if (!entry || entry.artifact || entry.loading) return;
       entry.loading = true;
@@ -884,7 +887,14 @@
         // Keep the thumbnail available if the full image cannot be loaded.
       } finally { entry.loading = false; }
     };
-    return global.openPanelImageGallery(event, images, index, onChange);
+    const opened = global.openPanelImageGallery(event, images, index, onChange);
+    if (opened === false) byId('panelImageViewer')?.addEventListener('close', () => {
+      const current = entries[currentPosition];
+      if (byId('creativeLibraryDialog')?.open && current && current.generationId !== state.detail?.generation_id) {
+        void openDetail(current.generationId);
+      }
+    }, { once: true });
+    return opened;
   }
 
   function appendSafeImageLink(parent, source, label, className, artifact) {
@@ -1180,6 +1190,8 @@
       showNotice(error.message, 'error');
       return;
     }
+    const listView = byId('creativeLibraryListView');
+    if (listView && !listView.hidden) state.listScrollTop = listView.scrollTop;
     const requestNumber = ++state.requestNumber;
     state.loading = true;
     state.detail = null;
@@ -1357,12 +1369,28 @@
   }
 
   function backToList() {
+    const generationId = state.detail?.generation_id;
     state.detail = null;
     state.lineage = null;
     showListView();
     showNotice(state.items.length ? '已返回作品列表。' : '作品列表为空。', state.items.length ? 'success' : '');
     renderList();
     renderPagination();
+    const listView = byId('creativeLibraryListView');
+    if (listView) {
+      listView.scrollTop = state.listScrollTop;
+      global.requestAnimationFrame?.(() => {
+        listView.scrollTop = state.listScrollTop;
+        const card = [...listView.querySelectorAll('[data-generation-id]')]
+          .find((item) => item.dataset.generationId === generationId);
+        if (!card) return;
+        const rootRect = listView.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        if (cardRect.top < rootRect.top || cardRect.bottom > rootRect.bottom) {
+          listView.scrollTop += cardRect.top - rootRect.top - listView.clientHeight / 3;
+        }
+      });
+    }
   }
 
   function init() {

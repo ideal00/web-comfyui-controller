@@ -2477,11 +2477,15 @@ def anima_preflight(data: dict) -> dict:
     steps = bounded(data.get("steps"), 30, 8, 60)
     cfg = bounded(data.get("cfg"), 4.0, 1, 15, integer=False)
     resolution = model_sampling_profile(model).get("resolution") or {}
-    maximum_size = int(resolution.get("max") or 2048)
+    maximum_size = int(resolution.get("max") or 2272)
     width = bounded(data.get("width"), 832, 512, maximum_size)
     height = bounded(data.get("height"), 1216, 512, maximum_size)
-    if width * height > 2_450_000:
-        warnings.append(f"Anima 当前尺寸为 {width}×{height}，已超过精细首采约 2.45MP 的推荐像素预算；请留意显存与结构稳定性。")
+    if width * height >= 4_000_000:
+        warnings.append(f"Anima 自定义极限尺寸 {width}×{height}：8GB 显存可能发生 CPU 卸载或显存不足；建议先用精细首采验证。")
+    elif width * height > 3_250_000:
+        warnings.append(f"Anima 当前尺寸 {width}×{height} 已超过实验大图约 3.25MP 的推荐预算；请留意显存与结构稳定性。")
+    elif width * height >= 2_900_000:
+        warnings.append(f"Anima 实验大图 {width}×{height}：8GB 请一次生成 1 张，建议关闭高清二采、同尺寸细节重绘和额外整图增强；过慢或显存不足时退回精细首采。")
     elif width * height >= 2_000_000:
         warnings.append(f"Anima 精细首采 {width}×{height}：请一次生成 1 张；8GB 显存不足时切回标准首采。")
     if not 20 <= steps <= 50:

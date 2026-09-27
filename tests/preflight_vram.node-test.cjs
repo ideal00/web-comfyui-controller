@@ -33,3 +33,8 @@ test('显存估算为提醒，不作为禁止生成的硬错误', () => {
   assert.equal(vramChecklistLevel('warn'), 'warn')
   assert.equal(vramChecklistLevel('ok'), 'ok')
 })
+
+test('Anima 实验大图提示一次一张与关闭额外整图增强', () => {
+  const result = vramAssessment({ ...base, width: 1536, height: 2048 }, 'anima')
+  assert.ok(result.notes.some((note) => note.includes('实验大图') && note.includes('一次生成 1 张')))
+})

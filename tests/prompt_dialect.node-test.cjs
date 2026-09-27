@@ -78,6 +78,14 @@ test('批量与空输入', () => {
   assert.deepEqual(dialect.formatTags([], {}), [])
 })
 
+test('整段个人预设按模型转换，保留特殊词与调用', () => {
+  const source = 'looking_back, score_9, @artist_name\n(high_heels:1.2), <lora:custom_trigger_v2:0.8>, embedding:bad_hand_v4'
+  assert.equal(withFamily('anima', () => dialect.formatText(source)),
+    'looking back, score_9, @artist name\n(high heels:1.2), <lora:custom_trigger_v2:0.8>, embedding:bad_hand_v4')
+  assert.equal(withFamily('illustrious', () => dialect.formatText(source)), source)
+  assert.equal(withFamily('anima', () => dialect.formatText(source, {dialect:'canonical'})), source)
+})
+
 test('描述文案区分手动与自动', () => {
   assert.match(dialect.describe('space'), /手动指定/)
   assert.match(dialect.describe('auto'), /按当前模型/)

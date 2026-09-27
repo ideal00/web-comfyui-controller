@@ -96,6 +96,17 @@
     return (tags || []).map((tag) => formatTag(tag, options));
   }
 
+  // 个人预设可能是整段提示词，保留标点、换行及 LoRA/Embedding 调用。
+  function formatText(text, options) {
+    const value = String(text || "");
+    if (resolve(options && options.dialect) === "canonical") return value;
+    return value.split(/(<lora:[^>]*>|embedding:[^\s,;]+)/gi).map((part) => {
+      if (/^(?:<lora:|embedding:)/i.test(part)) return part;
+      return part.replace(/@?[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+/g,
+        (tag) => formatTag(tag, options));
+    }).join("");
+  }
+
   function describe(dialect) {
     const choice = String(dialect || currentDialect()).toLowerCase();
     const resolved = resolve(choice);
@@ -159,7 +170,7 @@
 
   const testApi = {
     STORAGE_KEY, DIALECTS, SPACE_FAMILIES,
-    family, currentDialect, setDialect, resolve, classify, formatTag, formatTags, describe,
+    family, currentDialect, setDialect, resolve, classify, formatTag, formatTags, formatText, describe,
     updateHint, installUi,
   };
   window.EasyPanelDialect = testApi;

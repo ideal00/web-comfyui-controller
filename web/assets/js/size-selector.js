@@ -44,13 +44,13 @@
     "21:9": { w: 21, h: 9 },
   };
   const ANIMA_TIERS = {
-    "1:1": ["1024x1024", "1536x1536"],
-    "2:3": ["832x1216", "1248x1872"],
-    "3:4": ["864x1152", "1344x1792"],
-    "9:16": ["768x1344", "1152x2048"],
-    "3:2": ["1216x832", "1872x1248"],
-    "4:3": ["1152x864", "1792x1344"],
-    "16:9": ["1344x768", "2048x1152"],
+    "1:1": ["1024x1024", "1536x1536", "1792x1792"],
+    "2:3": ["832x1216", "1248x1872", "1440x2160"],
+    "3:4": ["864x1152", "1344x1792", "1536x2048"],
+    "9:16": ["768x1344", "1152x2048", "1280x2272"],
+    "3:2": ["1216x832", "1872x1248", "2160x1440"],
+    "4:3": ["1152x864", "1792x1344", "2048x1536"],
+    "16:9": ["1344x768", "2048x1152", "2272x1280"],
   };
 
   const PANEL_HTML = `
@@ -211,9 +211,13 @@
         megapixels,
         note: tight
           ? (family === "anima"
-              ? (megapixels >= 2.0
-                  ? "精细首采约 2.3–2.4MP；8GB 请一次生成 1 张，显存不足时切回标准首采。"
-                  : "Anima 中间尺寸；8GB 显存不足时切回标准首采。")
+              ? (megapixels >= 4.0
+                  ? "自定义极限尺寸：8GB 很可能 CPU 卸载或显存不足；建议先退回精细首采。"
+                  : megapixels >= 2.9
+                    ? "实验大图约 2.9–3.2MP：8GB 请一次生成 1 张，建议关闭高清二采、细节重绘和额外整图增强；运行缓慢或显存不足时退回精细首采。"
+                    : megapixels >= 2.0
+                      ? "精细首采约 2.3–2.4MP；8GB 请一次生成 1 张，显存不足时切回标准首采。"
+                      : "Anima 中间尺寸；8GB 显存不足时切回标准首采。")
               : "8GB 显存压力大：可能走 CPU 卸载（很慢）或直接显存不足，建议 1024px 以内。")
           : "建议一次只生成 1 张；显存不足时切精准模式或降到 1.5MP 以内。",
       };
@@ -332,7 +336,7 @@
     row.hidden = profile().family !== "anima" || !pair;
     wrap.innerHTML = "";
     if (row.hidden) return;
-    ["标准首采", "精细首采 ⭐"].forEach((label, index) => {
+    ["标准首采", "精细首采 ⭐", "实验大图 ⚠"].forEach((label, index) => {
       const preset = presetGroup(activeRatio).presets.find((item) => item.value === pair[index]);
       if (!preset) return;
       const button = document.createElement("button");
@@ -442,7 +446,9 @@
     } catch (_error) {
       hiresNote = "";
     }
-    elements.vram.textContent = `预计显存负载：${estimate.level}${hiresNote}`;
+    const largeAnima = profile().family === "anima" && estimate.megapixels >= 2.9;
+    elements.vram.textContent = `预计显存负载：${estimate.level}${hiresNote}` +
+      (largeAnima ? `；${estimate.note}` : "");
     elements.vram.title = estimate.note || "";
     elements.range.value = String(longEdge);
     elements.longInput.value = String(longEdge);

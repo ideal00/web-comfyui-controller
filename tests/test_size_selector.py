@@ -60,8 +60,8 @@ class SizeSelectorWiringTests(unittest.TestCase):
 
     def test_both_pages_load_the_selector(self):
         for page in self.pages:
-            self.assertIn('<script src="/assets/js/size-selector.js?v=3"></script>', page)
-            self.assertIn('href="/assets/css/panel.css?v=71"', page)
+            self.assertIn('<script src="/assets/js/size-selector.js?v=4"></script>', page)
+            self.assertIn('href="/assets/css/panel.css?v=72"', page)
 
     def test_payload_copies_are_byte_identical(self):
         self.assertEqual(SCRIPT.read_bytes(), PAYLOAD_SCRIPT.read_bytes())
@@ -182,10 +182,21 @@ class SizePresetRatioTests(unittest.TestCase):
                 self.assertLessEqual(max(width, height), 2048)
                 self.assertLessEqual(width * height, 2_450_000)
 
-    def test_anima_profile_accepts_fine_preset_long_edges(self):
+    def test_anima_experimental_presets_fit_recommended_budget(self):
+        wanted = {(1792, 1792), (1440, 2160), (1536, 2048), (1280, 2272),
+                  (2160, 1440), (2048, 1536), (2272, 1280)}
+        for presets in self.pages:
+            available = {(width, height) for width, height, _ in presets}
+            self.assertTrue(wanted <= available)
+            self.assertNotIn((2048, 2048), available)
+            for width, height in wanted:
+                self.assertLessEqual(max(width, height), 2272)
+                self.assertLessEqual(width * height, 3_250_000)
+
+    def test_anima_profile_accepts_experimental_preset_long_edges(self):
         resolution = model_sampling_profile("anima-base-v1.0.safetensors")["resolution"]
-        self.assertEqual(2048, resolution["max"])
-        self.assertEqual(2_450_000, resolution["max_pixels"])
+        self.assertEqual(2272, resolution["max"])
+        self.assertEqual(3_250_000, resolution["max_pixels"])
 
 
 if __name__ == "__main__":

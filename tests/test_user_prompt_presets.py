@@ -81,6 +81,13 @@ class UserPromptPresetTests(unittest.TestCase):
         self.assertNotIn("batchAppendToField(category.target,item.content)", script)
         self.assertIn("const isBundle=userPromptPresetIsBundle(item),text=presetInsertText(item)", script)
 
+    def test_personal_presets_and_random_variations_use_dialect_on_insert(self):
+        script = Path("web/assets/js/panel.js").read_text(encoding="utf-8")
+        variations = Path("web/assets/js/prompt-variations.js").read_text(encoding="utf-8")
+        self.assertIn("const text=presetInsertText(item,key)", script)
+        self.assertIn("layer?.formatText?layer.formatText(content):content", script)
+        self.assertIn("presetInsertText(item, key) : item.sections[key]", variations)
+
     def test_png_metadata_recovery_table_is_complete_and_distinct(self):
         path = Path("web/assets/data/recovered_combo_presets_20260828.json")
         data = json.loads(path.read_text(encoding="utf-8"))

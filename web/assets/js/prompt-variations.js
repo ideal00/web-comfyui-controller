@@ -14,7 +14,9 @@
   try { locks = {...locks, ...JSON.parse(localStorage.getItem(LOCK_KEY) || '{}')}; } catch (_) {}
   let pending = null;
   let history = [];
+  let nameHistory = [];
   let historyIndex = -1;
+  let presetNames = {};
   let drag = null;
   let tagLocks = {};
   try {
@@ -102,8 +104,21 @@
   }
   function clearSelection() { selection.key = null; selection.source = ''; selection.indices.clear(); renderSelectionToolbar(); }
   function status(message) { const node = document.getElementById('promptVariationStatus'); if (node) node.textContent = message; }
+  function presetName(key) {
+    const saved = presetNames[key];
+    return saved && field(key).value === saved.text ? saved.name : '';
+  }
+  function renderPresetNames() {
+    Object.keys(SECTIONS).forEach(key => {
+      if (presetNames[key] && !presetName(key)) delete presetNames[key];
+      const label = document.getElementById(`promptPresetName_${key}`);
+      const name = presetName(key);
+      if (label) { label.textContent = name ? `预设：${name}` : ''; label.hidden = !name; }
+    });
+  }
   function changed() {
     clearSelection();
+    renderPresetNames();
     if (typeof global.promptEditorChanged === 'function') global.promptEditorChanged();
   }
   function write(key, tokens) { field(key).value = serialize(tokens); changed(); }
@@ -234,6 +249,7 @@
   }
   function renderAll() {
     if (selection.key && field(selection.key).value !== selection.source) clearSelection();
+    renderPresetNames();
     Object.keys(SECTIONS).forEach(renderChips);
   }
   function selectedTokens() {
@@ -286,7 +302,7 @@
     const values = [];
     presets.forEach(item => {
       if (item.category === key || (key === 'style' && item.category === 'artist')) values.push({name:item.name, text:typeof presetInsertText === 'function' ? presetInsertText(item) : item.content});
-      else if (item.category === 'combo' && item.sections?.[key]) values.push({name:item.name, text:item.sections[key]});
+      else if (item.category === 'combo' && item.sections?.[key]) values.push({name:item.name, text:typeof presetInsertText === 'function' ? presetInsertText(item, key) : item.sections[key]});
     });
     const seen = new Set();
     return values.filter(item => { const text = String(item.text || '').trim(), normalized = text.toLowerCase(); if (!text || seen.has(normalized)) return false; seen.add(normalized); return true; });
@@ -324,12 +340,20 @@
     status(`预览 ${changes.length} 个分区的变化；确认后才会写入。`);
   }
   function snapshot() { return Object.fromEntries(Object.entries(SECTIONS).map(([key,id]) => [key, document.getElementById(id).value])); }
-  function record() { history = history.slice(0, historyIndex + 1); history.push(snapshot()); if (history.length > 12) history.shift(); historyIndex = history.length - 1; }
+  function record() {
+    renderPresetNames();
+    history = history.slice(0, historyIndex + 1);
+    nameHistory = nameHistory.slice(0, historyIndex + 1);
+    history.push(snapshot()); nameHistory.push({...presetNames});
+    if (history.length > 12) { history.shift(); nameHistory.shift(); }
+    historyIndex = history.length - 1;
+  }
   function randomSectionNow(key) {
     const choice = candidate(key);
     if (!choice) { status(lockedTerms(key).length ? `${LABELS[key]}没有同时保留锁定词条的其他预设或组件。` : `${LABELS[key]}没有其他可用的个人预设或组件；先保存一个不同内容的预设。`); return false; }
     if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
     field(key).value = choice.text;
+    presetNames[key] = {name:choice.name, text:choice.text};
     record();
     pending = null;
     const preview = document.getElementById('promptVariationPreview');
@@ -343,12 +367,13 @@
     if (pending.some(item => field(item.key).value !== item.before)) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('分区内容已变化，请重新随机预览。'); return; }
     if (pending.some(item => lockedTerms(item.key).some(token => !tokenize(item.choice.text).some(candidate => normalized(candidate) === normalized(token))))) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('锁定词条已变化，请重新随机预览。'); return; }
     if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
-    pending.forEach(item => { field(item.key).value = item.choice.text; });
+    pending.forEach(item => { field(item.key).value = item.choice.text; presetNames[item.key] = {name:item.choice.name, text:item.choice.text}; });
     record(); pending = null; document.getElementById('promptVariationPreview').hidden = true; changed(); status('已应用变体；可以用上一个恢复。');
   }
   function navigate(step) {
     const next = historyIndex + step; if (next < 0 || next >= history.length) return;
-    historyIndex = next; Object.entries(history[next]).forEach(([key,value]) => { field(key).value = value; }); changed(); status(`已回到历史 ${next + 1}/${history.length}。`);
+    historyIndex = next; Object.entries(history[next]).forEach(([key,value]) => { field(key).value = value; });
+    presetNames = {...nameHistory[next]}; changed(); status(`已回到历史 ${next + 1}/${history.length}。`);
   }
   function randomUnlocked() {
     let keys = Object.keys(SECTIONS).filter(key => !locks[key] && eligibleCandidates(key).length);
@@ -429,12 +454,13 @@
       const mode = document.createElement('button'); mode.type = 'button'; mode.textContent = '标签'; mode.setAttribute('aria-pressed', 'false');
       const chips = document.createElement('div'); chips.className = 'prompt-chip-list'; chips.hidden = true;
       mode.onclick = () => { chips.hidden = !chips.hidden; input.hidden = !chips.hidden; mode.textContent = chips.hidden ? '标签' : '源码'; mode.setAttribute('aria-pressed', String(!chips.hidden)); renderChips(key); };
-      controls.append(lock, dice, mode); title.append(controls); input.after(chips);
-      input.addEventListener('input', () => { if (!chips.hidden) renderChips(key); });
+      const presetLabel = document.createElement('span'); presetLabel.id = `promptPresetName_${key}`; presetLabel.className = 'prompt-section-preset-name'; presetLabel.hidden = true;
+      controls.append(lock, dice, mode, presetLabel); title.append(controls); input.after(chips);
+      input.addEventListener('input', () => { renderPresetNames(); if (!chips.hidden) renderChips(key); });
       chips.ondragover = event => { if (drag) event.preventDefault(); };
       chips.ondrop = event => { event.preventDefault(); if (drag) moveChip(drag.key, drag.index, key, tokenize(field(key).value).length); drag = null; };
     });
   }
-  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, init};
+  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, presetName, init};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })(window);

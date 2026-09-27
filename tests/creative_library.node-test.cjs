@@ -98,6 +98,7 @@ function createPage(fetchImpl) {
     'creativeLibraryOrder', 'creativeLibraryApplyFilters', 'creativeLibraryList',
     'creativeLibraryPagination', 'creativeLibraryPrevious', 'creativeLibraryPageInfo', 'creativeLibraryNext',
     'creativeLibraryDetailView', 'creativeLibraryBack', 'creativeLibraryDetailStatus', 'creativeLibraryDetail',
+    'panelImageViewer',
     'status', 'quality',
   ]
   const elements = Object.fromEntries(ids.map((id) => [id, new Element(id)]))
@@ -175,8 +176,8 @@ test('desktop HTML contains the isolated Library entry, dialog, and script after
   assert.match(html, /id="creativeLibraryDialog"/)
   assert.match(html, /id="creativeLibraryFilters"/)
   assert.match(html, /id="creativeLibraryDetail"/)
-  assert.match(html, /snapshot-flow\.js\?v=3[\s\S]*creative-library\.js\?v=10/)
-  assert.match(html, /panel\.css\?v=71/)
+  assert.match(html, /snapshot-flow\.js\?v=3[\s\S]*creative-library\.js\?v=11/)
+  assert.match(html, /panel\.css\?v=72/)
   assert.match(html, /id="pendingDerivation"/)
 })
 
@@ -287,7 +288,7 @@ test('safe paths reject traversal, external origins, and HTML-shaped ids', () =>
   assert.equal(library.artifactPath({ filename: '../private.png' }, 'http://localhost:8190'), '')
   assert.equal(library.artifactPath({ filename: 'ok.png', subfolder: '../private' }, 'http://localhost:8190'), '/api/rpg/image?name=ok.png&type=output')
   assert.doesNotMatch(source, /innerHTML/)
-  assert.doesNotMatch(source, /method:\s*['"]POST['"]/)
+  assert.match(source, /const response = await fetcher\(path, \{ method: 'GET'/)
   assert.doesNotMatch(source, /\/api\/generate(?:-batch|['"?])/)
 })
 
@@ -337,7 +338,7 @@ test('filter and restore clicks stay read-only and only restore to the existing 
   page.root.setPendingDerivationContext = (context) => { pending = context }
   page.elements.creativeLibraryOpen.click()
   await flush()
-  page.elements.creativeLibraryList.children[0].click()
+  page.elements.creativeLibraryList.children[0].children[0].click()
   await flush()
   await flush()
   const actions = page.elements.creativeLibraryDetail.children.find((child) => child.className === 'creative-library-actions')
@@ -348,4 +349,53 @@ test('filter and restore clicks stay read-only and only restore to the existing 
   assert.match(page.elements.status.textContent, /手动点击“生成图片”/)
   assert.ok(calls.every(([, options]) => options.method === 'GET'))
   assert.equal(calls.some(([, options]) => options.method !== 'GET'), false)
+})
+
+test('closing a paged image gallery shows the viewed work and returns to its list page', async () => {
+  const ids = Array.from({length: 49}, (_, index) => index.toString(16).padStart(32, '0'))
+  const page = createPage(async (url) => {
+    if (url.startsWith('/api/rpg/library/generations?')) {
+      const offset = Number(new URLSearchParams(url.split('?')[1]).get('offset'))
+      return response({items:ids.slice(offset, offset + 24).map((id) => ({
+        generation_id:id, model:id, operation:'txt2img', status:'completed',
+        thumbnail_url:'/api/rpg/image?name='+id+'.png',
+      })), total:49, has_more:offset + 24 < 49})
+    }
+    if (url.endsWith('/lineage')) return response({lineage:{ancestors:[],descendants:[],edges:[]}})
+    if (url.startsWith('/api/rpg/library/generations/')) {
+      const id = url.split('/').pop()
+      const artifact = {artifact_id:id, generation_id:id, filename:id+'.png', exists:true,
+        url:'/api/rpg/image?name='+id+'.png'}
+      return response({generation:{generation_id:id,model:id,operation:'txt2img',status:'completed',
+        artifacts:[artifact],preview:{artifact_id:id},thumbnail_url:artifact.url,loras:[]}})
+    }
+    return response({})
+  })
+  let gallery
+  page.root.openPanelImageGallery = (_event, images, index, onChange) => {
+    gallery = {images,index,onChange}
+    page.elements.panelImageViewer.open = true
+    return false
+  }
+  page.elements.creativeLibraryOpen.click()
+  await flush()
+  page.elements.creativeLibraryNext.click()
+  await flush()
+  assert.equal(page.elements.creativeLibraryPageInfo.textContent, '25–48 / 49')
+  page.elements.creativeLibraryListView.scrollTop = 180
+  page.elements.creativeLibraryList.children[0].children[0].click()
+  await flush()
+  await flush()
+  const preview = page.elements.creativeLibraryDetail.children[0].children[0]
+  preview.children[0].click()
+  assert.equal(gallery.index, 0)
+  gallery.onChange(1)
+  page.elements.panelImageViewer.close()
+  await flush()
+  await flush()
+  const heading = page.elements.creativeLibraryDetail.children[0].children[1].children[0]
+  assert.equal(heading.textContent, ids[25])
+  page.elements.creativeLibraryBack.click()
+  assert.equal(page.elements.creativeLibraryPageInfo.textContent, '25–48 / 49')
+  assert.equal(page.elements.creativeLibraryListView.scrollTop, 180)
 })

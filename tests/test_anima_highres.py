@@ -153,6 +153,14 @@ class AnimaHighresWorkflowTests(unittest.TestCase):
         return [node for node in workflow["prompt"].values()
                 if node.get("class_type") == class_type]
 
+    def test_experimental_first_pass_dimensions_are_not_clamped(self):
+        for width, height in ((1536, 2048), (1280, 2272), (1792, 1792)):
+            with self.subTest(size=(width, height)):
+                data = payload("anima-base-v1.0.safetensors")
+                data.update({"width": width, "height": height})
+                latent = self.nodes_of(self.build(data), "EmptyLatentImage")[0]["inputs"]
+                self.assertEqual((width, height), (latent["width"], latent["height"]))
+
     def test_enabled_builds_upscale_then_second_pass(self):
         data = payload("anima-base-v1.0.safetensors")
         data["animaHighres"] = {"enabled": True}

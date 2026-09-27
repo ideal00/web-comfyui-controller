@@ -253,8 +253,12 @@
     const ratio = peak / VRAM_BUDGET_MB;
     const level = ratio < 0.85 ? 'ok' : ratio < 1.05 ? 'warn' : 'error';
     const notes = [];
-    if (family === 'anima' && megapixels > 2.45) {
-      notes.push(`首采分辨率 ${width}×${height}（${megapixels.toFixed(2)} MP）超过精细档约 2.45 MP 的像素预算。`);
+    if (family === 'anima' && megapixels >= 4) {
+      notes.push(`Anima 自定义极限尺寸 ${width}×${height}（${megapixels.toFixed(2)} MP）；8GB 可能 CPU 卸载或显存不足。`);
+    } else if (family === 'anima' && megapixels > 3.25) {
+      notes.push(`Anima 首采 ${width}×${height}（${megapixels.toFixed(2)} MP）超过实验档约 3.25 MP 的推荐预算。`);
+    } else if (family === 'anima' && megapixels >= 2.9) {
+      notes.push(`Anima 实验大图 ${width}×${height}（${megapixels.toFixed(2)} MP）；8GB 建议一次生成 1 张并关闭额外整图增强。`);
     } else if (family === 'anima' && megapixels >= 2) {
       notes.push(`Anima 精细首采 ${width}×${height}（${megapixels.toFixed(2)} MP）；8GB 建议一次生成 1 张。`);
     } else if (family !== 'anima' && megapixels > 1.25) {

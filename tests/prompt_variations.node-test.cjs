@@ -8,14 +8,15 @@ function load(presets = [], saved = {}) {
   const elements = Object.fromEntries([
     'promptSubject', 'promptAppearance', 'promptExpression', 'promptClothing', 'promptPose',
     'promptComposition', 'promptScene', 'promptLighting', 'promptStyle'
-  ].map(id => [id, {value: ''}]));
+  ].map(id => [id, {value: '', parentElement: {querySelector() { return null; }}}]));
   elements.promptVariationStatus = {textContent: ''};
+  elements.promptPresetName_pose = {textContent: '', hidden: true};
   const context = {
     window: {},
     document: {readyState: 'loading', addEventListener() {}, getElementById(id) { return elements[id]; }},
     localStorage: {getItem(key) { return saved[key] || null; }, setItem(key, value) { saved[key] = value; }},
     userPromptPresets: presets,
-    presetInsertText(item) { return item.tags?.join(', ') || item.content; },
+    presetInsertText(item, section) { return section ? item.sections?.[section] : (item.tags?.join(', ') || item.content); },
     Math
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/assets/js/prompt-variations.js'), 'utf8'), context);
@@ -54,9 +55,20 @@ test('section dice replaces its own field immediately and history restores it', 
   elements.promptScene.value = 'beach';
   assert.equal(api.randomSectionNow('pose'), true);
   assert.equal(elements.promptPose.value, 'sitting, legs crossed');
+  assert.equal(api.presetName('pose'), 'Sit');
+  assert.equal(elements.promptPresetName_pose.textContent, '预设：Sit');
+  assert.equal(elements.promptPresetName_pose.hidden, false);
   assert.equal(elements.promptScene.value, 'beach');
   api.navigate(-1);
   assert.equal(elements.promptPose.value, 'standing');
+  assert.equal(api.presetName('pose'), '');
+  assert.equal(elements.promptPresetName_pose.hidden, true);
+  api.navigate(1);
+  assert.equal(api.presetName('pose'), 'Sit');
+  elements.promptPose.value = 'sitting, legs crossed, smiling';
+  api.renderAll();
+  assert.equal(api.presetName('pose'), '');
+  assert.equal(elements.promptPresetName_pose.hidden, true);
   assert.equal(api.randomSectionNow('scene'), false);
   assert.equal(elements.promptScene.value, 'beach');
 });

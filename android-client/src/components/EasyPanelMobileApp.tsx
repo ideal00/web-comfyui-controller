@@ -758,6 +758,7 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
   // Keep the list scroll offset while a detail view is open so returning to the
   // records page lands on the same position instead of the top.
   const listScrollRef = useRef(0)
+  const returnGenerationIdRef = useRef('')
   const [viewerArtifact, setViewerArtifact] = useState<EasyPanelGenerationArtifact>()
   const [viewerSource, setViewerSource] = useState('')
   const [viewerLoading, setViewerLoading] = useState(false)
@@ -860,11 +861,16 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
   }
 
   function closeViewer() {
+    const generationId = viewerArtifact?.generation_id || ''
     viewerRequestRef.current += 1
     clearViewerSource()
     setViewerArtifact(undefined)
     setViewerLoading(false)
     setViewerError('')
+    if (generationId) {
+      returnGenerationIdRef.current = generationId
+      if (generationId !== detail?.generation_id) void controller.openLibraryGeneration(generationId)
+    }
   }
 
   async function openOriginal(artifact: EasyPanelGenerationArtifact) {
@@ -948,13 +954,14 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
           error={controller.libraryError}
           message={controller.libraryMessage}
           savedScrollTop={listScrollRef.current}
+          restoreGenerationId={returnGenerationIdRef.current}
           onScrollTopChange={(top) => { listScrollRef.current = top }}
           onRefresh={() => void controller.refreshLibrary()}
           onToggleFavoriteFilter={controller.toggleLibraryFavoriteFilter}
           onToggleFavorite={(id, favorite) => void controller.saveLibraryFlags(id, { favorite })}
           onLoadMore={() => void controller.loadMoreLibrary()}
           onLoadThumbnail={controller.loadLibraryThumbnail}
-          onOpen={(id) => void controller.openLibraryGeneration(id)}
+          onOpen={(id) => { returnGenerationIdRef.current = ''; void controller.openLibraryGeneration(id) }}
           onDelete={(id) => void removeGeneration(id)}
         />}
         {controller.libraryDownloadMessage && <p className={`epm-library-message ${controller.libraryDownloadMessage.includes('失败') ? 'failure' : 'success'}`} role="status">{controller.libraryDownloadMessage}</p>}
@@ -976,7 +983,7 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
   )
 }
 
-function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, groups, groupFilter, onSelectGroup, thumbnailLoading, loading, error, message, savedScrollTop = 0, onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
+function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, groups, groupFilter, onSelectGroup, thumbnailLoading, loading, error, message, savedScrollTop = 0, restoreGenerationId = '', onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
   total: number
@@ -990,6 +997,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
   error: string
   message: string
   savedScrollTop?: number
+  restoreGenerationId?: string
   onScrollTopChange?: (top: number) => void
   onRefresh: () => void
   onToggleFavoriteFilter: () => void
@@ -1007,10 +1015,18 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
     const root = contentRef.current
     if (!root) return
     const target = Number(savedScrollTop) || 0
-    if (target <= 0) return
     root.scrollTop = target
     const raf = requestAnimationFrame(() => {
-      if (contentRef.current) contentRef.current.scrollTop = target
+      if (!contentRef.current) return
+      root.scrollTop = target
+      const card = [...root.querySelectorAll<HTMLElement>('[data-library-thumbnail-id]')]
+        .find((element) => element.dataset.libraryThumbnailId === restoreGenerationId)
+      if (!card) return
+      const rootRect = root.getBoundingClientRect()
+      const cardRect = card.getBoundingClientRect()
+      if (cardRect.top < rootRect.top || cardRect.bottom > rootRect.bottom) {
+        root.scrollTop += cardRect.top - rootRect.top - root.clientHeight / 3
+      }
     })
     return () => cancelAnimationFrame(raf)
     // Run once on mount only; later prop changes are handled by onScrollTopChange.
