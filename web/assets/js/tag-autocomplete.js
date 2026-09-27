@@ -36,6 +36,13 @@
     const colored = global.EasyPanelColorModifier?.compose(canonical) || canonical;
     return global.EasyPanelDialect?.formatTag(colored, {kind:item?.category === '画师' || item?.kind === 'artist' ? 'artist' : undefined}) || colored;
   }
+  function colorChoiceMarkup() {
+    const modifier = global.EasyPanelColorModifier;
+    if (!modifier?.MODIFIERS) return '';
+    const current = modifier.current();
+    const options = [{key:'',label:'原色'}, ...modifier.MODIFIERS.map(item => ({key:item.key,label:item.label}))];
+    return `<select class="easy-tag-color" data-autocomplete-color aria-label="颜色修饰" title="选择后，颜色标签插入时使用此修饰">${options.map(item => `<option value="${escapeHtml(item.key)}"${item.key === current ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>`;
+  }
   function queryAtCursor(field) {
     const before = String(field?.value || '').slice(0, field?.selectionStart ?? 0);
     const after = String(field?.value || '').slice(field?.selectionEnd ?? 0);
@@ -131,6 +138,11 @@
     };
     completion.dropdown.el.addEventListener('mousedown', listener, true);
     completion.dropdown.el.addEventListener('click', listener, true);
+    completion.dropdown.el.addEventListener('change', event => {
+      if (!event.target.matches?.('[data-autocomplete-color]')) return;
+      global.EasyPanelColorModifier?.set(event.target.value);
+      field.focus();
+    });
     return action;
   }
   function hidePreview() {
@@ -271,6 +283,7 @@
       previewAt(event.target);
     });
     dropdown.el.addEventListener('touchstart', event => {
+      if (event.target.closest?.('[data-autocomplete-color]')) { touch = null; return; }
       const point = event.touches[0];
       touch = event.touches.length === 1 ? {x:point.clientX,y:point.clientY,moved:false} : null;
     }, {passive:true});
@@ -323,13 +336,8 @@
       dropdown:{maxCount:180,className:'textcomplete-dropdown easy-tag-dropdown',
         header(items) {
           const local = items.find(item => item.source === 'local');
-          const count = local ? `本地图鉴匹配 ${Number(local.localMatched || 0).toLocaleString()} 条 · ` : '';
-          return `${count}已载入 ${items.length} 个候选 · 向下滚动查看更多`;
-        },
-        footer(items) {
-          const local = items.find(item => item.source === 'local');
-          return `<span class="easy-tag-shortcuts">↑↓ 选择 · Enter/Tab 插入 · 🖼 看图</span><span class="easy-tag-touch-hint">上下滑动看图 · 轻点预览 · 再点插入</span><button type="button" data-autocomplete-related="true">🔗 查看所选标签的相关词</button>`
-            + (local ? `<button type="button" data-autocomplete-all="local">在本地图鉴查看全部 ${Number(local.localMatched || 0).toLocaleString()} 条匹配</button>` : '');
+          const count = local ? `本地${Number(local.localMatched || 0).toLocaleString()} · ` : '';
+          return `<span class="easy-tag-header-count">${count}${items.length}项</span><span class="easy-tag-header-tools">${colorChoiceMarkup()}<button type="button" data-autocomplete-related="true" title="查看所选标签的相关词" aria-label="查看所选标签的相关词">🔗</button>${local ? '<button type="button" data-autocomplete-all="local" title="在本地图鉴查看全部匹配" aria-label="在本地图鉴查看全部匹配">▦</button>' : ''}</span>`;
         }}
     });
     completion.register([{
@@ -483,7 +491,7 @@
       if (related && !related.hidden && !related.contains(event.target)) related.hidden = true;
     });
   }
-  global.EasyPanelTagAutocomplete = {search, mergeResults, searchable, baseTag, currentTerms, formatTag, queryAtCursor, tagAtCursor, activateWithoutScroll, keepActiveVisible, openChipPicker, closeChipPicker, init};
+  global.EasyPanelTagAutocomplete = {search, mergeResults, searchable, baseTag, currentTerms, formatTag, colorChoiceMarkup, queryAtCursor, tagAtCursor, activateWithoutScroll, keepActiveVisible, openChipPicker, closeChipPicker, init};
   if (typeof module !== 'undefined' && module.exports) module.exports = global.EasyPanelTagAutocomplete;
   if (typeof document === 'undefined') return;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

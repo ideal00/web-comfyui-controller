@@ -100,7 +100,7 @@ class SizePresetTests(unittest.TestCase):
             self.assertIn(marker, self.mobile)
 
     def test_new_sizes_stay_inside_backend_limits(self):
-        # 8 对齐 + Anima 长边上限 1536（1472/1344 都放得下），避免选了又被后端钳制。
+        # 旧标准档仍保持 8 对齐；Anima 新增精细档另由尺寸选择器测试覆盖。
         for width, height in ((832, 1472), (1472, 832), (1344, 576)):
             self.assertEqual(0, width % 8, width)
             self.assertEqual(0, height % 8, height)
@@ -188,7 +188,7 @@ class StudioHeaderDensityTests(unittest.TestCase):
                 html.index('id="animaHighresMount"'),
                 html.index("<details><summary>多人区域提示词</summary>"),
             )
-            self.assertIn("anima-highres.js?v=9", html)
+            self.assertIn("anima-highres.js?v=10", html)
             # 版本号会随改动 bump，这里只查脚本仍然加载（前缀匹配）。
             self.assertIn("result-workbench.js?v=", html)
 

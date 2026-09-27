@@ -99,7 +99,7 @@ test('档位分组：按长边升序、近似档位有标记', () => {
   const groups = sizes.groupPresets(OPTIONS)
   const byKey = new Map(groups.map((group) => [group.key, group.presets]))
   const landscape32 = byKey.get('3:2').map((item) => item.value)
-  assert.deepEqual(landscape32, ['1216x832', '1536x1024'])
+  assert.deepEqual(landscape32, ['1216x832', '1536x1024', '1872x1248'])
   assert.equal(byKey.get('3:2')[0].exact, false) // 1216×832 实际 1.46:1
   assert.equal(byKey.get('3:2')[1].exact, true)
   assert.equal(byKey.get('9:16').find((item) => item.value === '832x1472').exact, true)
@@ -121,7 +121,27 @@ test('显存负载口径：Illustrious 1.57MP 中、2.14MP 较高；Anima 同尺
   assert.equal(sizes.vramEstimate(864, 1152, 'sdxl').level, '低')
   assert.equal(sizes.vramEstimate(1152, 1152, 'sdxl').level, '中')
   assert.equal(sizes.vramEstimate(1536, 1024, 'anima').level, '高')
-  assert.ok(sizes.vramEstimate(1536, 1024, 'anima').note.includes('1024px'))
+  assert.ok(sizes.vramEstimate(1536, 1024, 'anima').note.includes('中间尺寸'))
+})
+
+test('Anima 标准与精细首采覆盖七个常用比例，并限制滑块像素预算', () => {
+  const expected = {
+    '1:1': ['1024x1024', '1536x1536'],
+    '2:3': ['832x1216', '1248x1872'],
+    '3:4': ['864x1152', '1344x1792'],
+    '9:16': ['768x1344', '1152x2048'],
+    '3:2': ['1216x832', '1872x1248'],
+    '4:3': ['1152x864', '1792x1344'],
+    '16:9': ['1344x768', '2048x1152'],
+  }
+  assert.deepEqual(sizes.ANIMA_TIERS, expected)
+  for (const [ratio, pair] of Object.entries(expected)) {
+    for (const value of pair) assert.ok(OPTIONS.some((item) => item.value === value), `${ratio} 缺少 ${value}`)
+  }
+  const limits = { maxSide: 2048, maxPixels: 2450000, alignment: 8 }
+  assert.equal(sizes.maxLongEdge('1:1', limits), 1560)
+  assert.equal(sizes.maxLongEdge('9:16', limits), 2048)
+  assert.ok(sizes.maxLongEdge('2:3', limits) >= 1872)
 })
 
 test('比例记忆只接受主比例与合法尺寸', () => {

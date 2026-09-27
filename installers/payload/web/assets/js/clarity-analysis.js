@@ -47,13 +47,13 @@
     block.className = "clarity-drawer-panel";
     block.open = true;
     block.innerHTML = `
-      <summary>同图清晰版（可选任意图 · 换模型 · 改倍率）</summary>
+      <summary>同图清晰版（可选任意图 · 选放大方式 · 改倍率）</summary>
       <div class="clarity-upscale-panel">
         <div class="small" style="margin-bottom:6px">定位：不重新构图，只提高输出清晰度 / 尺寸。要改善结构、补生成细节请用二采。</div>
         <div class="field-title"><span>要增强的图片</span><span class="small">「本次生成」或「历史输出」里任选</span></div>
         <select id="clarityDrawerTarget" aria-label="选择要增强的图片"><option value="">— 正在读取输出目录… —</option></select>
         <div class="two" style="margin-top:8px">
-          <div><div class="field-title"><span>增强方式</span><span class="small" title="放大模型最快、最保真，适合交付放大；SeedVR2 是生成式超分，会重绘细节，最慢但修得最多。">?</span></div><select id="clarityDrawerEngine" onchange="clarityDrawerEngineChanged()"><option value="upscale">放大模型（快 · 保真）</option></select></div>
+          <div><div class="field-title"><span>放大方式</span><span class="small" title="Bicubic 只缩放像素，最能保持原线条；放大模型会增强边缘；SeedVR2 会重绘细节。">?</span></div><select id="clarityDrawerEngine" onchange="clarityDrawerEngineChanged()"><option value="upscale">放大模型（增强边缘）</option><option value="bicubic">Bicubic 直接放大（不重绘）</option></select></div>
           <div><div class="field-title"><span>放大倍率</span><span class="small" title="成品边长 = 原图 × 倍率；倍率越高越吃显存，也越容易看出增强痕迹。">?</span></div><input id="clarityDrawerScale" type="number" min="1.1" max="4" step="0.05" value="1.5"></div>
         </div>
         <div id="clarityDrawerModelWrap"><div class="field-title"><span>放大模型</span></div><select id="clarityUpscaleModel"><option value="">— 放大模型加载中 —</option></select></div>
@@ -161,10 +161,11 @@
     const engineSelect = byId("clarityDrawerEngine");
     if (engineSelect) {
       const previous = engineSelect.value;
-      engineSelect.innerHTML = '<option value="upscale">放大模型（快 · 保真）</option>'
+      engineSelect.innerHTML = '<option value="upscale">放大模型（增强边缘）</option>'
+        + '<option value="bicubic">Bicubic 直接放大（不重绘）</option>'
         + (clarityModelOptions.seedvr2.ready
             ? '<option value="seedvr2">SeedVR2 生成式超分（慢 · 修细节）</option>' : "");
-      if (previous === "seedvr2" && clarityModelOptions.seedvr2.ready) engineSelect.value = "seedvr2";
+      if (previous === "bicubic" || (previous === "seedvr2" && clarityModelOptions.seedvr2.ready)) engineSelect.value = previous;
       window.clarityDrawerEngineChanged();
     }
     try {
@@ -182,7 +183,7 @@
   window.clarityDrawerEngineChanged = function () {
     const engine = byId("clarityDrawerEngine")?.value || "upscale";
     const modelWrap = byId("clarityDrawerModelWrap");
-    if (modelWrap) modelWrap.style.display = engine === "seedvr2" ? "none" : "";
+    if (modelWrap) modelWrap.style.display = engine === "upscale" ? "" : "none";
   };
 
   function refreshClarityPreview(selectId, previewId) {
@@ -209,11 +210,12 @@
 
   async function runClarityUpscale({ name, engine, model, scale, button, status }) {
     const ratio = Math.min(4, Math.max(1.1, Number(scale) || 1.5));
-    if (engine !== "seedvr2" && !model) {
+    if (engine === "upscale" && !model) {
       status.textContent = "没有可用的放大模型：把 .pth 放进 models/upscale_models 后重新载入页面。";
       return false;
     }
-    const label = engine === "seedvr2" ? "SeedVR2 生成式超分" : `放大模型 ${model}`;
+    const label = engine === "bicubic" ? "Bicubic 直接放大" :
+      engine === "seedvr2" ? "SeedVR2 生成式超分" : `放大模型 ${model}`;
     const oldLabel = button.textContent;
     button.disabled = true;
     button.textContent = "正在增强…";
@@ -224,7 +226,7 @@
       }));
       beginGenerationProgress(1, "同图清晰版");
       const body = { name, scale: ratio };
-      if (engine === "seedvr2") body.engine = "seedvr2";
+      if (engine === "bicubic" || engine === "seedvr2") body.engine = engine;
       else body.model = model;
       const response = await fetch("/api/clarity-upscale", {
         method: "POST",

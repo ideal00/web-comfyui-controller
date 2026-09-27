@@ -15,7 +15,7 @@ export default function VisualSettingsDialog({ value, onChange, onClose }: Props
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null)
   const [pasteMessage, setPasteMessage] = useState<string | null>(null)
 
-  const hasBaseUrl = Boolean(draft.baseUrl.trim())
+  const hasBaseUrl = Boolean(draft.baseUrl.trim() || draft.tailscaleBaseUrl.trim())
   const hasToken = Boolean(draft.token.trim())
   const missingFields = [
     !hasBaseUrl ? '电脑地址' : '',
@@ -24,7 +24,7 @@ export default function VisualSettingsDialog({ value, onChange, onClose }: Props
 
   function patch(next: Partial<EasyPanelVisualSettings>) {
     setDraft((current) => ({ ...current, ...next }))
-    if ('baseUrl' in next || 'token' in next) setTestResult(null)
+    if ('baseUrl' in next || 'tailscaleBaseUrl' in next || 'token' in next) setTestResult(null)
   }
 
   function finish() {
@@ -34,21 +34,21 @@ export default function VisualSettingsDialog({ value, onChange, onClose }: Props
 
   async function testConnection() {
     const normalized = normalizeVisualSettings(draft)
-    if (!normalized.baseUrl || !normalized.token) {
+    if (!(normalized.baseUrl || normalized.tailscaleBaseUrl) || !normalized.token) {
       const missing = [
-        !normalized.baseUrl ? '电脑地址' : '',
+        !(normalized.baseUrl || normalized.tailscaleBaseUrl) ? '电脑地址' : '',
         !normalized.token ? 'Token' : '',
       ].filter(Boolean)
       setTestResult({ ok: false, text: `无法测试：缺少${missing.join('和')}` })
       return
     }
 
-    setDraft((current) => ({ ...current, baseUrl: normalized.baseUrl, token: normalized.token }))
+    setDraft((current) => ({ ...current, baseUrl: normalized.baseUrl, tailscaleBaseUrl: normalized.tailscaleBaseUrl, token: normalized.token }))
     setTesting(true)
     setTestResult(null)
     let stage: 'ping' | 'capabilities' = 'ping'
     try {
-      const config = { baseUrl: normalized.baseUrl, token: normalized.token, pollIntervalMs: normalized.pollIntervalMs }
+      const config = { baseUrl: normalized.baseUrl, tailscaleBaseUrl: normalized.tailscaleBaseUrl, token: normalized.token, pollIntervalMs: normalized.pollIntervalMs }
       const result = await pingEasyPanel(config)
       if (!result.ok) throw new Error('服务器返回 ok=false')
       stage = 'capabilities'
@@ -96,7 +96,9 @@ export default function VisualSettingsDialog({ value, onChange, onClose }: Props
           <div className="form-section">
             <div className="form-section-head"><h3>手机生图服务器</h3><Image size={17} /></div>
             <label className="visual-toggle-row"><input type="checkbox" checked={draft.enabled} onChange={(event) => patch({ enabled: event.target.checked })} /><span>启用 Easy Panel 剧情 CG</span></label>
-            <label>Easy Panel 地址<input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="请输入，如 http://电脑IP:8190" autoCapitalize="none" /></label>
+            <label>局域网地址<input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="如 http://电脑IP:8190" autoCapitalize="none" /></label>
+            <label>Tailscale 地址<input value={draft.tailscaleBaseUrl} onChange={(event) => patch({ tailscaleBaseUrl: event.target.value })} placeholder="如 http://100.x.x.x:8190" autoCapitalize="none" /></label>
+            <p className="visual-settings-hint">可同时填写，自动使用当前可连接的地址。</p>
             {!hasBaseUrl && <p className="visual-field-status visual-field-missing">当前未配置</p>}
             {EASY_PANEL_SUGGESTED_BASE_URL && <p className="visual-settings-hint visual-address-suggestion">本机当前 WLAN 建议地址（电脑 IP 变化后需更新）：<button type="button" className="visual-suggestion-link" onClick={() => patch({ baseUrl: EASY_PANEL_SUGGESTED_BASE_URL })}>{EASY_PANEL_SUGGESTED_BASE_URL}</button></p>}
             <label>RPG Token（粘贴文件内容）
@@ -157,11 +159,11 @@ function describeConnectionFailure(error: unknown, stage: 'ping' | 'capabilities
     if (error.status === 401 || error.status === 403) {
       return `${stageLabel}失败（HTTP ${error.status}）：Token 无效或未被接受${error.message && !/^HTTP \d+$/u.test(error.message) ? `：${error.message}` : ''}`
     }
-    if (error.status === 404) return `${stageLabel}失败（HTTP 404）：没有找到 Easy Panel 接口，请检查电脑 IP 和 8190 端口`
+    if (error.status === 404) return `${stageLabel}失败（HTTP 404）：没有找到 Easy Panel 接口，请检查地址和 8190 端口`
     return `${stageLabel}失败（HTTP ${error.status}）${error.message && !/^HTTP \d+$/u.test(error.message) ? `：${error.message}` : ''}`
   }
   if (error instanceof Error && error.name === 'TypeError') {
-    return `${stageLabel}失败：无法连接到电脑地址，请检查电脑 IP、8190 端口和是否处于同一局域网`
+    return `${stageLabel}失败：无法连接到电脑，请检查局域网或 Tailscale 地址、8190 端口和服务状态`
   }
   const detail = error instanceof Error ? error.message.trim() : ''
   return `${stageLabel}失败${detail ? `：${detail}` : '：连接失败，请检查电脑地址和 Easy Panel 服务'}`

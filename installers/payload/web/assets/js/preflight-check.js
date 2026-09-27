@@ -226,9 +226,14 @@
     const width = number(payload.width, 832);
     const height = number(payload.height, 1216);
     const megapixels = (width * height) / 1e6;
-    const hires = text(payload.illustriousMode) === 'hires' && family === 'illustrious';
-    const scale = hires ? number(payload.hiresScale, 1.25) : 1;
-    const hiresMegapixels = megapixels * scale * scale;
+    const animaHighres = family === 'anima' && payload.animaHighres?.enabled === true;
+    const hires = animaHighres || (text(payload.illustriousMode) === 'hires' && family === 'illustrious');
+    const scale = hires ? number(animaHighres ? payload.animaHighres.scale : payload.hiresScale, 1.25) : 1;
+    const requestedLongEdge = Math.max(width, height) * scale;
+    const animaLongEdge = animaHighres ? number(global.currentSamplingProfile?.()?.constraints?.highres_reconstruction?.max_long_edge, 2560) : 0;
+    const effectiveScale = animaLongEdge > 0 && requestedLongEdge > animaLongEdge
+      ? animaLongEdge / Math.max(width, height) : scale;
+    const hiresMegapixels = megapixels * effectiveScale * effectiveScale;
     const loras = Array.isArray(payload.loras) ? payload.loras.length : 0;
     let controlNets = 0;
     if ((payload.pose || {}).enabled) controlNets += 1;
@@ -244,13 +249,18 @@
     const base = 3400 + megapixels * 950 + Math.max(0, loras - 1) * 380 + controlNets * 640
       + (detailer ? 620 : 0) + (postMode === 'seedvr2' ? 900 : 0) + Math.max(0, regions - 1) * 520;
     const hiresPeak = hires ? 3100 + hiresMegapixels * 1150 + Math.max(0, loras - 1) * 260 : base;
-    const reference = 3400 + megapixels * 2.25 * 950 + Math.max(0, loras - 1) * 380;
-    const peak = Math.max(base, hiresPeak, reference);
+    const peak = Math.max(base, hiresPeak);
     const ratio = peak / VRAM_BUDGET_MB;
     const level = ratio < 0.85 ? 'ok' : ratio < 1.05 ? 'warn' : 'error';
     const notes = [];
-    if (megapixels > 1.25) notes.push(`首采分辨率 ${width}×${height}（${megapixels.toFixed(2)} MP）偏大，8GB 显存建议 1.25 MP 以内。`);
-    if (hires && hiresMegapixels > 1.9) notes.push(`二采成图约 ${hiresMegapixels.toFixed(2)} MP，风险明显上升，可改用 1.10–1.25×。`);
+    if (family === 'anima' && megapixels > 2.45) {
+      notes.push(`首采分辨率 ${width}×${height}（${megapixels.toFixed(2)} MP）超过精细档约 2.45 MP 的像素预算。`);
+    } else if (family === 'anima' && megapixels >= 2) {
+      notes.push(`Anima 精细首采 ${width}×${height}（${megapixels.toFixed(2)} MP）；8GB 建议一次生成 1 张。`);
+    } else if (family !== 'anima' && megapixels > 1.25) {
+      notes.push(`首采分辨率 ${width}×${height}（${megapixels.toFixed(2)} MP）较大，请留意显存。`);
+    }
+    if (hires && hiresMegapixels > 1.9) notes.push(`已启用二采，目标约 ${hiresMegapixels.toFixed(2)} MP；显存不足时可降低放大倍率。`);
     if (loras >= 4) notes.push(`同时启用 ${loras} 个 LoRA，加载与交叉注意力开销都会增加。`);
     if (controlNets >= 2) notes.push('同时启用多个 ControlNet，需要额外常驻模型显存。');
     if (detailer && hires) notes.push('二采与脸/手脚修复同时开启，峰值出现在修复阶段。');
@@ -261,7 +271,6 @@
       ratio,
       baseMb: Math.round(base),
       hiresMb: Math.round(hiresPeak),
-      referenceMb: Math.round(reference),
       peakMb: Math.round(peak),
       budgetMb: VRAM_BUDGET_MB,
       megapixels,
@@ -271,6 +280,10 @@
       notes,
       quota: compiled && typeof compiled === 'object' ? compiled : {},
     };
+  }
+
+  function vramChecklistLevel(level) {
+    return level === 'error' ? 'warn' : level;
   }
 
   /* ------------------------------------------------------------------ 报告生成 */
@@ -306,7 +319,8 @@
       }
     }
     const vram = vramAssessment(payload, family, compiled);
-    items.push({ level: vram.level, label: `显存风险：${vram.label}`, detail: `估算峰值约 ${vram.peakMb} MB / 预算 ${vram.budgetMb} MB` });
+    items.push({ level: vramChecklistLevel(vram.level),
+      label: `显存风险：${vram.label}`, detail: `当前配置估算峰值约 ${vram.peakMb} MB / 预算 ${vram.budgetMb} MB` });
     return {
       family,
       familyLabel: FAMILY_LABELS[family],
@@ -379,11 +393,8 @@
     vramTitle.textContent = `显存风险：${report.vram.label}（相对估算，8GB 基准）`;
     const bars = global.document.createElement('div');
     bars.className = 'preflight-vram';
-    bars.append(
-      bar('基础生成', report.vram.baseMb, report.vram.level),
-      bar(report.vram.hires ? '当前二采峰值' : '当前配置峰值', report.vram.hiresMb, report.vram.level),
-      bar('1.5× 尺寸参考', report.vram.referenceMb, report.vram.referenceMb / VRAM_BUDGET_MB < 0.85 ? 'ok' : 'warn'),
-    );
+    bars.append(bar('基础生成', report.vram.baseMb, report.vram.level));
+    if (report.vram.hires) bars.append(bar('当前二采峰值', report.vram.hiresMb, report.vram.level));
     const notes = global.document.createElement('ul');
     notes.className = 'preflight-vram-notes small';
     report.vram.notes.forEach((note) => {
@@ -509,4 +520,5 @@
   } else {
     init();
   }
+  if (typeof module !== 'undefined' && module.exports) module.exports = { vramAssessment, vramChecklistLevel };
 }(typeof window !== 'undefined' ? window : globalThis));

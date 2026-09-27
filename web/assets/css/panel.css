@@ -199,6 +199,8 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .size-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .size-picker-title{font-weight:600}
 .size-picker-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.size-picker-tiers[hidden]{display:none}
+.size-tier-chip{padding:5px 9px}
 .size-picker-label{min-width:52px;color:#9fb2c9;font-size:12px}
 .size-picker-row b{font-variant-numeric:tabular-nums}
 #sizeCurrentMp,.size-picker-vram,#sizeLongEdgeHint{color:#8fa2b8}
@@ -226,6 +228,7 @@ html.easy-panel-mobile .panel-image-viewer { max-width: 100vw; max-height: 100vh
 .rail-fold-state{flex:none;max-width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8fa2b8;font-size:11px;text-align:right}
 .rail-fold-body{min-width:0}
 .studio-left>.rail-fold>.rail-fold-body{margin:0}
+.studio-left>.token-library-card>.token-library-body{padding:0}
 /* 左侧悬浮快捷跳转条固定贴窗口左边（约 46px），给折叠标题让出这段宽度，标题就不会被压住。 */
 .studio-left .rail-fold>summary{padding-left:48px}
 @media(max-width:700px){.studio-left .rail-fold>summary{padding-left:44px}}
@@ -469,18 +472,15 @@ html.easy-panel-mobile .studio-content-viewport .studio-main-heading{position:st
 .easy-advanced-result>button:first-child{display:flex;gap:8px;flex:1 1 auto;align-items:center;justify-content:space-between;text-align:left;padding:5px 7px;font-size:12px}
 .easy-advanced-result>button:last-child{padding:5px 7px}
 .easy-tag-dropdown{box-sizing:border-box;list-style:none;max-width:min(480px,94vw);max-height:min(390px,65vh);overflow:auto;overscroll-behavior:contain;touch-action:pan-y;margin:0;padding:4px;background:#172033;border:1px solid #63708f;border-radius:9px;box-shadow:0 12px 32px #0009;color:#f5f6fb;scrollbar-color:#8194bd #172033}
-.easy-tag-dropdown .textcomplete-header{position:sticky;top:0;z-index:1;padding:5px 7px;background:#24324b;color:#b9cbea;font-size:11px}
-.easy-tag-dropdown .textcomplete-footer{position:sticky;bottom:0;z-index:1;background:#24324b}
-.easy-tag-dropdown .textcomplete-footer:empty{display:none}
-.easy-tag-dropdown .easy-tag-shortcuts{display:block;padding:5px 7px 1px;color:#aebbd5;font-size:11px}
-.easy-tag-dropdown .easy-tag-touch-hint{display:none;padding:5px 7px 1px;color:#aebbd5;font-size:11px}
-@media(pointer:coarse){.easy-tag-dropdown .easy-tag-shortcuts{display:none}.easy-tag-dropdown .easy-tag-touch-hint{display:block}.easy-tag-preview{width:174px;max-height:184px}.easy-tag-preview-body img{max-height:115px}}
-html.easy-panel-mobile .easy-tag-dropdown .easy-tag-shortcuts{display:none}
-html.easy-panel-mobile .easy-tag-dropdown .easy-tag-touch-hint{display:block}
+.easy-tag-dropdown .textcomplete-header{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:5px;min-height:32px;padding:3px 6px;background:#24324b;color:#b9cbea;font-size:11px}
+.easy-tag-header-count{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.easy-tag-header-tools{display:flex;align-items:center;gap:4px;flex:none}
+.easy-tag-dropdown .easy-tag-color{width:100px;min-width:0;height:26px;padding:2px 4px;border-radius:5px;font-size:11px}
+.easy-tag-dropdown .easy-tag-header-tools button{width:27px;height:26px;min-height:0;padding:2px;border:1px solid #4c6282;border-radius:5px;background:#304260;color:#edf5ff;font-size:14px}
+.easy-tag-dropdown .easy-tag-header-tools button:hover{background:#455c81}
+@media(pointer:coarse){.easy-tag-preview{width:174px;max-height:184px}.easy-tag-preview-body img{max-height:115px}}
 html.easy-panel-mobile .easy-tag-preview{width:174px;max-height:184px}
 html.easy-panel-mobile .easy-tag-preview-body img{max-height:115px}
-.easy-tag-dropdown .textcomplete-footer button{width:100%;padding:7px;color:#d4e2ff;background:transparent;border:0;text-align:left;font-size:11px;cursor:pointer}
-.easy-tag-dropdown .textcomplete-footer button:hover{background:#37456a}
 .easy-advanced-tag-search #tagResults{max-height:440px;overflow:auto}
 .easy-tag-dropdown .textcomplete-item{margin:0;padding:0;border-radius:5px}
 .easy-tag-dropdown .textcomplete-item.active{background:#37456a}

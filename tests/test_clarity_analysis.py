@@ -22,7 +22,7 @@ class ClarityAnalysisTests(unittest.TestCase):
 
     def test_clarity_panel_is_automatic_and_can_be_retested(self):
         for marker in (
-            "/assets/js/clarity-analysis.js?v=5",
+            "/assets/js/clarity-analysis.js?v=6",
             'id = "clarityAnalysisPanel"',
             "自动清晰度检测",
             "重新检测",
@@ -116,6 +116,26 @@ class ClarityAnalysisTests(unittest.TestCase):
         self.assertEqual(easy_panel.clarity_upscale_engine({"engine": "nope"}), "upscale")
         self.assertEqual(easy_panel.clarity_upscale_engine({}), "upscale")
         self.assertEqual(easy_panel.clarity_upscale_engine({"engine": "SEEDVR2"}), "seedvr2")
+        self.assertEqual(easy_panel.clarity_upscale_engine({"engine": "BICUBIC"}), "bicubic")
+
+    def test_bicubic_upscale_uses_only_direct_image_scale(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "easy_panel"
+            source.mkdir(parents=True)
+            Image.new("RGB", (512, 768), (10, 20, 30)).save(source / "source.png")
+            with patch.object(easy_panel, "COMFY_INPUT", Path(folder)), \
+                 patch.object(easy_panel, "prepare_generation_image",
+                              return_value="easy_panel/source.png"):
+                workflow = easy_panel.build_clarity_upscale_workflow(
+                    {"name": "source.png", "scale": 1.5, "engine": "bicubic"})
+        nodes = workflow["prompt"]
+        self.assertEqual([node["class_type"] for node in nodes.values()],
+                         ["LoadImage", "ImageScale", "SaveImage"])
+        self.assertEqual(nodes["2"]["inputs"], {
+            "image": ["1", 0], "upscale_method": "bicubic",
+            "width": 768, "height": 1152, "crop": "disabled",
+        })
+        self.assertEqual(nodes["save"]["inputs"]["images"], ["2", 0])
 
     def test_clarity_uses_the_selected_upscale_model(self):
         with patch.object(easy_panel, "prepare_generation_image", return_value="easy_panel/source.png"):

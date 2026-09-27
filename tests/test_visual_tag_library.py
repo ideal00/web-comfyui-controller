@@ -290,11 +290,12 @@ class SearchTests(LibraryTestCase):
         self.assertEqual("high_heels", top["tag"])
         self.assertGreaterEqual(top["score"], 100)
 
-    def test_reordered_words_and_partial_chinese_description(self):
+    def test_reordered_words_and_chinese_substring(self):
         self.assertEqual("high_heels", vtl.search("heels high", limit=1)["results"][0]["tag"])
-        self.assertEqual("high_heels", vtl.search("很高的跟鞋", limit=1)["results"][0]["tag"])
+        self.assertEqual("high_heels", vtl.search("高跟 鞋", limit=1)["results"][0]["tag"])
         self.assertGreater(vtl._score({"tag": "high_heels"}, "heels high"),
                            vtl._score({"tag": "flats", "description": "high heels alternative"}, "heels high"))
+        self.assertEqual(0, vtl._score({"tag": "white_thighhighs", "name_zh": "白色丝袜"}, "黑色丝袜"))
 
     def test_category_filter_and_categories(self):
         filtered = vtl.search("", limit=10, category="鞋子展示")

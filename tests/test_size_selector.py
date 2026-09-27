@@ -16,6 +16,8 @@ import pathlib
 import re
 import unittest
 
+from easy_panel_app.model_profiles import model_sampling_profile
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PAGES = [ROOT / "index.html", ROOT / "installers/payload/index.html"]
 SCRIPT = ROOT / "web/assets/js/size-selector.js"
@@ -58,8 +60,8 @@ class SizeSelectorWiringTests(unittest.TestCase):
 
     def test_both_pages_load_the_selector(self):
         for page in self.pages:
-            self.assertIn('<script src="/assets/js/size-selector.js?v=2"></script>', page)
-            self.assertIn('href="/assets/css/panel.css?v=59"', page)
+            self.assertIn('<script src="/assets/js/size-selector.js?v=3"></script>', page)
+            self.assertIn('href="/assets/css/panel.css?v=71"', page)
 
     def test_payload_copies_are_byte_identical(self):
         self.assertEqual(SCRIPT.read_bytes(), PAYLOAD_SCRIPT.read_bytes())
@@ -169,6 +171,21 @@ class SizePresetRatioTests(unittest.TestCase):
         panel_js = PANEL_JS.read_text(encoding="utf-8")
         self.assertIn("preferred='864x1152'", panel_js)
         self.assertEqual("3:4", nearest_ratio(864, 1152))
+
+    def test_anima_fine_presets_are_present_and_within_new_side_limit(self):
+        wanted = {(1536, 1536), (1248, 1872), (1344, 1792), (1152, 2048),
+                  (1872, 1248), (1792, 1344), (2048, 1152)}
+        for presets in self.pages:
+            available = {(width, height) for width, height, _ in presets}
+            self.assertTrue(wanted <= available)
+            for width, height in wanted:
+                self.assertLessEqual(max(width, height), 2048)
+                self.assertLessEqual(width * height, 2_450_000)
+
+    def test_anima_profile_accepts_fine_preset_long_edges(self):
+        resolution = model_sampling_profile("anima-base-v1.0.safetensors")["resolution"]
+        self.assertEqual(2048, resolution["max"])
+        self.assertEqual(2_450_000, resolution["max_pixels"])
 
 
 if __name__ == "__main__":

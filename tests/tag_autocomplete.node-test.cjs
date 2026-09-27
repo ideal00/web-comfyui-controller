@@ -39,6 +39,14 @@ test('selected tags pass through color modifier and current prompt dialect', () 
   delete global.EasyPanelDialect;
 });
 
+test('candidate toolbar exposes the current color modifier choice', () => {
+  global.EasyPanelColorModifier = {MODIFIERS:[{key:'dark',label:'深 dark'}],current:() => 'dark'};
+  const markup = autocomplete.colorChoiceMarkup();
+  assert.match(markup, /data-autocomplete-color/);
+  assert.match(markup, /value="dark" selected/);
+  delete global.EasyPanelColorModifier;
+});
+
 test('weighted and dialect variants count as the same existing tag', () => {
   const terms = autocomplete.currentTerms({value:'(blue hair:1.2), (blue_hair:0.8), @artist name, red_eyes'});
   assert.equal(terms.has(autocomplete.baseTag('blue_hair')), true);

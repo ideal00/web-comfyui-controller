@@ -5,6 +5,7 @@ import type { EasyPanelGenerationDetail } from '../services/easyPanelLibrary'
 
 const current: EasyPanelControllerSettings = {
   baseUrl: 'http://desktop:8190',
+  tailscaleBaseUrl: '',
   token: 'secret',
   model: 'old.safetensors',
   quality: 'fast',

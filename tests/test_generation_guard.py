@@ -26,7 +26,7 @@ class GenerationGuardTests(unittest.TestCase):
         script = (ROOT / "web/assets/js/preflight-check.js").read_text(encoding="utf-8")
         for marker in ("/api/prompt-compile", "/api/anima-preflight", "/api/krea2-preflight",
                        "/api/illustrious-preflight", "显存风险", "相对等级",
-                       "8GB", "VRAM_BUDGET_MB", "基础生成", "当前二采峰值", "1.5× 尺寸参考",
+                       "8GB", "VRAM_BUDGET_MB", "基础生成", "当前二采峰值", "当前配置估算峰值",
                        "继续生成", "返回修改", "本次会话不再提示"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, script)

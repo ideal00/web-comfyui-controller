@@ -327,7 +327,7 @@ def model_sampling_profile(model_name: str) -> dict:
                        if value not in (None, "")})
     resolution = copy.deepcopy(profile.get("resolution") or DEFAULT_RESOLUTION)
     if family == "anima" and not profile.get("resolution"):
-        resolution.update({"max": 1536, "alignment": 8})
+        resolution.update({"max": 2048, "max_pixels": 2_450_000, "alignment": 8})
     first = copy.deepcopy(combos[0])
     prediction = profile.get("prediction", "native" if family == "anima" else "eps")
     # prediction（技术采样类型）与 capability（是否推荐该增强）是两个维度：

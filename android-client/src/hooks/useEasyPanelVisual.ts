@@ -65,9 +65,10 @@ export function useEasyPanelVisual({ game, assistant, segments, busy }: UseEasyP
 
   const config = useMemo<EasyPanelVisualConfig>(() => ({
     baseUrl: settings.baseUrl,
+    tailscaleBaseUrl: settings.tailscaleBaseUrl,
     token: settings.token,
     pollIntervalMs: settings.pollIntervalMs,
-  }), [settings.baseUrl, settings.pollIntervalMs, settings.token])
+  }), [settings.baseUrl, settings.tailscaleBaseUrl, settings.pollIntervalMs, settings.token])
 
   const persist = useCallback((next: PersistedVisualState) => {
     persistedRef.current = next
@@ -107,7 +108,7 @@ export function useEasyPanelVisual({ game, assistant, segments, busy }: UseEasyP
   const runGeneration = useCallback(async (manual: boolean) => {
     if (!hydrated || busy || !assistant || !messageHasStory(game)) return
     if (!settings.enabled && !manual) return
-    if (!settings.baseUrl.trim()) {
+    if (!settings.baseUrl.trim() && !settings.tailscaleBaseUrl.trim()) {
       setError('请先在视觉设置中填写 Easy Panel 地址')
       setStatus('error')
       return

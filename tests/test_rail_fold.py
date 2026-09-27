@@ -25,7 +25,7 @@ PAYLOAD_CSS = ROOT / "installers/payload/web/assets/css/panel.css"
 ADVANCED = ROOT / "web/assets/js/model-advanced.js"
 PAYLOAD_ADVANCED = ROOT / "installers/payload/web/assets/js/model-advanced.js"
 
-FOLD_IDS = ["customFeatureCard", "taskQueueFold", "translationCard", "imageReadCard"]
+FOLD_IDS = ["customFeatureCard", "taskQueueFold", "translationCard", "tokenLibraryCard", "imageReadCard"]
 
 
 class RailFoldMarkupTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class RailFoldMarkupTests(unittest.TestCase):
     def test_every_rail_block_is_a_collapsible_details(self):
         for page in self.pages:
             tags = list(re.finditer(r"<details[^>]*data-rail-fold[^>]*>", page))
-            self.assertEqual(4, len(tags), "左侧抽屉应有 4 块静态可折叠面板（透明背景由脚本移入）")
+            self.assertEqual(5, len(tags), "左侧抽屉应有 5 块静态可折叠面板（透明背景由脚本移入）")
             found = []
             for tag in tags:
                 block = tag.group(0)
@@ -61,6 +61,17 @@ class RailFoldMarkupTests(unittest.TestCase):
             for fold_id in FOLD_IDS:
                 self.assertIn(fold_id, found)
             self.assertIn("railTransparentMount", page)
+
+    def test_token_library_is_separate_from_translation(self):
+        for page in self.pages:
+            translation = page.index('id="translationCard"')
+            library = page.index('id="tokenLibraryCard"')
+            image_reader = page.index('id="imageReadCard"')
+            self.assertLess(translation, library)
+            self.assertLess(library, image_reader)
+            self.assertIn('</details>\n\n  <details class="card prompt-card rail-fold token-library-card"', page)
+            for marker in ('id="tokenSearch"', 'id="tokenCategoryTabs"', 'id="tokenGroups"'):
+                self.assertIn(marker, page[library:image_reader])
 
     def test_transparent_panel_moves_into_the_rail(self):
         for marker in (

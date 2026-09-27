@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Star, Trash2, Wifi, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ArrowUpRight, BookOpen, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, GitBranch, Image as ImageIcon, LayoutDashboard, LoaderCircle, Maximize2, RefreshCw, Server, ShieldCheck, Sparkles, Star, Trash2, Wifi, X, XCircle } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { isControllerBusy, reduceEasyPanelControllerInteraction } from '../lib/easyPanelController'
 import { explainSnapshot, shouldFocusPromptAfterSnapshotRestore, snapshotPromptSourceLabels } from '../lib/easyPanelSnapshot'
@@ -9,9 +9,16 @@ import { EasyPanelDuplicateLayer, EasyPanelProjectPickerLayer, EasyPanelTaskCent
 import { EasyPanelProjectCenter } from './EasyPanelProjectCenter'
 import { attachEasyPanelPendingDerivation, buildEasyPanelControllerRequest, createEasyPanelControllerRequestId } from '../lib/easyPanelController'
 import { openAdvancedPanel } from '../services/easyPanelAdvanced'
-import { getEasyPanelPromptInstruction } from '../services/easyPanelVisual'
+import { getEasyPanelPromptInstruction, resolveEasyPanelBaseUrl } from '../services/easyPanelVisual'
 import { artifactStageLabel, artifactState, artifactStateText, generationIsPending, PENDING_ARTIFACT_TEXT } from '../lib/easyPanelPlan'
-import type { EasyPanelGenerationArtifact, EasyPanelGenerationDetail, EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
+import { getEasyPanelGeneration, type EasyPanelGenerationArtifact, type EasyPanelGenerationDetail, type EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
+
+declare global {
+  interface Window {
+    __easyPanelHandleBack?: () => boolean
+    __easyPanelLibraryBack?: () => void
+  }
+}
 
 /** 常用长宽比预设（与电脑端尺寸下拉保持一致）。 */
 const SIZE_PRESETS: Array<{ label: string; width: number; height: number }> = [
@@ -36,6 +43,7 @@ export default function EasyPanelMobileApp() {
   const controller = useEasyPanelController()
   const workspace = useEasyPanelWorkspace({
     baseUrl: controller.settings.baseUrl,
+    tailscaleBaseUrl: controller.settings.tailscaleBaseUrl,
     token: controller.settings.token,
   })
   const [advancedOpen, setAdvancedOpen] = useState(true)
@@ -52,6 +60,22 @@ export default function EasyPanelMobileApp() {
   const [translationLoading, setTranslationLoading] = useState(false)
   const promptEditorRef = useRef<HTMLTextAreaElement>(null)
 
+  const backRef = useRef<() => boolean>(() => false)
+  backRef.current = () => {
+    if (workspace.pickerOpen) { workspace.closeProjectPicker(); return true }
+    if (workspace.duplicate) { workspace.dismissDuplicate(); return true }
+    if (workspace.projectsOpen) { workspace.setProjectsOpen(false); return true }
+    if (workspace.taskCenterOpen) { workspace.setTaskCenterOpen(false); return true }
+    if (libraryOpen) { window.__easyPanelLibraryBack?.(); return true }
+    if (snapshotsOpen) { setSnapshotsOpen(false); return true }
+    return false
+  }
+
+  useEffect(() => {
+    window.__easyPanelHandleBack = () => backRef.current()
+    return () => { delete window.__easyPanelHandleBack }
+  }, [])
+
   useEffect(() => {
     const previousTitle = document.title
     document.title = 'Easy Panel Mobile'
@@ -66,7 +90,7 @@ export default function EasyPanelMobileApp() {
   const working = isControllerBusy(controller.status)
   const hasConnection = controller.connectionMessage.startsWith('已连接') || controller.connectionMessage.startsWith('已读取')
   const canGenerate = !working
-    && Boolean(controller.settings.baseUrl.trim())
+    && Boolean(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim())
     && Boolean(controller.settings.token.trim())
     && Boolean(controller.settings.prompt.trim())
   const restoredExplanation = useMemo(
@@ -112,7 +136,7 @@ export default function EasyPanelMobileApp() {
       setTranslationMessage('请先输入中文画面描述。')
       return
     }
-    if (!controller.settings.baseUrl.trim() || !controller.settings.token.trim()) {
+    if (!(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim()) || !controller.settings.token.trim()) {
       setTranslationMessage('请先填写 Easy Panel 地址和 RPG Token。')
       return
     }
@@ -120,7 +144,7 @@ export default function EasyPanelMobileApp() {
     setTranslationMessage('正在读取当前模型并生成适配指令…')
     try {
       const result = await getEasyPanelPromptInstruction(
-        { baseUrl: controller.settings.baseUrl, token: controller.settings.token, requestTimeoutMs: 15000 },
+        { baseUrl: controller.settings.baseUrl, tailscaleBaseUrl: controller.settings.tailscaleBaseUrl, token: controller.settings.token, requestTimeoutMs: 15000 },
         source,
         controller.settings.model,
         'safe',
@@ -213,7 +237,8 @@ export default function EasyPanelMobileApp() {
     setAdvancedError('')
     setAdvancedOpening(true)
     try {
-      await openAdvancedPanel(controller.settings.baseUrl, controller.settings.token)
+      const baseUrl = await resolveEasyPanelBaseUrl({ baseUrl: controller.settings.baseUrl, tailscaleBaseUrl: controller.settings.tailscaleBaseUrl, token: controller.settings.token })
+      await openAdvancedPanel(baseUrl, controller.settings.token)
     } catch (caught) {
       setAdvancedError(caught instanceof Error ? caught.message : '无法打开高级面板。')
     } finally {
@@ -263,7 +288,7 @@ export default function EasyPanelMobileApp() {
             type="button"
             className="epm-mode-option epm-mode-action"
             onClick={() => void openFullEasyPanel()}
-            disabled={!controller.hydrated || !controller.settings.baseUrl.trim() || advancedOpening}
+            disabled={!controller.hydrated || !(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim()) || advancedOpening}
           >
             <span className="epm-mode-kicker">模式 B</span>
             <strong><LayoutDashboard size={16} />高级面板</strong>
@@ -273,7 +298,7 @@ export default function EasyPanelMobileApp() {
             type="button"
             className="epm-mode-option epm-mode-action"
             onClick={openLibrary}
-            disabled={!controller.hydrated || !controller.settings.baseUrl.trim() || controller.libraryLoading}
+            disabled={!controller.hydrated || !(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim()) || controller.libraryLoading}
           >
             <span className="epm-mode-kicker">作品管理</span>
             <strong><BookOpen size={16} />作品库</strong>
@@ -283,7 +308,7 @@ export default function EasyPanelMobileApp() {
             type="button"
             className="epm-mode-option epm-mode-action"
             onClick={() => workspace.setTaskCenterOpen(true)}
-            disabled={!controller.hydrated || !controller.settings.baseUrl.trim()}
+            disabled={!controller.hydrated || !(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim())}
           >
             <span className="epm-mode-kicker">批处理</span>
             <strong><RefreshCw size={16} />任务队列</strong>
@@ -293,7 +318,7 @@ export default function EasyPanelMobileApp() {
             type="button"
             className="epm-mode-option epm-mode-action"
             onClick={() => workspace.setProjectsOpen(true)}
-            disabled={!controller.hydrated || !controller.settings.baseUrl.trim()}
+            disabled={!controller.hydrated || !(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim())}
           >
             <span className="epm-mode-kicker">作品项目</span>
             <strong><GitBranch size={16} />角色图集</strong>
@@ -311,7 +336,7 @@ export default function EasyPanelMobileApp() {
             <Wifi size={20} />
           </div>
           <label className="epm-field">
-            <span>Easy Panel 地址</span>
+            <span>局域网地址</span>
             <input
               value={controller.settings.baseUrl}
               onChange={(event) => patchSettings({ baseUrl: event.target.value })}
@@ -323,7 +348,8 @@ export default function EasyPanelMobileApp() {
               aria-describedby="epm-address-help"
             />
           </label>
-          <p id="epm-address-help" className="epm-help">支持局域网 IP、Tailscale 的 100.x.x.x IP，或 MagicDNS 主机名。</p>
+          <label className="epm-field"><span>Tailscale 地址</span><input value={controller.settings.tailscaleBaseUrl} onChange={(event) => patchSettings({ tailscaleBaseUrl: event.target.value })} placeholder="http://100.x.x.x:8190" inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
+          <p id="epm-address-help" className="epm-help">两个地址可同时填写；自动使用当前可连接的地址。Tailscale 也支持 MagicDNS 主机名。</p>
           <label className="epm-field">
             <span>RPG Token</span>
             <input
@@ -542,7 +568,7 @@ export default function EasyPanelMobileApp() {
               type="button"
               className="epm-quiet-button epm-inline-button"
               onClick={() => void controller.refreshSnapshots()}
-              disabled={controller.snapshotsLoading || working || !controller.settings.baseUrl.trim() || !controller.settings.token.trim()}
+              disabled={controller.snapshotsLoading || working || !(controller.settings.baseUrl.trim() || controller.settings.tailscaleBaseUrl.trim()) || !controller.settings.token.trim()}
             >
               {controller.snapshotsLoading ? <LoaderCircle size={15} className="epm-spin" /> : <RefreshCw size={15} />}
               刷新
@@ -736,6 +762,9 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
   const [viewerSource, setViewerSource] = useState('')
   const [viewerLoading, setViewerLoading] = useState(false)
   const [viewerError, setViewerError] = useState('')
+  const [viewerPosition, setViewerPosition] = useState(0)
+  const viewerEntriesRef = useRef<Array<{ generationId: string; artifact?: EasyPanelGenerationArtifact }>>([])
+  const libraryBackRef = useRef<() => void>(() => {})
   const viewerRequestRef = useRef(0)
   const viewerSourceRef = useRef('')
 
@@ -750,11 +779,79 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
       if (event.key === 'Escape') {
         event.preventDefault()
         closeViewer()
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault()
+        void stepViewer(event.key === 'ArrowLeft' ? -1 : 1)
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [viewerArtifact])
+  }, [viewerArtifact, viewerLoading, viewerPosition])
+
+  libraryBackRef.current = () => {
+    if (viewerArtifact) closeViewer()
+    else if (detail) controller.clearLibraryDetail()
+    else onClose()
+  }
+  useEffect(() => {
+    window.__easyPanelLibraryBack = () => libraryBackRef.current()
+    return () => { delete window.__easyPanelLibraryBack }
+  }, [])
+
+  function galleryEntries(artifact: EasyPanelGenerationArtifact) {
+    const current = detail
+    if (!current) return [{ generationId: artifact.generation_id, artifact }]
+    const summaries = controller.library.some((item) => item.generation_id === current.generation_id)
+      ? controller.library : [current, ...controller.library]
+    const entries: Array<{ generationId: string; artifact?: EasyPanelGenerationArtifact }> = []
+    summaries.forEach((item) => {
+      if (item.generation_id === current.generation_id) {
+        current.artifacts.filter((output) => artifactState(output) === 'ready' && Boolean(output.url))
+          .forEach((output) => entries.push({ generationId: item.generation_id, artifact: output }))
+      } else entries.push({ generationId: item.generation_id })
+    })
+    return entries.length ? entries : [{ generationId: artifact.generation_id, artifact }]
+  }
+
+  function startViewer(artifact: EasyPanelGenerationArtifact) {
+    const entries = galleryEntries(artifact)
+    viewerEntriesRef.current = entries
+    setViewerPosition(Math.max(0, entries.findIndex((entry) => entry.artifact?.artifact_id === artifact.artifact_id)))
+    void openOriginal(artifact)
+  }
+
+  async function stepViewer(direction: number) {
+    const entries = viewerEntriesRef.current
+    if (viewerLoading || entries.length < 2) return
+    const next = (viewerPosition + direction + entries.length) % entries.length
+    const entry = entries[next]
+    setViewerPosition(next)
+    if (entry.artifact) { await openOriginal(entry.artifact); return }
+    const requestNumber = ++viewerRequestRef.current
+    setViewerLoading(true)
+    setViewerError('')
+    try {
+      const response = await getEasyPanelGeneration({
+        baseUrl: controller.settings.baseUrl,
+        tailscaleBaseUrl: controller.settings.tailscaleBaseUrl,
+        token: controller.settings.token,
+      }, entry.generationId)
+      if (viewerRequestRef.current !== requestNumber) return
+      const other = response.generation
+      const preferred = other.preview?.artifact_id || other.primary_artifact_id
+      const artifact = other.artifacts.find((item) => item.artifact_id === preferred)
+        || other.artifacts.find((item) => artifactState(item) === 'ready' && Boolean(item.url))
+      if (!artifact || artifactState(artifact) !== 'ready' || !artifact.url) throw new Error('这件作品没有可预览的图片。')
+      entry.artifact = artifact
+      setViewerLoading(false)
+      await openOriginal(artifact)
+    } catch (caught) {
+      if (viewerRequestRef.current !== requestNumber) return
+      setViewerPosition(viewerPosition)
+      setViewerLoading(false)
+      setViewerError(caught instanceof Error ? caught.message : '读取下一张图片失败。')
+    }
+  }
 
   function clearViewerSource() {
     if (viewerSourceRef.current) URL.revokeObjectURL(viewerSourceRef.current)
@@ -827,7 +924,7 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
           previewLoading={viewerLoading ? viewerArtifact?.artifact_id || '' : ''}
           onBack={controller.clearLibraryDetail}
           onRestore={restore}
-          onPreview={(artifact) => void openOriginal(artifact)}
+          onPreview={startViewer}
           onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
           onToggleFavorite={(id, favorite) => void controller.saveLibraryFlags(id, { favorite })}
           groups={controller.libraryGroups}
@@ -868,6 +965,10 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
         loading={viewerLoading}
         error={viewerError}
         downloadLoading={controller.libraryDownloadLoading}
+        position={viewerPosition}
+        total={viewerEntriesRef.current.length}
+        onPrevious={() => void stepViewer(-1)}
+        onNext={() => void stepViewer(1)}
         onClose={closeViewer}
         onDownload={(artifact) => void controller.downloadLibraryArtifact(artifact)}
       />}
@@ -1230,12 +1331,16 @@ function libraryViewerZoom(value: number): number {
   return Math.min(4, Math.max(1, value))
 }
 
-function LibraryImageViewer({ artifact, source, loading, error, downloadLoading, onClose, onDownload }: {
+function LibraryImageViewer({ artifact, source, loading, error, downloadLoading, position, total, onPrevious, onNext, onClose, onDownload }: {
   artifact: EasyPanelGenerationArtifact
   source: string
   loading: boolean
   error: string
   downloadLoading: string
+  position: number
+  total: number
+  onPrevious: () => void
+  onNext: () => void
   onClose: () => void
   onDownload: (artifact: EasyPanelGenerationArtifact) => void
 }) {
@@ -1429,6 +1534,11 @@ function LibraryImageViewer({ artifact, source, loading, error, downloadLoading,
             : source ? <img src={source} alt={artifact.filename || '作品原图'} draggable={false} style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${zoom})` }} />
               : <div className="epm-library-viewer-state"><ImageIcon size={28} /><span>{error || '原图暂不可用'}</span></div>}
         </div>
+        <nav className="epm-library-viewer-nav" aria-label="切换作品图片">
+          <button type="button" onClick={onPrevious} disabled={total < 2 || loading} aria-label="上一张"><ChevronLeft size={20} />上一张</button>
+          <span>{position + 1} / {total}</span>
+          <button type="button" onClick={onNext} disabled={total < 2 || loading} aria-label="下一张">下一张<ChevronRight size={20} /></button>
+        </nav>
         <footer className="epm-library-viewer-footer">
           <span>{source ? `已加载原图 · ${Math.round(zoom * 100)}% · 双指缩放，单指拖动，双击放大/还原。` : '原图加载失败。'}</span>
           {source && <div className="epm-library-viewer-footer-actions">

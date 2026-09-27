@@ -43,6 +43,15 @@
     "2:1": { w: 2, h: 1 },
     "21:9": { w: 21, h: 9 },
   };
+  const ANIMA_TIERS = {
+    "1:1": ["1024x1024", "1536x1536"],
+    "2:3": ["832x1216", "1248x1872"],
+    "3:4": ["864x1152", "1344x1792"],
+    "9:16": ["768x1344", "1152x2048"],
+    "3:2": ["1216x832", "1872x1248"],
+    "4:3": ["1152x864", "1792x1344"],
+    "16:9": ["1344x768", "2048x1152"],
+  };
 
   const PANEL_HTML = `
     <div class="size-picker-head"><span class="size-picker-title">图片比例</span><span id="sizeRatioValue" class="small">—</span></div>
@@ -51,6 +60,7 @@
     <div id="sizeVramHint" class="small size-picker-vram"></div>
     <div class="size-picker-row size-picker-range"><span class="small">较小</span><input id="sizeLongEdgeRange" type="range" aria-label="长边像素"><span class="small">较大</span></div>
     <div class="size-picker-row"><span class="size-picker-label">长边</span><input id="sizeLongEdgeNumber" type="number" inputmode="numeric"><span class="small">px</span><span id="sizeLongEdgeHint" class="small"></span></div>
+    <div class="size-picker-row size-picker-tiers" id="sizeQualityTiers" hidden><span class="size-picker-label">Anima 首采</span><span id="sizeQualityTierButtons" class="size-preset-chips"></span></div>
     <div class="size-picker-row size-picker-presets"><span class="size-picker-label">推荐档位</span><span id="sizePresetChips" class="size-preset-chips"></span></div>
     <div class="size-picker-row"><span class="size-picker-label">自定义精确尺寸</span><span class="size-picker-custom"><span class="small">宽</span><input id="sizeCustomWidth" type="number" inputmode="numeric"><span class="small">×</span><span class="small">高</span><input id="sizeCustomHeight" type="number" inputmode="numeric"></span><span class="small size-picker-custom-hint">修改宽高会暂时允许非标准比例，再次拖动「长边」后恢复当前选定比例</span></div>
     <div id="sizePickerNote" class="small size-picker-note"></div>`;
@@ -200,7 +210,11 @@
         rank: 3,
         megapixels,
         note: tight
-          ? "8GB 显存压力大：可能走 CPU 卸载（很慢）或直接显存不足，建议 1024px 以内。"
+          ? (family === "anima"
+              ? (megapixels >= 2.0
+                  ? "精细首采约 2.3–2.4MP；8GB 请一次生成 1 张，显存不足时切回标准首采。"
+                  : "Anima 中间尺寸；8GB 显存不足时切回标准首采。")
+              : "8GB 显存压力大：可能走 CPU 卸载（很慢）或直接显存不足，建议 1024px 以内。")
           : "建议一次只生成 1 张；显存不足时切精准模式或降到 1.5MP 以内。",
       };
     }
@@ -263,6 +277,7 @@
   let renderedRatio = "";
   let refreshQueued = false;
   let observer = null;
+  let lastModelFamily = "";
 
   function profile() {
     try {
@@ -275,9 +290,17 @@
   function modelLimits() {
     const resolution = profile().resolution || {};
     const maxSide = Math.max(256, Math.round(Number(resolution.max) || FALLBACK_MAX_SIDE));
+    const maxPixels = Math.max(0, Math.round(Number(resolution.max_pixels) || 0));
     const alignment = Math.max(8, Math.round(Number(resolution.alignment) || ALIGNMENT));
     const minSide = Math.max(MIN_SIDE, Math.round(Number(resolution.min) || MIN_SIDE));
-    return { maxSide, alignment, minSide };
+    return { maxSide, maxPixels, alignment, minSide };
+  }
+
+  function maxLongEdge(key, limits) {
+    const info = ratioInfo(key);
+    if (!info || !limits.maxPixels) return limits.maxSide;
+    const areaEdge = alignDown(Math.sqrt(limits.maxPixels / info.factor), limits.alignment);
+    return Math.min(limits.maxSide, areaEdge);
   }
 
   function presetGroup(key) {
@@ -298,7 +321,30 @@
     groups = groupPresets(optionList());
     renderRatioChips();
     renderPresetChips();
+    renderTierButtons();
     updateRangeBounds();
+  }
+
+  function renderTierButtons() {
+    const row = elements.tierRow;
+    const wrap = elements.tierButtons;
+    const pair = ANIMA_TIERS[activeRatio];
+    row.hidden = profile().family !== "anima" || !pair;
+    wrap.innerHTML = "";
+    if (row.hidden) return;
+    ["标准首采", "精细首采 ⭐"].forEach((label, index) => {
+      const preset = presetGroup(activeRatio).presets.find((item) => item.value === pair[index]);
+      if (!preset) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "size-preset-chip size-tier-chip";
+      button.dataset.value = preset.value;
+      button.textContent = `${label} · ${preset.width}×${preset.height}`;
+      button.disabled = preset.disabled;
+      button.title = preset.disabled ? "当前模型尺寸上限低于此档位" : preset.label;
+      button.addEventListener("click", () => selectPreset(preset.value, activeRatio));
+      wrap.appendChild(button);
+    });
   }
 
   function renderRatioChips() {
@@ -344,14 +390,14 @@
     const limits = modelLimits();
     const key = activeRatio || RATIO_ORDER[0];
     const min = minLongEdge(key, limits.alignment, limits.minSide);
-    const max = Math.max(min + limits.alignment, limits.maxSide);
+    const max = Math.max(min + limits.alignment, maxLongEdge(key, limits));
     elements.range.min = String(min);
     elements.range.max = String(max);
     elements.range.step = String(limits.alignment);
     elements.longInput.min = String(min);
     elements.longInput.max = String(max);
     elements.longInput.step = String(limits.alignment);
-    elements.hint.textContent = `范围 ${min}–${max}px（当前模型上限），短边按比例向下对齐 ${limits.alignment} 的倍数`;
+    elements.hint.textContent = `范围 ${min}–${max}px（当前模型上限${limits.maxPixels ? "及像素预算" : ""}），短边按比例向下对齐 ${limits.alignment} 的倍数`;
   }
 
   /** 实际像素比例文本（用于说明近似档位差多少）。 */
@@ -409,6 +455,9 @@
       chip.setAttribute("aria-pressed", active ? "true" : "false");
     });
     Array.from(elements.presets.querySelectorAll(".size-preset-chip")).forEach((chip) => {
+      chip.classList.toggle("active", chip.dataset.value === value);
+    });
+    Array.from(elements.tierButtons.querySelectorAll(".size-tier-chip")).forEach((chip) => {
       chip.classList.toggle("active", chip.dataset.value === value);
     });
   }
@@ -521,7 +570,7 @@
     const limits = modelLimits();
     const key = activeRatio || RATIO_ORDER[0];
     const min = minLongEdge(key, limits.alignment, limits.minSide);
-    const max = Math.max(min, limits.maxSide);
+    const max = Math.max(min, maxLongEdge(key, limits));
     const long = Math.max(min, Math.min(max, alignTo(rawValue, limits.alignment)));
     const size = computeSize(key, long, limits.alignment);
     if (!size) return null;
@@ -624,6 +673,8 @@
       range: byId("sizeLongEdgeRange"),
       longInput: byId("sizeLongEdgeNumber"),
       hint: byId("sizeLongEdgeHint"),
+      tierRow: byId("sizeQualityTiers"),
+      tierButtons: byId("sizeQualityTierButtons"),
       presets: byId("sizePresetChips"),
       widthInput: byId("sizeCustomWidth"),
       heightInput: byId("sizeCustomHeight"),
@@ -638,7 +689,16 @@
   function boot() {
     if (!installUi()) return;
     wrapGlobal("updateSizeInfo", () => syncFromSelect(false));
-    wrapGlobal("modelChanged", () => queueRefresh());
+    wrapGlobal("modelChanged", () => {
+      const family = profile().family || "";
+      const fine = Array.from(elements.select.options).find((item) => item.value === "1248x1872");
+      if (family === "anima" && lastModelFamily !== family &&
+          elements.select.value === "864x1152" && fine && !fine.disabled) {
+        applyValue("1248x1872", { ratio: "2:3", remember: false });
+      }
+      lastModelFamily = family;
+      queueRefresh();
+    });
     wrapGlobal("modelAdvancedChanged", () => queueRefresh());
     observeSelect();
   }
@@ -650,12 +710,14 @@
     MEMORY_KEY,
     RATIO_ORDER,
     SIZE_RATIOS,
+    ANIMA_TIERS,
     alignTo,
     alignDown,
     alignUp,
     ratioInfo,
     computeSize,
     minLongEdge,
+    maxLongEdge,
     ratioKeyFromLabel,
     nearestRatioKey,
     isExactForRatio,

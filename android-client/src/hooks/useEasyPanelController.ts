@@ -233,10 +233,11 @@ export function useEasyPanelController(): EasyPanelController {
   const settings = state.settings
   const config = useMemo<EasyPanelVisualConfig>(() => ({
     baseUrl: settings.baseUrl,
+    tailscaleBaseUrl: settings.tailscaleBaseUrl,
     token: settings.token,
     pollIntervalMs: settings.pollIntervalMs,
     requestTimeoutMs: 15000,
-  }), [settings.baseUrl, settings.pollIntervalMs, settings.token])
+  }), [settings.baseUrl, settings.tailscaleBaseUrl, settings.pollIntervalMs, settings.token])
 
   const commitState = useCallback((next: EasyPanelControllerState) => {
     stateRef.current = next
@@ -287,7 +288,7 @@ export function useEasyPanelController(): EasyPanelController {
     const normalized = normalizeEasyPanelControllerSettings(nextSettings)
     const previous = stateRef.current.settings
     commitState({ ...stateRef.current, settings: normalized })
-    if (normalized.baseUrl !== previous.baseUrl || normalized.token !== previous.token) {
+    if (normalized.baseUrl !== previous.baseUrl || normalized.tailscaleBaseUrl !== previous.tailscaleBaseUrl || normalized.token !== previous.token) {
       setModels([])
       setModelsMessage('地址或 Token 已改变，请重新读取模型')
       setModelsError('')
@@ -340,7 +341,7 @@ export function useEasyPanelController(): EasyPanelController {
   const testConnection = useCallback(async () => {
     let normalizedUrl: string
     try {
-      normalizedUrl = normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizedUrl = normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setError(errorMessage(caught, settings.token, '地址'))
       setConnectionMessage('地址未通过校验')
@@ -353,7 +354,7 @@ export function useEasyPanelController(): EasyPanelController {
       setStatus('error')
       return
     }
-    if (normalizedUrl !== settings.baseUrl) {
+    if (settings.baseUrl.trim() && normalizedUrl !== settings.baseUrl) {
       const nextSettings = { ...settings, baseUrl: normalizedUrl }
       commitState({ ...stateRef.current, settings: normalizeEasyPanelControllerSettings(nextSettings) })
     }
@@ -381,7 +382,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const refreshModels = useCallback(async () => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setError(errorMessage(caught, settings.token, '地址'))
       return
@@ -403,7 +404,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const refreshSnapshots = useCallback(async () => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setSnapshotsError(errorMessage(caught, settings.token, '读取历史'))
       return
@@ -528,7 +529,7 @@ export function useEasyPanelController(): EasyPanelController {
       ? options.group
       : libraryGroupFilter
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '读取作品库'))
       return
@@ -593,7 +594,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const refreshLibraryGroups = useCallback(async () => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '读取收藏组'))
       return false
@@ -615,7 +616,7 @@ export function useEasyPanelController(): EasyPanelController {
   // 新建收藏组；带 generationId 时顺带把当前作品加进去（详情页“新建并加入”）。
   const createLibraryGroup = useCallback(async (name: string, generationId?: string) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '新建收藏组'))
       return false
@@ -648,7 +649,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const renameLibraryGroup = useCallback(async (groupId: string, name: string) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '重命名收藏组'))
       return false
@@ -667,7 +668,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const deleteLibraryGroup = useCallback(async (groupId: string) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '删除收藏组'))
       return false
@@ -692,7 +693,7 @@ export function useEasyPanelController(): EasyPanelController {
   const loadMoreLibrary = useCallback(async () => {
     if (libraryLoading || !libraryHasMore) return
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '读取更多作品'))
       return
@@ -735,7 +736,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const openLibraryGeneration = useCallback(async (id: string) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '读取作品详情'))
       return false
@@ -822,7 +823,7 @@ export function useEasyPanelController(): EasyPanelController {
 
   const deleteLibraryGeneration = useCallback(async (id: string) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '删除作品'))
       return false
@@ -865,7 +866,7 @@ export function useEasyPanelController(): EasyPanelController {
     patch: { favorite?: boolean; rating?: number; note?: string; groups?: string[] },
   ) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setLibraryError(errorMessage(caught, settings.token, '保存收藏标记'))
       return false
@@ -941,7 +942,7 @@ export function useEasyPanelController(): EasyPanelController {
     mode: EasyPanelSnapshotRestoreMode = 'full',
   ) => {
     try {
-      normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setSnapshotsError(errorMessage(caught, settings.token, '恢复快照'))
       return false
@@ -1065,7 +1066,7 @@ export function useEasyPanelController(): EasyPanelController {
     if (activeRef.current || isControllerBusy(status)) return
     let normalizedUrl: string
     try {
-      normalizedUrl = normalizeEasyPanelBaseUrl(settings.baseUrl)
+      normalizedUrl = normalizeEasyPanelBaseUrl(settings.baseUrl || settings.tailscaleBaseUrl)
     } catch (caught) {
       setStatus('error')
       setError(errorMessage(caught, settings.token, '地址'))
@@ -1081,7 +1082,7 @@ export function useEasyPanelController(): EasyPanelController {
       setError('请先填写正向提示词。')
       return
     }
-    if (normalizedUrl !== settings.baseUrl) {
+    if (settings.baseUrl.trim() && normalizedUrl !== settings.baseUrl) {
       const nextSettings = normalizeEasyPanelControllerSettings({ ...settings, baseUrl: normalizedUrl })
       commitState({ ...stateRef.current, settings: nextSettings })
     }

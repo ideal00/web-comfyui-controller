@@ -7,11 +7,29 @@ import {
   normalizeEasyPanelBaseUrl,
   pingEasyPanel,
   recoverVisualJob,
+  getEasyPanelModels,
 } from './easyPanelVisual'
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('Easy Panel connection checks', () => {
+  it('selects the reachable Tailscale address and switches reads back when the network changes', async () => {
+    let tailscaleOnline = true
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      const isTailscale = url.startsWith('http://100.99.88.77:8190')
+      if (isTailscale !== tailscaleOnline) throw new TypeError('Network error')
+      if (url.endsWith('/api/rpg/ping')) return new Response(JSON.stringify({ ok: true, api_version: 2 }), { status: 200 })
+      return new Response(JSON.stringify({ models: [] }), { status: 200 })
+    })
+    const config = { baseUrl: 'http://192.168.77.10:8190', tailscaleBaseUrl: 'http://100.99.88.77:8190', token: 'secret' }
+    await expect(getEasyPanelModels(config)).resolves.toMatchObject({ models: [] })
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe('http://100.99.88.77:8190/api/rpg/models')
+    tailscaleOnline = false
+    await expect(getEasyPanelModels(config)).resolves.toMatchObject({ models: [] })
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe('http://192.168.77.10:8190/api/rpg/models')
+  })
+
   it('uses the trimmed token for ping and authenticated capabilities checks', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, api_version: 2, token_required: true }), { status: 200 }))

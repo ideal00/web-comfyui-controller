@@ -93,9 +93,9 @@ test('折叠栏中点击已展开摘要会展开整列但保留 details 内容',
 
 test('index.html 里每一块抽屉面板都带 data-rail-fold 与 summary', () => {
   const blocks = html.match(/<details[^>]*data-rail-fold[^>]*>/g) || []
-  assert.equal(blocks.length, 4)
+  assert.equal(blocks.length, 5)
   blocks.forEach((block) => {
-    assert.ok(/id="(customFeatureCard|taskQueueFold|translationCard|imageReadCard)"/.test(block), block)
+    assert.ok(/id="(customFeatureCard|taskQueueFold|translationCard|tokenLibraryCard|imageReadCard)"/.test(block), block)
     assert.ok(!/\sopen(\s|>)/.test(block), `默认必须折叠：${block}`)
   })
   assert.ok(html.includes('id="railTransparentMount"'))

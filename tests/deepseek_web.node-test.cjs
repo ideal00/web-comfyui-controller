@@ -74,6 +74,7 @@ function loadContext({ nativeResult = true, navigatorClipboard = null, execResul
     "function promptFamilyClient(){return 'illustrious'}",
     "function translationFamilyLabel(){return 'Illustrious 标签为主'}",
     "function deepSeekWebInstruction(value){return 'instruction:' + value}",
+    lineStartingWith('async function sharedPromptInstruction'),
     lineStartingWith('async function copyDeepSeekInstruction'),
     lineStartingWith('function hideDeepSeekManualInstruction'),
     lineStartingWith('function showDeepSeekManualInstruction'),

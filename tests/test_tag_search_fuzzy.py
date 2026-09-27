@@ -13,6 +13,8 @@ class TagSearchFuzzyTests(unittest.TestCase):
             {"tag": "long_blue_hair", "search": "long blue hair", "translation": "蓝色长发", "aliases": [], "count": 40, "category": 0},
             {"tag": "blue_eyes", "search": "blue eyes", "translation": "蓝眼睛", "aliases": [], "count": 200, "category": 0},
             {"tag": "high_heels", "search": "high heels", "translation": "高跟鞋", "aliases": [], "count": 80, "category": 0},
+            {"tag": "black_thighhighs", "search": "black thighhighs", "translation": "黑色丝袜", "aliases": [], "count": 70, "category": 0},
+            {"tag": "white_thighhighs", "search": "white thighhighs", "translation": "白色丝袜", "aliases": [], "count": 90, "category": 0},
         ]
         self.patch = mock.patch.object(easy_panel, "TAG_INDEX", self.sample)
         self.patch.start()
@@ -25,9 +27,10 @@ class TagSearchFuzzyTests(unittest.TestCase):
         results = easy_panel.search_tags("blue hair", limit=4)
         self.assertEqual("blue hair", results[0]["tag"])
 
-    def test_partial_keyword_and_chinese_character_overlap(self):
-        self.assertIn("blue eyes", [row["tag"] for row in easy_panel.search_tags("blue unclear", limit=4)])
-        self.assertEqual("blue hair", easy_panel.search_tags("蓝色头发", limit=1)[0]["tag"])
+    def test_partial_keyword_without_opposite_chinese_colors(self):
+        self.assertIn("blue eyes", [row["tag"] for row in easy_panel.search_tags("blue unclear", limit=8)])
+        self.assertEqual(["black thighhighs"], [row["tag"] for row in easy_panel.search_tags("黑色丝袜", limit=8)])
+        self.assertEqual([], easy_panel.search_tags("蓝色头发", limit=8))
 
 
 if __name__ == "__main__":

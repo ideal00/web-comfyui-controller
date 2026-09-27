@@ -7,6 +7,7 @@ export type EasyPanelQuality = 'fast' | 'balanced' | 'detailed'
 
 export interface EasyPanelControllerSettings {
   baseUrl: string
+  tailscaleBaseUrl: string
   token: string
   model: string
   quality: EasyPanelQuality
@@ -55,6 +56,7 @@ export interface EasyPanelControllerInteractionResult {
 
 export const DEFAULT_EASY_PANEL_CONTROLLER_SETTINGS: EasyPanelControllerSettings = {
   baseUrl: '',
+  tailscaleBaseUrl: '',
   token: '',
   model: '',
   quality: 'balanced',
@@ -81,6 +83,7 @@ export function normalizeEasyPanelControllerSettings(
     ...DEFAULT_EASY_PANEL_CONTROLLER_SETTINGS,
     ...source,
     baseUrl: text(source.baseUrl),
+    tailscaleBaseUrl: text(source.tailscaleBaseUrl),
     token: text(source.token),
     model: text(source.model),
     quality,

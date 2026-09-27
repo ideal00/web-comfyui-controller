@@ -69,6 +69,11 @@ class AnimaHighresParameterTests(unittest.TestCase):
         self.assertEqual(DEFAULT_MAX_LONG_EDGE, spec["maxLongEdge"])
         self.assertEqual((1248, 1824), (spec["targetWidth"], spec["targetHeight"]))
         self.assertEqual("RealESRGAN_x4plus_anime_6B.pth", spec["upscaler"])
+        self.assertEqual("anime6b", spec["preUpscaleMode"])
+
+    def test_pre_upscale_mode_is_allowlisted(self):
+        self.assertEqual("bicubic", self.normalize({"preUpscaleMode": "bicubic"})["preUpscaleMode"])
+        self.assertEqual("anime6b", self.normalize({"preUpscaleMode": "other"})["preUpscaleMode"])
 
     def test_second_pass_sampler_and_scheduler_can_be_overridden(self):
         spec = self.normalize({"enabled": True, "sampler": "er_sde", "scheduler": "beta57"})
@@ -168,6 +173,7 @@ class AnimaHighresWorkflowTests(unittest.TestCase):
         self.assertEqual(1, len(scales))
         self.assertEqual(1248, scales[0]["inputs"]["width"])
         self.assertEqual(1824, scales[0]["inputs"]["height"])
+        self.assertEqual("lanczos", scales[0]["inputs"]["upscale_method"])
         self.assertEqual(
             "RealESRGAN_x4plus_anime_6B.pth",
             self.nodes_of(workflow, "UpscaleModelLoader")[0]["inputs"]["model_name"],
@@ -191,6 +197,23 @@ class AnimaHighresWorkflowTests(unittest.TestCase):
         self.assertEqual(28, refine["steps"])
         self.assertAlmostEqual(4.0, refine["cfg"])
         self.assertAlmostEqual(0.30, refine["denoise"])
+
+    def test_bicubic_changes_only_pre_upscale_nodes(self):
+        data = payload("anima-base-v1.0.safetensors")
+        data["animaHighres"] = {"enabled": True, "scale": 1.5, "denoise": 0.28,
+                                 "steps": 24, "cfg": 4.2, "preUpscaleMode": "bicubic"}
+        workflow = self.build(data)
+        graph = workflow["prompt"]
+        self.assertFalse(self.nodes_of(workflow, "UpscaleModelLoader"))
+        self.assertFalse(self.nodes_of(workflow, "ImageUpscaleWithModel"))
+        resize = self.nodes_of(workflow, "ImageScale")[0]
+        self.assertEqual("bicubic", resize["inputs"]["upscale_method"])
+        self.assertEqual((1248, 1824), (resize["inputs"]["width"], resize["inputs"]["height"]))
+        self.assertEqual("VAEDecode", graph[str(resize["inputs"]["image"][0])]["class_type"])
+        refine = self.nodes_of(workflow, "KSampler")[1]["inputs"]
+        self.assertEqual(("dpmpp_2m_sde_gpu", "sgm_uniform", 0.28, 24, 4.2),
+                         (refine["sampler_name"], refine["scheduler"], refine["denoise"],
+                          refine["steps"], refine["cfg"]))
 
     def test_disabled_keeps_single_sampler(self):
         data = payload("anima-base-v1.0.safetensors")
@@ -238,6 +261,8 @@ class AnimaHighresUiTests(unittest.TestCase):
 
     def test_script_exposes_the_panel_and_state(self):
         script = (PROJECT_DIR / "web/assets/js/anima-highres.js").read_text(encoding="utf-8")
+        self.assertIn('id="animaHighresPreUpscaleMode"', script)
+        self.assertIn('preUpscaleMode: state.preUpscaleMode', script)
         for marker in ("animaHighresEnabled", "高清重建", "二采·细节", "二采·保真", "二采·纹理",
                        "animaHighresState", "pushToHiresControls", "animaHighresApplyPreset",
                        "animaHighresSampler", "animaHighresScheduler", "refreshHighresOptions",

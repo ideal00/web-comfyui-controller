@@ -801,8 +801,14 @@ public class AdvancedPanelActivity extends Activity {
     }
 
     private void goBackOrFinish() {
-        if (webView != null && webView.canGoBack()) webView.goBack();
-        else finish();
+        if (webView == null) { finish(); return; }
+        webView.evaluateJavascript("(function(){try{var image=document.getElementById('panelImageViewer');if(image&&image.open){image.close();return true}var library=document.getElementById('creativeLibraryDialog');if(library&&library.open){var detail=document.getElementById('creativeLibraryDetailView');if(detail&&!detail.hidden){document.getElementById('creativeLibraryBack')?.click()}else{library.close()}return true}var dialogs=[...document.querySelectorAll('dialog[open]')];if(dialogs.length){dialogs[dialogs.length-1].close();return true}return false}catch(e){return false}})()", result -> {
+            if ("true".equals(result)) return;
+            runOnUiThread(() -> {
+                if (webView != null && webView.canGoBack()) webView.goBack();
+                else finish();
+            });
+        });
     }
 
     @Override

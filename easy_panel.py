@@ -2476,10 +2476,14 @@ def anima_preflight(data: dict) -> dict:
         warnings.append("尚未填写已验证的硬标签；可在“Anima 提示词分层”中校验角色、服装和姿势标签。")
     steps = bounded(data.get("steps"), 30, 8, 60)
     cfg = bounded(data.get("cfg"), 4.0, 1, 15, integer=False)
-    width = bounded(data.get("width"), 832, 512, 1536)
-    height = bounded(data.get("height"), 1216, 512, 1536)
-    if width * height > 1_250_000:
-        warnings.append(f"Anima 当前尺寸为 {width}×{height}；8GB 显存压力较大，显存不足时请改用 864×1152 或 1024×1024。")
+    resolution = model_sampling_profile(model).get("resolution") or {}
+    maximum_size = int(resolution.get("max") or 2048)
+    width = bounded(data.get("width"), 832, 512, maximum_size)
+    height = bounded(data.get("height"), 1216, 512, maximum_size)
+    if width * height > 2_450_000:
+        warnings.append(f"Anima 当前尺寸为 {width}×{height}，已超过精细首采约 2.45MP 的推荐像素预算；请留意显存与结构稳定性。")
+    elif width * height >= 2_000_000:
+        warnings.append(f"Anima 精细首采 {width}×{height}：请一次生成 1 张；8GB 显存不足时切回标准首采。")
     if not 20 <= steps <= 50:
         warnings.append("Anima Base 通常建议 20–50 步；当前步数为 " + str(steps) + "。")
     if not 3.5 <= cfg <= 5.5:
@@ -2489,13 +2493,14 @@ def anima_preflight(data: dict) -> dict:
         profile = model_sampling_profile(model)
         spec = normalize_anima_highres(data, profile.get("hires") or {}, width, height,
                                        bounded(data.get("cfg"), 4.8, 1, 15, integer=False))
-        upscaler = str(spec.get("upscaler") or HIRES_UPSCALE_MODEL).replace(".pth", "")
+        pre_upscale = ("Bicubic 直接" if spec["preUpscaleMode"] == "bicubic"
+                       else str(spec.get("upscaler") or HIRES_UPSCALE_MODEL).replace(".pth", "") + " → Lanczos")
         effective = spec["targetWidth"] / max(1, width)
         warnings.append(
-            f"已启用高清重建：{upscaler} 放大后缩放到约 {spec['targetWidth']}×{spec['targetHeight']}"
+            f"已启用高清重建：{pre_upscale} 放大到约 {spec['targetWidth']}×{spec['targetHeight']}"
             f"（请求 {spec['scale']}×，实际 {effective:.2f}×），再由 Anima 二采重建细节；"
             "预计耗时与显存占用显著增加，8GB 显存建议 1.25–1.5×。"
-            "高清重建内部已含 Anime6B 超分，因此与「输出增强」不能同时开启：想只放大不重绘时改用输出增强。")
+            "高清重建与「输出增强」暂不能同时开启，以免连续放大导致显存不足。")
         hand = spec.get("handRepair") if isinstance(spec.get("handRepair"), dict) else {}
         if hand.get("enabled"):
             if not hand.get("mask"):
@@ -2676,7 +2681,6 @@ def search_tags(query: str, limit: int = 28) -> list[dict]:
         return []
     normalized = re.sub(r"\s+", " ", query.replace("_", " ")).strip()
     parts = [part for part in re.split(r"[\s,，、/]+", normalized) if part]
-    chinese = set(re.findall(r"[\u3400-\u9fff]", normalized))
     candidates: list[tuple[tuple, dict]] = []
     exact_tags: set[str] = set()
     for item in TAG_INDEX:
@@ -2708,13 +2712,8 @@ def search_tags(query: str, limit: int = 28) -> list[dict]:
             hits = sum(part in searchable_text for part in parts) if searchable_text else 0
             if len(parts) > 1 and hits == len(parts):
                 fallback.append(((4, -item["count"], item["tag"]), item))
-            elif len(chinese) >= 2 and translation:
-                translated_chars = set(re.findall(r"[\u3400-\u9fff]", translation))
-                overlap = len(chinese & translated_chars)
-                if overlap >= 2 and overlap * 2 >= len(chinese) and overlap * 3 >= len(translated_chars) * 2:
-                    fallback.append(((5, -(overlap * 2 - len(translated_chars)), -item["count"], item["tag"]), item))
             elif len(parts) > 1 and hits:
-                fallback.append(((6, -hits, -item["count"], item["tag"]), item))
+                fallback.append(((5, -hits, -item["count"], item["tag"]), item))
         fallback.sort(key=lambda pair: pair[0])
         candidates.extend(fallback[:limit - len(candidates)])
     return [{"tag": item["tag"].replace("_", " "), "translation": item["translation"],
@@ -4198,7 +4197,7 @@ def build_workflow(data: dict) -> dict:
 
     sample_ref = [sampler_id, 0]
     color_reference_ref = None
-    # Anima「高清重建」复用同一条 Hires 链（Anime6B → 缩放 → VAEEncode → 二采），
+    # Anima「高清重建」可选 Anime6B → Lanczos 或 Bicubic 直缩放，再 VAEEncode → 二采，
     # 但由 animaHighres.enabled 触发、参数按 Anima profile 约束（denoise 0.20–0.30、
     # 倍率 1.15–2.0、长边上限 2560），不套用 Illustrious 的「二采目的」上限。
     highres_capable = bool(capabilities.get("highres_reconstruction")
@@ -4290,13 +4289,12 @@ def build_workflow(data: dict) -> dict:
                 ratio = max_long_edge / max(hires_width, hires_height)
                 hires_width = max(8, int(hires_width * ratio / 8 + 0.5) * 8)
                 hires_height = max(8, int(hires_height * ratio / 8 + 0.5) * 8)
-        base_decode_id, upscale_loader_id, model_upscale_id, resize_id, hires_encode_id, hires_sampler_id = (
-            alloc(), alloc(), alloc(), alloc(), alloc(), alloc()
+        base_decode_id, resize_id, hires_encode_id, hires_sampler_id = (
+            alloc(), alloc(), alloc(), alloc()
         )
 
-        # Decode before resizing so the learned anime upscaler can reconstruct
-        # line art and texture in pixel space. Its native output is 4x; resize it
-        # back to the requested 1.10-1.50x target before VAE encoding/refinement.
+        # Decode before resizing. Anime6B keeps the original path; Bicubic directly
+        # resizes the decoded image so the A/B comparison changes only preprocessing.
         if vae_mode == "tiled":
             nodes[base_decode_id] = {"class_type": "VAEDecodeTiled", "inputs": {
                 "samples": sample_ref, "vae": vae_ref,
@@ -4316,7 +4314,7 @@ def build_workflow(data: dict) -> dict:
             "images": [base_decode_id, 0],
         }, "_meta": {"artifactStage": "base", "artifactRole": "comparison"}}
         # 可选的「二采前手部修复」：用上传的黑白蒙版在首采图上 inpaint 一次，
-        # 修好手再进 Anime6B 超分与二采——先改结构、再放大重建细节，顺序很重要。
+        # 修好手再进所选预放大与二采——先改结构、再放大重建细节。
         image_for_upscale = [base_decode_id, 0]
         hand_repair = (anima_highres.get("handRepair")
                        if isinstance(anima_highres, dict)
@@ -4363,18 +4361,25 @@ def build_workflow(data: dict) -> dict:
                 "images": [hand_decode_id, 0],
             }, "_meta": {"artifactStage": "hand_repair", "artifactRole": "comparison"}}
             image_for_upscale = [hand_decode_id, 0]
-        nodes[upscale_loader_id] = {
-            "class_type": "UpscaleModelLoader",
-            "inputs": {"model_name": hires_upscaler},
-        }
-        nodes[model_upscale_id] = {
-            "class_type": "ImageUpscaleWithModel",
-            "inputs": {"upscale_model": [upscale_loader_id, 0],
-                       "image": image_for_upscale},
-        }
+        pre_upscale_mode = (anima_highres.get("preUpscaleMode", "anime6b")
+                            if anima and anima_highres else "anime6b")
+        resize_source = image_for_upscale
+        if pre_upscale_mode == "anime6b":
+            upscale_loader_id, model_upscale_id = alloc(), alloc()
+            nodes[upscale_loader_id] = {
+                "class_type": "UpscaleModelLoader",
+                "inputs": {"model_name": hires_upscaler},
+            }
+            nodes[model_upscale_id] = {
+                "class_type": "ImageUpscaleWithModel",
+                "inputs": {"upscale_model": [upscale_loader_id, 0],
+                           "image": image_for_upscale},
+            }
+            resize_source = [model_upscale_id, 0]
         nodes[resize_id] = {
             "class_type": "ImageScale",
-            "inputs": {"image": [model_upscale_id, 0], "upscale_method": "lanczos",
+            "inputs": {"image": resize_source,
+                       "upscale_method": "bicubic" if pre_upscale_mode == "bicubic" else "lanczos",
                        "width": hires_width, "height": hires_height, "crop": "disabled"},
         }
         if vae_mode == "tiled":
@@ -4451,8 +4456,8 @@ def build_workflow(data: dict) -> dict:
         raise ValueError("未知的输出增强模式。")
     if hires_enabled and post_mode != "off":
         raise ValueError(
-            "高清二次采样与输出超分不能同时开启；Anima 高清重建内部已包含 Anime6B 超分（放大后二采重建），"
-            "再开输出增强会重复放大、也更容易显存溢出 —— 只想纯放大（不重绘）时才用输出增强。")
+            "高清二次采样与输出超分暂不能同时开启；连续放大会增加显存压力。"
+            "只想纯放大（不重绘）时请单独使用输出增强。")
     if repair and post_mode != "off":
         raise ValueError("局部修复不能同时执行整图输出超分；请先完成修复，再把结果作为底图放大。")
     post_scale = bounded(output_enhancement.get("scale"), 1.5, 1.1, 4.0, integer=False)
@@ -4821,11 +4826,11 @@ def upscale_model_catalog() -> dict:
             "seedvr2": {"ready": seedvr2_ready(), "model": SEEDVR2_MODEL}}
 
 
-CLARITY_ENGINES = ("upscale", "seedvr2")
+CLARITY_ENGINES = ("upscale", "bicubic", "seedvr2")
 
 
 def clarity_upscale_engine(data: dict) -> str:
-    """清晰版增强方式：upscale=放大模型（默认），seedvr2=SeedVR2 生成式超分。"""
+    """清晰版增强方式：放大模型（默认）、Bicubic 直缩放或 SeedVR2。"""
 
     wanted = str((data or {}).get("engine", "") or "").strip().lower()
     return wanted if wanted in CLARITY_ENGINES else "upscale"
@@ -4919,6 +4924,7 @@ def build_clarity_upscale_workflow(data: dict) -> dict:
     """Upscale one existing output without diffusion or prompt regeneration.
 
     engine=upscale：任意放大模型（Anime6B / 4x-UltraSharp…），快、保真。
+    engine=bicubic：只用 ImageScale 直接放大，不经 VAE、放大模型或采样器。
     engine=seedvr2：SeedVR2 生成式超分，能修细节但更慢，与放大模型无关。
     """
 
@@ -4929,7 +4935,15 @@ def build_clarity_upscale_workflow(data: dict) -> dict:
     engine = clarity_upscale_engine(data)
     size = upscale_output_size(image_name, scale)
     nodes: dict = {"1": {"class_type": "LoadImage", "inputs": {"image": image_name}}}
-    if engine == "seedvr2":
+    if engine == "bicubic":
+        if not size:
+            raise ValueError("读不到原图尺寸，无法生成 Bicubic 放大图。")
+        nodes["2"] = {"class_type": "ImageScale", "inputs": {
+            "image": ["1", 0], "upscale_method": "bicubic",
+            "width": int(size[0]), "height": int(size[1]), "crop": "disabled",
+        }}
+        last = "2"
+    elif engine == "seedvr2":
         if not size:
             raise ValueError("读不到原图尺寸，无法生成 SeedVR2 清晰版。")
         nodes.update(clarity_seedvr2_nodes(size, data))
@@ -5211,6 +5225,7 @@ def _snapshot_enhancements(payload: dict, request_generation: dict) -> dict:
         "handPositive", "handNegative", "footPositive", "footNegative", "brightness",
         "contrast", "saturation", "gamma", "red", "green", "blue", "hue", "hsvSaturation",
         "value", "blackPoint", "whitePoint", "grayPoint", "keepOriginal", "detailMethod",
+        "preUpscaleMode",
         "detailErode", "detailDilate", "maxMegapixels", "method",
     }
     for key in ("repair", "img2img", "pose", "depth", "colorCorrection", "outputEnhancement",
@@ -5244,6 +5259,7 @@ def _attach_highres_executed(payload: dict, result: dict) -> None:
         "targetHeight": spec["targetHeight"],
         "maxLongEdge": spec["maxLongEdge"],
         "upscaler": spec["upscaler"] or HIRES_UPSCALE_MODEL,
+        "preUpscaleMode": spec["preUpscaleMode"],
     })
 
 
@@ -6682,7 +6698,7 @@ class Handler(BaseHTTPRequestHandler):
                 if engine == "seedvr2":
                     if not seedvr2_ready():
                         raise ValueError("ComfyUI 里没有 SeedVR2 节点，无法用生成式超分；请改用放大模型。")
-                else:
+                elif engine == "upscale":
                     available = upscale_model_choices()
                     if not available:
                         raise ValueError("ComfyUI 里没有可用的放大模型，请先放入 models/upscale_models。")

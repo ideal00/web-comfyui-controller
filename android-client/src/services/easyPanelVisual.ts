@@ -4,6 +4,7 @@ import type { EasyPanelExecutionPlan } from '../lib/easyPanelPlan'
 
 export interface EasyPanelVisualConfig {
   baseUrl: string
+  tailscaleBaseUrl?: string
   token: string
   pollIntervalMs?: number
   requestTimeoutMs?: number
@@ -238,6 +239,39 @@ export function normalizeEasyPanelBaseUrl(value: string): string {
   return `${parsed.protocol}//${parsed.host}`
 }
 
+const selectedAddresses = new Map<string, { url: string; until: number }>()
+
+/** Pick a reachable address and remember it briefly so polling does not probe twice each time. */
+export async function resolveEasyPanelBaseUrl(config: EasyPanelVisualConfig): Promise<string> {
+  const candidates = [config.baseUrl, config.tailscaleBaseUrl ?? ''].filter((value) => value.trim())
+    .map(normalizeEasyPanelBaseUrl)
+  if (!candidates.length) throw new Error('请填写局域网或 Tailscale 地址。')
+  if (candidates.length === 1 || candidates[0] === candidates[1]) return candidates[0]
+  const key = candidates.join('|')
+  const cached = selectedAddresses.get(key)
+  if (cached && cached.until > Date.now()) return cached.url
+  const probes = candidates.map(async (url) => {
+    const response = await fetchWithTimeout(`${url}/api/rpg/ping`, {
+      headers: requestHeaders(config.token),
+    }, Math.min(config.requestTimeoutMs ?? 15000, 2500))
+    if (!response.ok || !(await response.json() as EasyPanelPing).ok) throw new Error(`${url} 不可达`)
+    return url
+  })
+  try {
+    const url = await Promise.any(probes)
+    selectedAddresses.set(key, { url, until: Date.now() + 15000 })
+    return url
+  } catch {
+    selectedAddresses.delete(key)
+    throw new Error('局域网和 Tailscale 地址均无法连接，请检查手机网络和电脑端服务。')
+  }
+}
+
+function forgetEasyPanelAddress(config: EasyPanelVisualConfig): void {
+  const candidates = [config.baseUrl, config.tailscaleBaseUrl ?? ''].filter((value) => value.trim())
+  selectedAddresses.delete(candidates.map(normalizeEasyPanelBaseUrl).join('|'))
+}
+
 function requestHeaders(token: string, json = false): Record<string, string> {
   const result: Record<string, string> = {}
   if (json) result['Content-Type'] = 'application/json'
@@ -246,11 +280,26 @@ function requestHeaders(token: string, json = false): Record<string, string> {
 }
 
 export async function jsonRequest<T>(config: EasyPanelVisualConfig, path: string, init: RequestInit = {}): Promise<T> {
-  const baseUrl = normalizeEasyPanelBaseUrl(config.baseUrl)
-  const response = await fetchWithTimeout(baseUrl + path, {
+  const baseUrl = await resolveEasyPanelBaseUrl(config)
+  let response: Response
+  try {
+    response = await fetchWithTimeout(baseUrl + path, {
       ...init,
       headers: { ...requestHeaders(config.token, Boolean(init.body)), ...(init.headers ?? {}) },
     }, config.requestTimeoutMs ?? 15000)
+  } catch (error) {
+    forgetEasyPanelAddress(config)
+    // Reads may safely retry after a network switch. Writes are probed before sending
+    // and must not be replayed because the server might already have accepted them.
+    if (init.signal?.aborted || !config.tailscaleBaseUrl?.trim() || (init.method ?? 'GET').toUpperCase() !== 'GET') throw error
+    const addresses = [config.baseUrl, config.tailscaleBaseUrl].map((value) => normalizeEasyPanelBaseUrl(value ?? ''))
+    selectedAddresses.set(addresses.join('|'), { url: addresses.find((url) => url !== baseUrl) ?? baseUrl, until: Date.now() + 15000 })
+    const retryUrl = await resolveEasyPanelBaseUrl(config)
+    response = await fetchWithTimeout(retryUrl + path, {
+      ...init,
+      headers: { ...requestHeaders(config.token, Boolean(init.body)), ...(init.headers ?? {}) },
+    }, config.requestTimeoutMs ?? 15000)
+  }
   const text = await response.text()
   let payload: unknown = {}
   try { payload = text ? JSON.parse(text) : {} } catch { payload = { error: text } }
@@ -331,8 +380,18 @@ export async function waitForVisualJob(
 }
 
 export async function downloadVisualImage(config: EasyPanelVisualConfig, image: VisualImageRef, signal?: AbortSignal): Promise<Blob> {
-  const baseUrl = normalizeEasyPanelBaseUrl(config.baseUrl)
-  const response = await fetchWithTimeout(baseUrl + image.url, { headers: requestHeaders(config.token), signal }, config.requestTimeoutMs ?? 30000)
+  const baseUrl = await resolveEasyPanelBaseUrl(config)
+  let response: Response
+  try {
+    response = await fetchWithTimeout(baseUrl + image.url, { headers: requestHeaders(config.token), signal }, config.requestTimeoutMs ?? 30000)
+  } catch (error) {
+    forgetEasyPanelAddress(config)
+    if (signal?.aborted || !config.tailscaleBaseUrl?.trim()) throw error
+    const addresses = [config.baseUrl, config.tailscaleBaseUrl].map((value) => normalizeEasyPanelBaseUrl(value ?? ''))
+    selectedAddresses.set(addresses.join('|'), { url: addresses.find((url) => url !== baseUrl) ?? baseUrl, until: Date.now() + 15000 })
+    const retryUrl = await resolveEasyPanelBaseUrl(config)
+    response = await fetchWithTimeout(retryUrl + image.url, { headers: requestHeaders(config.token), signal }, config.requestTimeoutMs ?? 30000)
+  }
   if (!response.ok) throw new EasyPanelHttpError(response.status, `下载剧情 CG 失败 (${response.status})`, null)
   return response.blob()
 }

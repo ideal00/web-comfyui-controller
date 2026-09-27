@@ -292,6 +292,7 @@
     lineage: null,
     loading: false,
     requestNumber: 0,
+    galleryNumber: 0,
     imageUrls: new Map(),
     lastFocus: null,
     groups: [],
@@ -829,13 +830,71 @@
     }
   }
 
-  function appendSafeImageLink(parent, source, label, className) {
+  function libraryGalleryEntries(detail, selectedArtifact) {
+    const entries = [];
+    const currentId = detail.generation_id;
+    const summaries = state.items.some((item) => item.generation_id === currentId)
+      ? state.items : [{ generation_id: currentId, model: detail.model }, ...state.items];
+    summaries.forEach((item) => {
+      if (item.generation_id === currentId) {
+        (detail.artifacts || []).filter((artifact) => artifact.exists !== false).forEach((artifact) => {
+          const src = state.imageUrls.get(imageKeyForArtifact(artifact.artifact_id)) ||
+            (artifact.artifact_id === selectedArtifact?.artifact_id && state.imageUrls.get(imageKeyForThumbnail(currentId)));
+          if (src) entries.push({ generationId: currentId, artifact, src, name: artifact.filename || detail.model || '作品图片' });
+        });
+      } else {
+        const src = state.imageUrls.get(imageKeyForThumbnail(item.generation_id));
+        if (src) entries.push({ generationId: item.generation_id, src, name: item.model || '作品图片' });
+      }
+    });
+    const index = Math.max(0, entries.findIndex((entry) => entry.artifact?.artifact_id === selectedArtifact?.artifact_id));
+    return { entries, index };
+  }
+
+  function openLibraryGallery(event, artifact) {
+    const detail = state.detail;
+    if (!detail || typeof global.openPanelImageGallery !== 'function') return true;
+    const { entries, index } = libraryGalleryEntries(detail, artifact);
+    if (!entries.length) return true;
+    const images = entries.map((entry) => ({ src: entry.src, name: entry.name, label: entry.name }));
+    const requestNumber = state.requestNumber;
+    const galleryNumber = ++state.galleryNumber;
+    const onChange = async (position) => {
+      const entry = entries[position];
+      if (!entry || entry.artifact || entry.loading) return;
+      entry.loading = true;
+      try {
+        const data = await requestJson(`/api/rpg/library/generations/${safeGenerationId(entry.generationId)}`, state.token);
+        const other = detailFromResponse(data);
+        const preview = previewArtifactOf(other);
+        const path = preview && artifactPath(preview);
+        if (!path) return;
+        const blob = await requestBlob(path, state.token);
+        if (requestNumber !== state.requestNumber || galleryNumber !== state.galleryNumber || !byId('panelImageViewer')?.open) return;
+        const src = global.URL.createObjectURL(blob);
+        const key = imageKeyForArtifact(preview.artifact_id);
+        const previous = state.imageUrls.get(key);
+        if (previous) global.URL.revokeObjectURL(previous);
+        state.imageUrls.set(key, src);
+        entry.artifact = preview;
+        entry.src = src;
+        entry.name = preview.filename || entry.name;
+        global.updatePanelImageGallery?.(position, { src, name: entry.name, label: entry.name });
+      } catch (_) {
+        // Keep the thumbnail available if the full image cannot be loaded.
+      } finally { entry.loading = false; }
+    };
+    return global.openPanelImageGallery(event, images, index, onChange);
+  }
+
+  function appendSafeImageLink(parent, source, label, className, artifact) {
     if (!source) return null;
     const link = createElement('a', className || 'creative-library-image-link', label);
     link.href = source;
     link.target = '_blank';
     link.rel = 'noreferrer';
     link.addEventListener('click', (event) => {
+      if (state.detail && artifact && openLibraryGallery(event, artifact) === false) return;
       const viewer = global.openLinkedImageViewer;
       if (typeof viewer === 'function') {
         const result = viewer(event, link);
@@ -864,7 +923,7 @@
       const filename = `${asText(artifact.filename) || '未命名图片'}${base}${stateText ? `（${stateText}）` : ''}`;
       const name = createElement('span', 'creative-library-output-name', filename);
       row.append(name);
-      if (source) appendSafeImageLink(row, source, '打开预览', 'creative-library-image-link snapshot-output');
+      if (source) appendSafeImageLink(row, source, '打开预览', 'creative-library-image-link snapshot-output', artifact);
       const download = createElement('button', 'secondary', '下载');
       download.type = 'button';
       download.disabled = !source || artifact.exists === false;
@@ -1020,7 +1079,7 @@
     const thumbSource = state.imageUrls.get(imageKeyForThumbnail(detail.generation_id));
     const source = previewSource || thumbSource;
     if (source) {
-      const link = appendSafeImageLink(preview, source, '打开大图', 'creative-library-preview-link snapshot-output');
+      const link = appendSafeImageLink(preview, source, '打开大图', 'creative-library-preview-link snapshot-output', previewArtifact);
       const image = createElement('img');
       image.src = source;
       image.alt = `${asText(detail.model) || '作品'} 预览`;

@@ -10,6 +10,7 @@ export type VisualAutoMode = 'manual' | 'scene-change' | 'every-turn'
 export interface EasyPanelVisualSettings {
   enabled: boolean
   baseUrl: string
+  tailscaleBaseUrl: string
   token: string
   autoMode: VisualAutoMode
   model: string
@@ -39,6 +40,7 @@ export interface PersistedVisualState {
 export const DEFAULT_VISUAL_SETTINGS: EasyPanelVisualSettings = {
   enabled: false,
   baseUrl: '',
+  tailscaleBaseUrl: '',
   token: '',
   autoMode: 'scene-change',
   model: '',
@@ -96,6 +98,7 @@ export function normalizeVisualSettings(value: Partial<EasyPanelVisualSettings> 
     dimPercent,
     autoMode,
     baseUrl: value?.baseUrl?.trim() ?? '',
+    tailscaleBaseUrl: value?.tailscaleBaseUrl?.trim() ?? '',
     token: value?.token?.trim() ?? '',
     model: value?.model?.trim() ?? '',
     safetyLevel: value?.safetyLevel?.trim() || defaults.safetyLevel,

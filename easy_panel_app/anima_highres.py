@@ -3,12 +3,11 @@
 与「细节增强（Detail Refine）」是两件不同的事：
 
 * Detail Refine = 同尺寸、低 denoise，只补高频细节（不放大，见 anima_refine.py）；
-* Highres       = 学习型超分（Anime6B）→ 缩放回目标倍率 → VAE Encode →
+* Highres       = Anime6B → Lanczos 或 Bicubic 直接放大 → VAE Encode →
                   二采 → Decode，让 Anima 在更高空间分辨率上重建细节。
 
-本模块只负责 Anima 的高清重建参数与目标尺寸计算；工作流节点仍复用主流程
-已有的 Hires 链（UpscaleModelLoader → ImageUpscaleWithModel → ImageScale →
-VAEEncode → KSampler → VAEDecode），不新增第二套架构。
+本模块只负责 Anima 的高清重建参数与目标尺寸计算；工作流节点由主流程
+依 ``preUpscaleMode`` 选择预放大分支。
 
 约束取自成熟 Anima 工作流（EasyUseAnima / AnimaFlow）：
 倍率 1.15–2.0、denoise 0.20–0.35、默认 1.5× / 0.28、长边上限 2560；二采采样器与
@@ -77,7 +76,7 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
     """把请求里的 ``animaHighres`` 收敛成一组安全参数（含目标尺寸）。
 
     ``hires_defaults`` 来自模型 profile 的 ``hires`` 段；Anima profile 提供
-    1.5× / 0.25 / 20 步 / 4.8 CFG / 长边 2560 / Anime6B。请求值只允许在
+    1.5× / 0.28 / 24 步 / 4.2 CFG / 长边 2560 / Anime6B。请求值只允许在
     profile 的 [min_scale, max_scale] / [min_denoise, max_denoise] 内微调，
     长边超过上限时按比例缩回（再 8 对齐）。
     """
@@ -116,6 +115,10 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
         if not text or text == "auto":
             text = str(default_value or "").strip()
         return text or "auto"
+
+    pre_upscale_mode = str(raw.get("preUpscaleMode") or "anime6b").strip().lower()
+    if pre_upscale_mode not in {"anime6b", "bicubic"}:
+        pre_upscale_mode = "anime6b"
 
     sampler = _pick_sampler(raw.get("sampler"), defaults.get("sampler"))
     scheduler = _pick_sampler(raw.get("scheduler"), defaults.get("scheduler"))
@@ -162,6 +165,7 @@ def normalize_anima_highres(data: dict, hires_defaults: dict | None,
         "cfg": round(cfg, 3),
         "sampler": sampler,
         "scheduler": scheduler,
+        "preUpscaleMode": pre_upscale_mode,
         "handRepair": hand_repair,
         "maxLongEdge": max_long_edge,
         "targetWidth": target_width,

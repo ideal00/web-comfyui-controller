@@ -466,12 +466,6 @@ def _score(entry: dict, needle: str) -> int:
             return 22
         if hits:
             return 10 + hits
-    chinese = set(re.findall(r"[\u3400-\u9fff]", needle))
-    if len(chinese) >= 2:
-        name_chars = set(re.findall(r"[\u3400-\u9fff]", name))
-        overlap = len(chinese & name_chars)
-        if overlap >= 2 and overlap * 2 >= len(chinese) and overlap * 3 >= len(name_chars) * 2:
-            return 15 + overlap
     return best
 
 
