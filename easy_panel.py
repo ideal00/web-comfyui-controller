@@ -49,6 +49,7 @@ from easy_panel_app.anima_refine import (
     normalize_anima_detail_refine,
 )
 from easy_panel_app import camera_control
+from easy_panel_app.tag_classifier import classify_tag
 from easy_panel_app import danbooru_client, prompt_dialect, visual_tag_library
 from easy_panel_app.config import (
     ANIMA_TAG_DATA,
@@ -2641,6 +2642,25 @@ def tag_category_map() -> dict[str, int]:
         if tag:
             mapping[tag] = int(item.get("category") or 0)
     return mapping
+
+
+def classify_known_tags(terms: list[str]) -> list[dict[str, str]]:
+    """Move only known, confidently classified Danbooru tags."""
+    known = tag_category_map()
+    results = []
+    for raw in terms:
+        tag = str(raw or "").strip()[:200]
+        key = re.sub(r"\s+", "_", tag.lower())
+        danbooru_category = known.get(key)
+        section, _, confidence = classify_tag(tag)
+        if danbooru_category == 4:
+            section = "subject"
+        elif danbooru_category == 1:
+            section = "style"
+        elif danbooru_category is None or confidence < 0.9 or section in {"negative", "other"}:
+            section = "manual"
+        results.append({"tag": tag, "section": section})
+    return results
 
 
 def dialect_categories() -> dict[str, int]:
@@ -6400,7 +6420,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/argos-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/upload-flux-mask", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/argos-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/upload-flux-mask", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/classify-tags", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -6701,6 +6721,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(illustrious_preflight(data))
             elif self.path == "/api/prompt-compile":
                 self.send_json(compile_prompt(data))
+            elif self.path == "/api/classify-tags":
+                terms = data.get("tags")
+                if not isinstance(terms, list) or len(terms) > 200:
+                    raise ValueError("标签列表必须是最多 200 项的数组。")
+                self.send_json({"results": classify_known_tags(terms)})
             elif self.path == "/api/camera-prompt":
                 self.send_json(camera_control.preview_response(data))
             elif self.path == "/api/visual-tags/rebuild":

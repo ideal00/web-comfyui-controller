@@ -248,7 +248,6 @@
   if (typeof global.document === "undefined") return;
 
   const byId = (id) => global.document.getElementById(id);
-  let undoSnapshot = null;
   let writingField = "";
 
   function setHint(message, error) {
@@ -336,15 +335,15 @@
         });
       }
       const dictCount = Object.keys(resolved).length;
-      const snapshot = {};
       const changed = [];
+      global.EasyPanelHistory?.record();
       for (const field of fields) {
         const next = replaceSegments(field.raw, mapping);
         if (next === field.raw) continue;
         const node = byId(field.id);
         if (!node) continue;
-        snapshot[field.id] = field.raw;
-        node.value = next;
+        node.value = field.id === 'promptNaturalLanguage' || field.id === 'animaNLTags'
+          ? next : (global.EasyPanelQuickActions?.cleanPromptText(next, field.id) || next);
         invalidateFieldUndo(field.id);
         changed.push({ field: field.id, label: field.label, count: field.segments.length });
       }
@@ -354,11 +353,10 @@
         setResult("离线翻译没有产生变化（可能语言包返回了原文）。");
         return false;
       }
-      undoSnapshot = snapshot;
       const summary = summarizeChanges(changed);
       const detail = dictCount ? `${summary}（其中 ${dictCount} 段用本地词表，其余离线机翻）` : summary;
       setHint(detail, false);
-      setResultHtml(`${detail}。<button class="secondary" type="button" onclick="easyPanelUndoOfflineTranslate()">撤销本次翻译</button>`);
+      setResult(`${detail}。可用顶部 ↶ 撤销。`);
       return true;
     } catch (error) {
       setHint("离线翻译失败：" + (error && error.message ? error.message : error), true);
@@ -409,20 +407,6 @@
     markUserTouched();
     const button = global.document.querySelector(`[data-translate-field="${fieldId}"]`);
     const current = String(field.value == null ? "" : field.value);
-    // 再点一次 = 撤销（仅当内容还是上次翻译的结果；手动改过就重新翻，不会覆盖你的修改）
-    const previous = fieldUndo[fieldId];
-    if (previous && current === previous.translated) {
-      field.value = previous.original;
-      delete fieldUndo[fieldId];
-      writingField = fieldId;
-      try {
-        if (global.promptEditorChanged) global.promptEditorChanged();
-      } finally {
-        writingField = "";
-      }
-      setFieldHint(fieldId, `已撤销，回到 ${previous.original.split(",").length} 个词条的原文`, false);
-      return true;
-    }
     if (!current.trim()) {
       setFieldHint(fieldId, "框是空的：先填入中文或点「粘贴」", false);
       return false;
@@ -456,14 +440,16 @@
       }
       writingField = fieldId;
       try {
-        field.value = next;
+        global.EasyPanelHistory?.record();
+        field.value = fieldId === 'promptNaturalLanguage' || fieldId === 'animaNLTags'
+          ? next : (global.EasyPanelQuickActions?.cleanPromptText(next, fieldId) || next);
         if (global.promptEditorChanged) global.promptEditorChanged();
       } finally {
         writingField = "";
       }
-      fieldUndo[fieldId] = { original: current, translated: next };
+      delete fieldUndo[fieldId];
       const dictCount = Object.keys(resolved).length;
-      setFieldHint(fieldId, `已翻译 ${segments.length} 段（词表 ${dictCount}）· 再点可撤销`, false);
+      setFieldHint(fieldId, `已翻译 ${segments.length} 段（词表 ${dictCount}）· 可用顶部 ↶ 撤销`, false);
       return true;
     } catch (error) {
       setFieldHint(fieldId, "翻译失败：" + (error && error.message ? error.message : error), true);
@@ -476,22 +462,6 @@
     }
   }
 
-  function undoTranslation() {
-    if (!undoSnapshot) {
-      setHint("没有可撤销的翻译。", false);
-      return false;
-    }
-    for (const [id, value] of Object.entries(undoSnapshot)) {
-      const node = byId(id);
-      if (node) node.value = value;
-    }
-    undoSnapshot = null;
-    if (global.promptEditorChanged) global.promptEditorChanged();
-    setHint("已撤销本次离线翻译。", false);
-    setResult("已撤销本次离线翻译。");
-    return true;
-  }
-
   /** 面板加载时探测一次：按钮可用性 + 路径/语言对提示。 */
   async function probeStatus() {
     try {
@@ -502,7 +472,7 @@
       for (const button of global.document.querySelectorAll("[data-translate-field]")) {
         button.disabled = !info.available;
         button.title = info.available
-          ? "中文框 → 翻成英文；纯英文框 → 展开中文对照（点词条行可删除）。再点可撤销上一次翻译。"
+          ? "中文框 → 翻成英文；纯英文框 → 展开中文对照（点词条行可删除）。可用顶部 ↶ 撤销。"
           : "离线翻译不可用：" + label;
       }
       return info;
@@ -515,7 +485,6 @@
   global.translateArgosOffline = translateOffline;
   global.translateArgosSections = translateSections;
   global.translateArgosField = translateField;
-  global.easyPanelUndoOfflineTranslate = undoTranslation;
   global.easyPanelArgosStatus = probeStatus;
   global.easyPanelArgosRefresh = probeStatus;
   // 解析词条（prompt-explain.js）复用同一套分批请求，不再自己拼请求。

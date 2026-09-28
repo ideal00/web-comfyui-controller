@@ -15,9 +15,6 @@
   const lockedValues = {};
   let trustedRestore = 0;
   let pending = null;
-  let history = [];
-  let nameHistory = [];
-  let historyIndex = -1;
   let presetNames = {};
   let drag = null;
   let tagLocks = {};
@@ -140,7 +137,7 @@
     renderPresetNames();
     if (typeof global.promptEditorChanged === 'function') global.promptEditorChanged();
   }
-  function write(key, tokens) { if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return; } field(key).value = serialize(tokens); changed(); }
+  function write(key, tokens) { if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return; } global.EasyPanelHistory?.record(); field(key).value = serialize(tokens); changed(); }
   function addTag(key, value) {
     if (!SECTIONS[key]) return false;
     if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
@@ -191,6 +188,7 @@
       next = `(${next}:${weight})`;
     }
     const target = dialog.querySelector('[data-chip="section"]').value;
+    global.EasyPanelHistory?.record();
     if (target === key) {
       tokens[index] = next;
       if (isTagLocked(key, original) && normalized(next) !== normalized(original)) {
@@ -265,6 +263,7 @@
     if (isLocked(fromKey) || isLocked(toKey)) { status('目标分区已锁定，请先解锁。'); return; }
     const source = tokenize(field(fromKey).value), [item] = source.splice(fromIndex, 1);
     if (!item) return;
+    global.EasyPanelHistory?.record();
     if (fromKey === toKey) { source.splice(fromIndex < toIndex ? toIndex - 1 : toIndex, 0, item); field(fromKey).value = serialize(source); }
     else { const target = tokenize(field(toKey).value); target.splice(toIndex, 0, item); field(fromKey).value = serialize(source); field(toKey).value = serialize(target); if (isTagLocked(fromKey, item)) { tagLocks[fromKey] = (tagLocks[fromKey] || []).filter(value => value !== normalized(item)); tagLocks[toKey] = [...new Set([...(tagLocks[toKey] || []), normalized(item)])]; persistTagLocks(); } }
     changed();
@@ -296,6 +295,7 @@
     if (!selection.key || !SECTIONS[targetKey] || targetKey === selection.key) return;
     const key = selection.key, selected = selectedTokens(), remaining = tokenize(field(key).value).filter((_, index) => !selection.indices.has(index));
     const target = tokenize(field(targetKey).value);
+    global.EasyPanelHistory?.record();
     field(key).value = serialize(remaining); field(targetKey).value = serialize([...target, ...selected]);
     selected.forEach(token => { if (isTagLocked(key, token)) { tagLocks[key] = (tagLocks[key] || []).filter(value => value !== normalized(token)); tagLocks[targetKey] = [...new Set([...(tagLocks[targetKey] || []), normalized(token)])]; } });
     persistTagLocks(); changed(); status(`已将 ${selected.length} 个词条移到${LABELS[targetKey]}。`);
@@ -349,9 +349,9 @@
     const candidates = [...new Set(pool(key).flatMap(item => tokenize(item.text)).filter(token => kind(token) === 'tag' && !protectedLabel(token) && !existing.has(normalized(token))))];
     if (!candidates.length) { status('这个分区没有其他可用标签；先保存更多个人预设或组件。'); return false; }
     const next = candidates[Math.floor(Math.random() * candidates.length)];
-    if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
-    terms[index] = next; field(key).value = serialize(terms); record(); changed();
-    status(`已将「${current}」换为「${next}」；点击“上一个”可恢复。`);
+    global.EasyPanelHistory?.record();
+    terms[index] = next; field(key).value = serialize(terms); changed();
+    status(`已将「${current}」换为「${next}」；可用顶部 ↶ 撤销。`);
     return true;
   }
   function stage(keys) {
@@ -363,28 +363,18 @@
     changes.forEach(item => { const row = document.createElement('div'); row.textContent = `${LABELS[item.key]} · ${item.choice.name}\n${item.before || '（空）'} → ${item.choice.text}`; list.append(row); });
     status(`预览 ${changes.length} 个分区的变化；确认后才会写入。`);
   }
-  function snapshot() { return Object.fromEntries(Object.entries(SECTIONS).map(([key,id]) => [key, document.getElementById(id).value])); }
-  function record() {
-    renderPresetNames();
-    history = history.slice(0, historyIndex + 1);
-    nameHistory = nameHistory.slice(0, historyIndex + 1);
-    history.push(snapshot()); nameHistory.push({...presetNames});
-    if (history.length > 12) { history.shift(); nameHistory.shift(); }
-    historyIndex = history.length - 1;
-  }
   function randomSectionNow(key) {
     if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
     const choice = candidate(key);
     if (!choice) { status(lockedTerms(key).length ? `${LABELS[key]}没有同时保留锁定词条的其他预设或组件。` : `${LABELS[key]}没有其他可用的个人预设或组件；先保存一个不同内容的预设。`); return false; }
-    if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
+    global.EasyPanelHistory?.record();
     field(key).value = choice.text;
     presetNames[key] = {name:choice.name, text:choice.text};
-    record();
     pending = null;
     const preview = document.getElementById('promptVariationPreview');
     if (preview) preview.hidden = true;
     changed();
-    status(`已将${LABELS[key]}换成「${choice.name}」；点击“上一个”可恢复。`);
+    status(`已将${LABELS[key]}换成「${choice.name}」；可用顶部 ↶ 撤销。`);
     return true;
   }
   function accept() {
@@ -392,14 +382,9 @@
     if (pending.some(item => isLocked(item.key))) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('分区已锁定，请重新随机预览。'); return; }
     if (pending.some(item => field(item.key).value !== item.before)) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('分区内容已变化，请重新随机预览。'); return; }
     if (pending.some(item => lockedTerms(item.key).some(token => !tokenize(item.choice.text).some(candidate => normalized(candidate) === normalized(token))))) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('锁定词条已变化，请重新随机预览。'); return; }
-    if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
+    global.EasyPanelHistory?.record();
     pending.forEach(item => { field(item.key).value = item.choice.text; presetNames[item.key] = {name:item.choice.name, text:item.choice.text}; });
-    record(); pending = null; document.getElementById('promptVariationPreview').hidden = true; changed(); status('已应用变体；可以用上一个恢复。');
-  }
-  function navigate(step) {
-    const next = historyIndex + step; if (next < 0 || next >= history.length) return;
-    historyIndex = next; Object.entries(history[next]).forEach(([key,value]) => { field(key).value = value; });
-    presetNames = {...nameHistory[next]}; changed(); status(`已回到历史 ${next + 1}/${history.length}。`);
+    pending = null; document.getElementById('promptVariationPreview').hidden = true; changed(); status('已应用变体；可用顶部 ↶ 撤销。');
   }
   function randomUnlocked() {
     let keys = Object.keys(SECTIONS).filter(key => !locks[key] && eligibleCandidates(key).length);
@@ -425,6 +410,7 @@
       if (!editingChip) return;
       const {key,index,original} = editingChip, tokens = tokenize(field(key).value);
       if (tokens[index] !== original) { status('词条已变化，请重新打开编辑。'); dialog.close(); return; }
+      global.EasyPanelHistory?.record();
       tokens.splice(index, 1); field(key).value = serialize(tokens); dialog.close(); changed(); status('已删除词条。');
     };
     dialog.querySelector('[data-chip="copy"]').onclick = async () => {
@@ -446,7 +432,7 @@
     const grid = document.getElementById('promptSectionGrid'); if (!grid) return;
     initChipEditor();
     const bar = document.createElement('div'); bar.className = 'prompt-variation-bar';
-    bar.innerHTML = '<button type="button" class="secondary" data-action="pose">🎲 换一个姿势</button><button type="button" data-action="scene">🎲 换一个画面</button><label>变化程度 <select id="promptVariationStrength"><option value="light">轻微 · 1 个分区</option><option value="normal" selected>标准 · 最多 3 个</option><option value="bold">大胆 · 所有未锁定分区</option></select></label><button type="button" class="secondary" data-action="prev">◀ 上一个</button><button type="button" class="secondary" data-action="next">下一个 ▶</button><span id="promptVariationStatus" class="small" role="status"></span>';
+    bar.innerHTML = '<button type="button" class="secondary" data-action="pose">🎲 换一个姿势</button><button type="button" data-action="scene">🎲 换一个画面</button><label>变化程度 <select id="promptVariationStrength"><option value="light">轻微 · 1 个分区</option><option value="normal" selected>标准 · 最多 3 个</option><option value="bold">大胆 · 所有未锁定分区</option></select></label><span id="promptVariationStatus" class="small" role="status"></span>';
     grid.before(bar);
     const preview = document.createElement('div'); preview.id = 'promptVariationPreview'; preview.className = 'prompt-variation-preview'; preview.hidden = true;
     preview.innerHTML = '<div class="prompt-variation-list"></div><button type="button" data-action="accept">接受变体</button><button type="button" class="secondary" data-action="reroll">再随机</button><button type="button" class="secondary" data-action="cancel">取消</button>';
@@ -463,8 +449,6 @@
     selectionBar.querySelector('[data-action="clear"]').onclick = () => { clearSelection(); renderAll(); };
     bar.querySelector('[data-action="pose"]').onclick = () => randomSectionNow('pose');
     bar.querySelector('[data-action="scene"]').onclick = randomUnlocked;
-    bar.querySelector('[data-action="prev"]').onclick = () => navigate(-1);
-    bar.querySelector('[data-action="next"]').onclick = () => navigate(1);
     preview.querySelector('[data-action="accept"]').onclick = accept;
     preview.querySelector('[data-action="reroll"]').onclick = () => stage(pending.map(item => item.key));
     preview.querySelector('[data-action="cancel"]').onclick = () => { pending = null; preview.hidden = true; status('已取消变体预览。'); };
@@ -488,6 +472,6 @@
       chips.ondrop = event => { event.preventDefault(); if (drag) moveChip(drag.key, drag.index, key, tokenize(field(key).value).length); drag = null; };
     });
   }
-  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, presetName, isLocked, isFieldLocked, restoreLocked, beginTrustedRestore, endTrustedRestore, init};
+  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, randomUnlocked, renderAll, presetName, isLocked, isFieldLocked, restoreLocked, beginTrustedRestore, endTrustedRestore, init};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })(window);

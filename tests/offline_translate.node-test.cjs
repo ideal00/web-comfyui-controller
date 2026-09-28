@@ -121,12 +121,13 @@ test('按框翻译：每个框都有独立状态位（不再写全局 tokenHint�
   assert.ok(source.includes('data-translate-status="${fieldId}"'))
 })
 
-test('按框翻译：只翻该框的中文片段，再点一次撤销', () => {
+test('按框翻译：只翻该框的中文片段，使用全局撤销', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
   assert.ok(source.includes('async function translateField(fieldId)'))
   assert.ok(source.includes('global.translateArgosField = translateField'))
   assert.ok(source.includes('delete fieldUndo[fieldId]'))
-  assert.ok(source.includes('再点可撤销上一次翻译'))
+  assert.ok(source.includes('EasyPanelHistory?.record()'))
+  assert.ok(source.includes('可用顶部 ↶ 撤销'))
   assert.ok(source.includes('中文框 → 翻成英文；纯英文框 → 展开中文对照（点词条行可删除）'))
   assert.ok(source.includes('data-translate-field='))
   // 按框翻译只改动该框：写回的是同一个 field 节点
@@ -166,7 +167,7 @@ test('面板：模型目录加载完的“家庭状态恢复”不再顶掉用�
   assert.ok(source.includes('function markPromptTouched(){promptTouchedSinceLoad=true}'))
   assert.ok(source.includes("document.addEventListener('input',(event)=>{const id=event.target&&event.target.id;"))
   assert.ok(source.includes('if(firstLoad&&promptTouchedSinceLoad)'))
-  assert.ok(source.includes('else restorePromptFamilyState(nextFamily)'))
+  assert.ok(source.includes('try{restorePromptFamilyState(nextFamily)}'))
 })
 
 test('长提示词自动分批：32 段一批顺序请求，结果按原序合并', () => {
@@ -247,7 +248,8 @@ test('页面接线：一个入口按钮 + 每框状态位 + 脚本', () => {
 test('模块对接面板现有流程', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
   assert.ok(source.includes('/api/argos-translate'))
-  assert.ok(source.includes('easyPanelUndoOfflineTranslate'))
+  assert.ok(!source.includes('easyPanelUndoOfflineTranslate'))
+  assert.ok(source.includes('EasyPanelHistory?.record()'))
   assert.ok(source.includes('translated = {'))
   assert.ok(source.includes('promptEditorChanged'))
 })

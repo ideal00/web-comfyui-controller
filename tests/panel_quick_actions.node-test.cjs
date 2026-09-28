@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function load(file, ids = {}) {
-  const stored = new Map();
+function load(file, ids = {}, initial = {}) {
+  const stored = new Map(Object.entries(initial));
   const listeners = {};
   const context = {
     window: null,
@@ -23,7 +23,7 @@ function load(file, ids = {}) {
   return {context, stored, listeners};
 }
 
-test('recent tags stay deduplicated, bounded, and share the automatic target', () => {
+test('tag usage counts by section and shares the automatic target', () => {
   const target = {value: 'auto'};
   const {context, stored} = load('tag-workflow.js', {tagTarget: target});
   const tags = context.EasyPanelTagWorkflow;
@@ -31,13 +31,35 @@ test('recent tags stay deduplicated, bounded, and share the automatic target', (
   assert.equal(tags.resolve('auto'), 'appearance');
   target.value = 'pose';
   assert.equal(tags.target(), 'pose');
-  tags.record('black pantyhose');
+  tags.record('black pantyhose', 'clothing');
   tags.record('standing');
-  tags.record('BLACK PANTYHOSE');
-  assert.deepEqual(Array.from(tags.recent()), ['BLACK PANTYHOSE', 'standing']);
-  assert.deepEqual(JSON.parse(stored.get('easyPanelRecentTagsV1')), ['BLACK PANTYHOSE', 'standing']);
+  tags.record('BLACK PANTYHOSE', 'clothing');
+  assert.equal(tags.recent().find(item => item.tag === 'BLACK PANTYHOSE').count, 2);
+  assert.equal(tags.recent().find(item => item.tag === 'standing').section, 'pose');
+  assert.equal(JSON.parse(stored.get('easyPanelTagUsageV2')).length, 2);
   tags.toggleFavorite('standing');
   assert.deepEqual(Array.from(tags.favorites()), ['standing']);
+});
+
+test('paste mode persists without a visible per-field select', () => {
+  const {context, stored} = load('panel-quick-actions.js');
+  const quick = context.EasyPanelQuickActions;
+  assert.equal(quick.pasteMode(), 'append');
+  quick.setPasteMode('dedupe');
+  assert.equal(quick.pasteMode(), 'dedupe');
+  assert.equal(stored.get('easyPanelPasteModeV1'), 'dedupe');
+});
+
+test('legacy recent strings migrate to structured usage without losing favorites', () => {
+  const {context, stored} = load('tag-workflow.js', {}, {
+    easyPanelRecentTagsV1: JSON.stringify(['pantyhose', 'sitting']),
+    easyPanelFavoriteTagsV1: JSON.stringify(['pantyhose'])
+  });
+  const tags = context.EasyPanelTagWorkflow;
+  assert.equal(tags.recent()[0].tag, 'pantyhose');
+  assert.equal(tags.recent()[0].section, 'manual');
+  assert.deepEqual(Array.from(tags.favorites()), ['pantyhose']);
+  assert.equal(JSON.parse(stored.get('easyPanelTagUsageV2')).length, 2);
 });
 
 test('last generated seed uses the exact server string, including 63-bit values', () => {

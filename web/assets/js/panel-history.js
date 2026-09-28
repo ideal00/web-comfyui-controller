@@ -2,7 +2,8 @@
 (function (global) {
   'use strict';
   const PROMPT_IDS = ['promptSubject','promptAppearance','promptExpression','promptClothing','promptPose',
-    'promptComposition','promptScene','promptLighting','promptStyle','promptNaturalLanguage','prompt','negative'];
+    'promptComposition','promptScene','promptLighting','promptStyle','promptNaturalLanguage','prompt','negative',
+    'animaHardTags','animaSoftPhrases','animaNLTags'];
   const CONTROL_IDS = ['size','seed','sampler','scheduler','steps','cfg','illustriousMode','hiresScale',
     'hiresDenoise','hiresPurpose','hiresSteps','hiresCfg','hiresSampler','hiresScheduler','hiresPromptMode',
     'hiresPositive','hiresNegative','hiresCompositionLock'];
@@ -40,6 +41,7 @@
   }
   function restore(state) {
     restoring = true; clearTimeout(timer);
+    global.EasyPanelPromptVariations?.beginTrustedRestore?.();
     try {
       const root = byId('loras');
       if (root && typeof global.addLora === 'function') {
@@ -51,7 +53,7 @@
       }
       Object.entries(state.values).forEach(([id,value]) => {
         const node = byId(id);
-        if (!node || global.EasyPanelPromptVariations?.isFieldLocked(id)) return;
+        if (!node) return;
         if (node.type === 'checkbox') node.checked = !!value;
         else if (id !== 'size') node.value = value;
       });
@@ -68,7 +70,7 @@
       global.promptEditorChanged?.();
       states[index] = snapshot();
       updateButtons();
-    } finally { restoring = false; }
+    } finally { global.EasyPanelPromptVariations?.endTrustedRestore?.(); restoring = false; }
   }
   function step(direction) {
     clearTimeout(timer);
@@ -113,6 +115,9 @@
     document.addEventListener('change', event => {
       if (event.target?.closest?.('#promptSectionGrid, #loras, #generationSection')) schedule();
     });
+    document.addEventListener('click', event => {
+      if (event.target?.closest?.('button:not(#panelUndo):not(#panelRedo)')) record();
+    }, true);
     document.addEventListener('click', event => {
       if (event.target?.closest?.('#panelUndo, #panelRedo')) return;
       if (event.target?.closest?.('button')) schedule();

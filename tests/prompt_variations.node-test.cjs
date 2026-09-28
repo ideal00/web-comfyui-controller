@@ -17,10 +17,11 @@ function load(presets = [], saved = {}) {
     localStorage: {getItem(key) { return saved[key] || null; }, setItem(key, value) { saved[key] = value; }},
     userPromptPresets: presets,
     presetInsertText(item, section) { return section ? item.sections?.[section] : (item.tags?.join(', ') || item.content); },
-    Math
+    Math, setTimeout, clearTimeout
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/assets/js/prompt-variations.js'), 'utf8'), context);
-  return {api: context.window.EasyPanelPromptVariations, elements, context};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/assets/js/panel-history.js'), 'utf8'), context);
+  return {api: context.window.EasyPanelPromptVariations, history: context.window.EasyPanelHistory, elements, context};
 }
 
 test('weighted groups and LoRA tokens remain intact when split', () => {
@@ -50,7 +51,7 @@ test('variation pool uses whole presets and bundle dialect text', () => {
 });
 
 test('section dice replaces its own field immediately and history restores it', () => {
-  const {api, elements} = load([{category: 'pose', name: 'Sit', content: 'sitting, legs crossed'}]);
+  const {api, history, elements} = load([{category: 'pose', name: 'Sit', content: 'sitting, legs crossed'}]);
   elements.promptPose.value = 'standing';
   elements.promptScene.value = 'beach';
   assert.equal(api.randomSectionNow('pose'), true);
@@ -59,11 +60,10 @@ test('section dice replaces its own field immediately and history restores it', 
   assert.equal(elements.promptPresetName_pose.textContent, '预设：Sit');
   assert.equal(elements.promptPresetName_pose.hidden, false);
   assert.equal(elements.promptScene.value, 'beach');
-  api.navigate(-1);
+  history.step(-1);
   assert.equal(elements.promptPose.value, 'standing');
-  assert.equal(api.presetName('pose'), '');
-  assert.equal(elements.promptPresetName_pose.hidden, true);
-  api.navigate(1);
+  history.step(1);
+  assert.equal(elements.promptPose.value, 'sitting, legs crossed');
   assert.equal(api.presetName('pose'), 'Sit');
   elements.promptPose.value = 'sitting, legs crossed, smiling';
   api.renderAll();
@@ -75,14 +75,14 @@ test('section dice replaces its own field immediately and history restores it', 
 
 test('tag dice changes only one token and locked tags constrain section variants', () => {
   const presets = [{category:'pose', name:'Sit', content:'sitting, looking at viewer'}];
-  const {api, elements} = load(presets, {
+  const {api, history, elements} = load(presets, {
     easyPanelVariationTagLocksV1: JSON.stringify({pose:['looking at viewer']})
   });
   elements.promptPose.value = 'standing, looking at viewer';
   assert.equal(api.randomTagNow('pose', 1), false);
   assert.equal(api.randomTagNow('pose', 0), true);
   assert.equal(elements.promptPose.value, 'sitting, looking at viewer');
-  api.navigate(-1);
+  history.step(-1);
   assert.equal(elements.promptPose.value, 'standing, looking at viewer');
   assert.equal(api.randomSectionNow('pose'), true);
   assert.equal(elements.promptPose.value, 'sitting, looking at viewer');
@@ -114,6 +114,19 @@ test('locking a section blocks direct randomization and tag insertion', () => {
   elements.promptPose.value = 'running';
   api.restoreLocked();
   assert.equal(elements.promptPose.value, 'kneeling');
+});
+
+test('global history restores a locked section through the trusted restore path', () => {
+  const {api, history, elements} = load([], {easyPanelVariationLocksV1: JSON.stringify({pose:true})});
+  elements.promptPose.value = 'standing';
+  api.beginTrustedRestore(); api.endTrustedRestore();
+  history.record();
+  elements.promptPose.value = 'sitting';
+  history.record();
+  assert.equal(history.step(-1), true);
+  assert.equal(elements.promptPose.value, 'standing');
+  api.renderAll();
+  assert.equal(elements.promptPose.value, 'standing');
 });
 
 test('chip editor reuses the color modifier for replacement and removal', () => {

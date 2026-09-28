@@ -12,6 +12,7 @@
   const previewCache = new Map();
   let chipPicker = null;
   let advancedSequence = 0;
+  let advancedIndex = -1;
   let relatedSequence = 0;
   let previewSequence = 0;
   let previewTimer = null;
@@ -426,21 +427,24 @@
     const input = document.getElementById('tagSearch'), root = document.getElementById('tagResults');
     if (!input || !root) return;
     const query = input.value.trim(), sequence = ++advancedSequence;
-    if (!query) { root.textContent = '输入英文或中文标签后选择结果。'; return; }
+    if (!query) { advancedIndex = -1; root.textContent = '输入英文或中文标签后选择结果。'; return; }
+    advancedIndex = -1; root.textContent = '正在搜索…';
     const items = await search(query);
     if (sequence !== advancedSequence) return;
     root.replaceChildren();
+    advancedIndex = -1;
     if (!items.length) { root.textContent = '没有找到匹配标签。'; return; }
     items.forEach(item => {
       const row = document.createElement('div'); row.className = 'easy-advanced-result';
       const insert = document.createElement('button'); insert.type = 'button';
+      insert.dataset.tag = item.tag;
       const name = document.createElement('span'); name.className = 'easy-tag-name'; name.textContent = item.tag;
       const meta = document.createElement('small'); meta.className = 'easy-tag-meta'; meta.textContent = `${item.translation || item.category || ''} · ${Number(item.count || 0).toLocaleString()}`;
       insert.append(name, meta);
       insert.onclick = () => {
         const section = global.EasyPanelTagWorkflow?.target() || document.getElementById('tagTarget')?.value || 'manual';
         if (global.appendEnglish?.(formatTag(item), section)) {
-          global.EasyPanelTagWorkflow?.record(item.tag);
+          global.EasyPanelTagWorkflow?.record(item.tag, section);
           insert.classList.add('tag-search-added');
           insert.title = `已加入${global.sectionLabel?.(section) || section}；可继续选择`;
         }
@@ -448,6 +452,15 @@
       const image = document.createElement('button'); image.type = 'button'; image.textContent = '🖼'; image.title = '查看图片与相关标签'; image.onclick = () => openVisual(item);
       row.append(insert,image); root.append(row);
     });
+  }
+  function chooseAdvanced(direction) {
+    const rows = [...document.querySelectorAll('#tagResults .easy-advanced-result')];
+    if (!rows.length) return false;
+    advancedIndex = advancedIndex < 0 ? (direction > 0 ? 0 : rows.length - 1)
+      : (advancedIndex + direction + rows.length) % rows.length;
+    rows.forEach((row,index) => row.classList.toggle('keyboard-active', index === advancedIndex));
+    rows[advancedIndex].scrollIntoView?.({block:'nearest'});
+    return true;
   }
   async function showRelated(field, completion, tagOverride) {
     const tag = tagOverride || tagAtCursor(field); if (!tag) return;
@@ -484,6 +497,18 @@
   }
   function init() {
     collapseAdvancedSearch();
+    document.getElementById('tagSearch')?.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (chooseAdvanced(event.key === 'ArrowDown' ? 1 : -1)) event.preventDefault();
+      } else if (event.key === 'Enter') {
+        const rows = [...document.querySelectorAll('#tagResults .easy-advanced-result')];
+        const button = rows[Math.max(0, advancedIndex)]?.querySelector('button[data-tag]');
+        if (!button) return;
+        event.preventDefault(); event.stopPropagation();
+        if (event.shiftKey) global.EasyPanelTagWorkflow?.toggleFavorite(button.dataset.tag);
+        else button.click();
+      }
+    });
     Object.keys(FIELD_KEYS).forEach(id => { const field = document.getElementById(id); if (field) createCompletion(field); });
     global.searchTags = renderAdvancedSearch;
     document.addEventListener('keydown', event => {

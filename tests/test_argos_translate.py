@@ -203,7 +203,7 @@ class ArgosWiringTests(unittest.TestCase):
             # 状态位就挂在同行的「翻译」按钮后面，提示不再写到全局标题栏
             self.assertIn(f'data-translate-status="{field}"', page)
         script = (ROOT / "web/assets/js/offline-translate.js").read_text(encoding="utf-8")
-        for marker in ("/api/argos-translate", "easyPanelUndoOfflineTranslate",
+        for marker in ("/api/argos-translate", "EasyPanelHistory?.record()",
                        "promptEditorChanged", "naturalLanguage", "global.translateArgosField",
                        "function setFieldHint(fieldId, message, error)",
                        "async function requestTranslations(items, options)",

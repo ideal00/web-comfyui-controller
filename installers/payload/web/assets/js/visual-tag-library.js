@@ -282,7 +282,7 @@
     const section = window.EasyPanelTagWorkflow?.resolve(sectionOverride) || sectionOverride || targetSection();
     const composed = composeColorTag(tag);
     const formatted = formatTag(composed, kind);
-    if (typeof window.appendEnglish === "function" && window.appendEnglish(formatted, section)) window.EasyPanelTagWorkflow?.record(tag);
+    if (typeof window.appendEnglish === "function" && window.appendEnglish(formatted, section)) window.EasyPanelTagWorkflow?.record(tag, section);
     const steps = [];
     if (composed !== tag) steps.push(`${tag} → ${composed}（颜色修饰）`);
     if (formatted !== composed) steps.push(`${composed} → ${formatted}（按 ${dialectLabel()} 转换）`);
@@ -714,6 +714,7 @@
           <select id="vtlTarget" title="插入到哪个提示词分区"></select>
           <button type="button" id="vtlRebuild" class="vtl-ghost" title="源文档有改动时重建本地索引">重建索引</button>
         </div>
+        <div id="vtlFrequent" class="tag-recent"></div>
         <div id="vtlStatus" class="vtl-status"></div>
         <div id="vtlSuggest" class="vtl-suggest-row" hidden></div>
         <div id="vtlThumbHint" class="vtl-thumb-hint"></div>
@@ -736,6 +737,7 @@
         </footer>
       </div>`;
     document.body.appendChild(overlay);
+    window.EasyPanelTagWorkflow?.render();
 
     const target = byId("vtlTarget");
     const source = byId("tagTarget");
@@ -744,6 +746,7 @@
       target.value = source.value;
       target.addEventListener("change", () => {
         source.value = target.value;
+        window.EasyPanelTagWorkflow?.render();
         if (typeof window.promptEditorChanged === "function") window.promptEditorChanged();
         renderGrid();
         renderFooter();

@@ -1,6 +1,10 @@
 (function (global) {
   'use strict';
   const byId = id => document.getElementById(id);
+  const PASTE_MODE_KEY = 'easyPanelPasteModeV1';
+  const pasteModes = ['append', 'replace', 'dedupe'];
+  function pasteMode() { try { const value = localStorage.getItem(PASTE_MODE_KEY); return pasteModes.includes(value) ? value : 'append'; } catch (_) { return 'append'; } }
+  function setPasteMode(value) { if (!pasteModes.includes(value)) return; try { localStorage.setItem(PASTE_MODE_KEY, value); } catch (_) {} }
   let lastGeneratedSeed = '';
   let previousSeed = '';
   try { lastGeneratedSeed = sessionStorage.getItem('easyPanelLastGeneratedSeedV1') || ''; } catch (_) {}
@@ -56,6 +60,68 @@
     if (hint) hint.textContent = `已清洗为${global.EasyPanelDialect?.describe?.() || '当前模型'}格式。`;
     return true;
   }
+  function cleanBeforeGenerate() {
+    let changed = false;
+    global.EasyPanelPromptVariations?.beginTrustedRestore?.();
+    try {
+      for (const id of ['promptSubject','promptAppearance','promptExpression','promptClothing','promptPose',
+        'promptComposition','promptScene','promptLighting','promptStyle','prompt','negative','animaHardTags','animaSoftPhrases']) {
+        const field = byId(id); if (!field) continue;
+        const next = cleanPromptText(field.value, id);
+        if (next !== field.value) { if (!changed) global.EasyPanelHistory?.record(); field.value = next; changed = true; }
+      }
+      if (changed) global.promptEditorChanged?.();
+    } finally { global.EasyPanelPromptVariations?.endTrustedRestore?.(); }
+    return changed;
+  }
+  const SECTION_FIELDS = {subject:'promptSubject',appearance:'promptAppearance',expression:'promptExpression',
+    clothing:'promptClothing',pose:'promptPose',composition:'promptComposition',scene:'promptScene',
+    lighting:'promptLighting',style:'promptStyle',manual:'prompt'};
+  function terms(value) { return String(value || '').split(/[,;\n]+/).map(item => item.trim()).filter(Boolean); }
+  async function organizePromptField(id) {
+    const source = byId(id), hint = byId('tokenHint');
+    if (!source || !Object.values(SECTION_FIELDS).includes(id) || !source.value.trim()) return;
+    const before = source.value, input = terms(before);
+    try {
+      const response = await fetch('/api/classify-tags', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tags:input})});
+      const data = await response.json();
+      if (!response.ok || data.error || !Array.isArray(data.results)) throw Error(data.error || '分类失败');
+      if (source.value !== before) { if (hint) hint.textContent = '内容已变化，请重新整理。'; return; }
+      const affected = Object.values(SECTION_FIELDS);
+      const baseline = Object.fromEntries(affected.map(fieldId => [fieldId, byId(fieldId)?.value || '']));
+      const planned = Object.fromEntries(affected.map(fieldId => [fieldId, fieldId === id ? [] : terms(baseline[fieldId])]));
+      const groups = new Map();
+      data.results.forEach((item,index) => {
+        const tag = input[index]; if (!tag) return;
+        let destination = SECTION_FIELDS[item.section] || SECTION_FIELDS.manual;
+        const key = tag.toLowerCase().replace(/_/g,' ').replace(/\s+/g,' ');
+        if (!planned[destination].some(existing => existing.toLowerCase().replace(/_/g,' ').replace(/\s+/g,' ') === key)) planned[destination].push(tag);
+        if (!groups.has(destination)) groups.set(destination, []);
+        groups.get(destination).push(tag);
+      });
+      const changes = affected.filter(fieldId => planned[fieldId].join(', ') !== terms(baseline[fieldId]).join(', '));
+      if (!changes.length) { if (hint) hint.textContent = '这些标签已在合适的分区。'; return; }
+      const dialog = document.createElement('dialog'); dialog.className = 'prompt-organize-preview';
+      const heading = document.createElement('h3'); heading.textContent = '整理到分区 · 预览'; dialog.append(heading);
+      groups.forEach((values,fieldId) => { const row = document.createElement('p'); row.textContent = `${global.sectionLabel?.(Object.keys(SECTION_FIELDS).find(key => SECTION_FIELDS[key] === fieldId)) || fieldId}：${values.join(', ')}`; dialog.append(row); });
+      const actions = document.createElement('div'); actions.className = 'actions';
+      const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认整理';
+      const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = '取消';
+      confirm.onclick = () => {
+        if (affected.some(fieldId => (byId(fieldId)?.value || '') !== baseline[fieldId])) { if (hint) hint.textContent = '分区内容已变化，请重新整理。'; dialog.close(); return; }
+        global.EasyPanelHistory?.record();
+        global.EasyPanelPromptVariations?.beginTrustedRestore?.();
+        try {
+          changes.forEach(fieldId => { byId(fieldId).value = planned[fieldId].join(', '); });
+          global.promptEditorChanged?.();
+        } finally { global.EasyPanelPromptVariations?.endTrustedRestore?.(); }
+        dialog.close();
+        if (hint) hint.textContent = `已整理 ${input.length} 个标签；未识别的保留在其他补充。`;
+      };
+      cancel.onclick = () => dialog.close(); dialog.onclose = () => dialog.remove();
+      actions.append(confirm,cancel); dialog.append(actions); document.body.append(dialog); dialog.showModal();
+    } catch (error) { if (hint) hint.textContent = `整理失败：${error.message}`; }
+  }
 
   function seedFromHistory(entry) {
     const workflow = Array.isArray(entry?.prompt) ? entry.prompt[2] : entry?.prompt;
@@ -104,30 +170,41 @@
     document.querySelectorAll('.prompt-section-paste').forEach(button => {
       const id = /pastePromptSection\('([^']+)'/.exec(button.getAttribute('onclick') || '')?.[1];
       if (!id || !byId(id)) return;
-      const mode = document.createElement('select'); mode.className = 'prompt-section-paste-mode'; mode.dataset.field = id;
-      mode.title = '粘贴方式'; mode.setAttribute('aria-label', `${id} 粘贴方式`);
+      const menu = document.createElement('details'); menu.className = 'prompt-section-more';
+      const summary = document.createElement('summary'); summary.textContent = '⋯'; summary.title = '更多分区操作';
+      const actions = document.createElement('div'); actions.className = 'prompt-section-more-actions';
+      const clear = button.parentElement?.querySelector('.prompt-section-clear');
+      if (clear) actions.append(clear);
+      if (id !== 'promptNaturalLanguage') {
+        const clean = document.createElement('button'); clean.type = 'button'; clean.className = 'prompt-section-clean';
+        clean.textContent = '清洗格式'; clean.onclick = () => { cleanPromptField(id); menu.open = false; };
+        actions.append(clean);
+      }
+      if (Object.values(SECTION_FIELDS).includes(id)) {
+        const organize = document.createElement('button'); organize.type = 'button'; organize.textContent = '整理到分区';
+        organize.onclick = () => { menu.open = false; organizePromptField(id); }; actions.append(organize);
+      }
+      const modeLabel = document.createElement('span'); modeLabel.className = 'small'; modeLabel.textContent = '粘贴方式'; actions.append(modeLabel);
       [['append', '追加'], ['replace', '覆盖'], ['dedupe', '去重']].forEach(([value, label]) => {
-        const option = document.createElement('option'); option.value = value; option.textContent = label; mode.append(option);
+        const option = document.createElement('button'); option.type = 'button'; option.textContent = (pasteMode() === value ? '✓ ' : '') + label;
+        option.dataset.pasteMode = value; option.onclick = () => {
+          setPasteMode(value);
+          document.querySelectorAll('.prompt-section-more [data-paste-mode]').forEach(button => {
+            button.textContent = (button.dataset.pasteMode === value ? '✓ ' : '') + ({append:'追加',replace:'覆盖',dedupe:'去重'}[button.dataset.pasteMode] || '');
+          });
+          menu.open = false;
+        };
+        actions.append(option);
       });
-      button.after(mode);
-      const clean = document.createElement('button'); clean.type = 'button';
-      clean.className = 'prompt-section-clean'; clean.textContent = '清洗格式';
-      clean.title = '按当前模型方言整理分隔符和标签写法';
-      clean.setAttribute('aria-label', `${id} 清洗为当前模型标签格式`);
-      clean.onclick = () => cleanPromptField(id);
-      mode.after(clean);
-    });
-    ['animaHardTags', 'animaSoftPhrases', 'animaNLTags'].forEach(id => {
-      const field = byId(id), label = field?.previousElementSibling?.querySelector?.('span');
-      if (!label || label.querySelector('.prompt-section-clean')) return;
-      const clean = document.createElement('button'); clean.type = 'button';
-      clean.className = 'prompt-section-clean'; clean.textContent = '清洗格式';
-      clean.title = '按当前模型方言清洗此提示词框';
-      clean.onclick = () => cleanPromptField(id);
-      label.append(clean);
+      menu.append(summary, actions); button.after(menu);
+      button.addEventListener('contextmenu', event => { event.preventDefault(); menu.open = true; });
+      let hold;
+      button.addEventListener('pointerdown', event => { if (event.pointerType === 'touch') hold = setTimeout(() => { button.dataset.longPress = '1'; menu.open = true; }, 500); });
+      ['pointerup','pointercancel','pointerleave'].forEach(name => button.addEventListener(name, () => clearTimeout(hold)));
+      button.addEventListener('click', event => { if (button.dataset.longPress) { event.preventDefault(); event.stopImmediatePropagation(); delete button.dataset.longPress; } }, true);
     });
   }
-  global.EasyPanelQuickActions = {seedFromHistory, recordGeneratedSeed, setSeed, restorePreviousSeed, finishClearFocus, readFirstClipboardText, cleanPromptText, cleanPromptField, init};
+  global.EasyPanelQuickActions = {seedFromHistory, recordGeneratedSeed, setSeed, restorePreviousSeed, finishClearFocus, readFirstClipboardText, cleanPromptText, cleanPromptField, cleanBeforeGenerate, organizePromptField, pasteMode, setPasteMode, init};
   if (typeof module !== 'undefined' && module.exports) module.exports = global.EasyPanelQuickActions;
   if (typeof document === 'undefined') return;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
