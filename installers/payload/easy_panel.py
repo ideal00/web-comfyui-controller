@@ -1060,7 +1060,19 @@ def task_comfy_submit(item: dict) -> dict:
     snapshot = create_generation_snapshot(payload, prompt_id, plan=plan)
     indexed = index_snapshot_best_effort(snapshot, source_request=payload, status="queued")
     return {"prompt_id": prompt_id, "snapshot_id": snapshot["id"], "plan": plan,
+            "resolved_seed": workflow_primary_seed(workflow),
             "generation_id": indexed.get("generation_id", "")}
+
+
+def workflow_primary_seed(workflow: dict) -> str:
+    """Return the exact integer seed before JSON/JavaScript number precision is lost."""
+    for node in workflow.values():
+        if not isinstance(node, dict) or node.get("class_type") not in {"KSampler", "KSamplerAdvanced"}:
+            continue
+        value = (node.get("inputs") or {}).get("seed")
+        if isinstance(value, int) and value >= 0:
+            return str(value)
+    return ""
 
 
 def wait_for_output_files(images: Any, timeout: float = 6.0) -> tuple[bool, list[str]]:
@@ -6818,6 +6830,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({
                     **result,
                     "snapshot_id": snapshot["id"],
+                    "resolved_seed": workflow_primary_seed(workflow),
                     "plan": plan,
                     **({"generation_id": indexed["generation_id"]}
                        if indexed.get("generation_id") else {}),

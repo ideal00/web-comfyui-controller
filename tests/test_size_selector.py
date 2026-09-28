@@ -60,8 +60,8 @@ class SizeSelectorWiringTests(unittest.TestCase):
 
     def test_both_pages_load_the_selector(self):
         for page in self.pages:
-            self.assertIn('<script src="/assets/js/size-selector.js?v=4"></script>', page)
-            self.assertIn('href="/assets/css/panel.css?v=72"', page)
+            self.assertIn('<script src="/assets/js/size-selector.js?v=5"></script>', page)
+            self.assertIn('href="/assets/css/panel.css?v=75"', page)
 
     def test_payload_copies_are_byte_identical(self):
         self.assertEqual(SCRIPT.read_bytes(), PAYLOAD_SCRIPT.read_bytes())

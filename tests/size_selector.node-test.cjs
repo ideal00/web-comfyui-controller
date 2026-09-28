@@ -124,6 +124,13 @@ test('显存负载口径：Illustrious 1.57MP 中、2.14MP 较高；Anima 同尺
   assert.ok(sizes.vramEstimate(1536, 1024, 'anima').note.includes('中间尺寸'))
 })
 
+test('横竖互换保留精确像素并切换到对应比例', () => {
+  assert.deepEqual(sizes.swappedSize('1344x1792'), {value: '1792x1344', ratio: '4:3'})
+  assert.deepEqual(sizes.swappedSize('1248x1872'), {value: '1872x1248', ratio: '3:2'})
+  assert.deepEqual(sizes.swappedSize('1152x2048'), {value: '2048x1152', ratio: '16:9'})
+  assert.deepEqual(sizes.swappedSize('768x1536'), {value: '1536x768', ratio: '2:1'})
+})
+
 test('Anima 三档首采覆盖七个常用比例，并限制推荐滑块像素预算', () => {
   const expected = {
     '1:1': ['1024x1024', '1536x1536', '1792x1792'],

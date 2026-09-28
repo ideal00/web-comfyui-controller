@@ -56,7 +56,7 @@
   const PANEL_HTML = `
     <div class="size-picker-head"><span class="size-picker-title">图片比例</span><span id="sizeRatioValue" class="small">—</span></div>
     <div id="sizeRatioChips" class="size-ratio-chips" role="group" aria-label="图片比例"></div>
-    <div class="size-picker-row"><span class="size-picker-label">尺寸</span><b id="sizeCurrentValue">—</b><span id="sizeCurrentMp" class="small"></span></div>
+    <div class="size-picker-row"><span class="size-picker-label">尺寸</span><b id="sizeCurrentValue">—</b><span id="sizeCurrentMp" class="small"></span><button id="sizeSwapOrientation" class="size-preset-chip" type="button" title="交换当前宽度和高度">↔ 横竖互换</button></div>
     <div id="sizeVramHint" class="small size-picker-vram"></div>
     <div class="size-picker-row size-picker-range"><span class="small">较小</span><input id="sizeLongEdgeRange" type="range" aria-label="长边像素"><span class="small">较大</span></div>
     <div class="size-picker-row"><span class="size-picker-label">长边</span><input id="sizeLongEdgeNumber" type="number" inputmode="numeric"><span class="small">px</span><span id="sizeLongEdgeHint" class="small"></span></div>
@@ -298,6 +298,13 @@
     const alignment = Math.max(8, Math.round(Number(resolution.alignment) || ALIGNMENT));
     const minSide = Math.max(MIN_SIDE, Math.round(Number(resolution.min) || MIN_SIDE));
     return { maxSide, maxPixels, alignment, minSide };
+  }
+
+  function swappedSize(value) {
+    const match = CUSTOM_VALUE_RE.exec(String(value || ""));
+    if (!match) return null;
+    const width = Number(match[2]), height = Number(match[1]);
+    return {value: `${width}x${height}`, ratio: nearestRatioKey(width, height)};
   }
 
   function maxLongEdge(key, limits) {
@@ -595,6 +602,12 @@
     return applyValue(value, { ratio: key, remember: true });
   }
 
+  function swapOrientation() {
+    if (!elements) return null;
+    const swapped = swappedSize(elements.select.value);
+    return swapped ? applyValue(swapped.value, {ratio: swapped.ratio, remember: true}) : null;
+  }
+
   /**
    * 点比例时的默认档位：**优先第一个严格比例档位**（避免“比例写着 3:2、尺寸却是 1216×832”的错位），
    * 没有严格档位才退回第一个近似档位，返回 null 表示该比例没有可用档位。
@@ -620,6 +633,7 @@
   /* ---------- 安装 ---------- */
 
   function bindEvents() {
+    byId("sizeSwapOrientation")?.addEventListener("click", swapOrientation);
     elements.range.addEventListener("input", () => applyLongEdge(elements.range.value, { remember: false }));
     elements.range.addEventListener("change", () => applyLongEdge(elements.range.value, { remember: true }));
     elements.longInput.addEventListener("change", () => applyLongEdge(elements.longInput.value, { remember: true }));
@@ -726,6 +740,7 @@
     maxLongEdge,
     ratioKeyFromLabel,
     nearestRatioKey,
+    swappedSize,
     isExactForRatio,
     groupPresets,
     vramEstimate,
@@ -737,6 +752,7 @@
     applyLongEdge: (longEdge, options) => applyLongEdge(longEdge, options),
     selectRatio: (key) => selectRatio(key),
     selectPreset: (value, key) => selectPreset(value, key || nearestRatioKey(...String(value).split("x").map(Number))),
+    swapOrientation,
     activeRatio: () => activeRatio,
     presets: () => groups.map((group) => ({ key: group.key, presets: group.presets.slice() })),
     refresh: () => refresh(true),

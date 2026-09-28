@@ -1,4 +1,4 @@
-"""本地精选视觉词条库：把 ``G:\\QK download`` 读成可视化、可搜索的 SQLite 索引。
+"""本地精选视觉词条库：把 ComfyUI 目录中的 ``visual_tag_library`` 读成可搜索索引。
 
 数据形态（每个分类一个文件夹，源数据**只读**）::
 
@@ -44,7 +44,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 #: 源数据默认位置；``EASY_PANEL_VISUAL_TAG_ROOT`` 优先，旧的别名变量也认。
-DEFAULT_LIBRARY_ROOT = Path(r"G:\QK download")
+DEFAULT_LIBRARY_ROOT = PROJECT_DIR.parent / "visual_tag_library"
 ROOT_ENV_KEYS = ("EASY_PANEL_VISUAL_TAG_ROOT", "EASY_PANEL_VISUAL_LIBRARY")
 
 INDEX_FILE = PROJECT_DIR / "visual_tag_index.sqlite"

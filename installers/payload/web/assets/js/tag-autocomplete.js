@@ -114,6 +114,10 @@
   }
   function connectImageButtons(completion, field) {
     const action = target => {
+      if (target.closest?.('[data-autocomplete-close]')) {
+        completion.hide();
+        return true;
+      }
       const related = target.closest?.('[data-autocomplete-related]');
       if (related) {
         const selected = completion.dropdown.getActiveItem() || completion.dropdown.items[0];
@@ -337,7 +341,7 @@
         header(items) {
           const local = items.find(item => item.source === 'local');
           const count = local ? `本地${Number(local.localMatched || 0).toLocaleString()} · ` : '';
-          return `<span class="easy-tag-header-count">${count}${items.length}项</span><span class="easy-tag-header-tools">${colorChoiceMarkup()}<button type="button" data-autocomplete-related="true" title="查看所选标签的相关词" aria-label="查看所选标签的相关词">🔗</button>${local ? '<button type="button" data-autocomplete-all="local" title="在本地图鉴查看全部匹配" aria-label="在本地图鉴查看全部匹配">▦</button>' : ''}</span>`;
+          return `<span class="easy-tag-header-count">${count}${items.length}项</span><span class="easy-tag-header-tools">${colorChoiceMarkup()}<button type="button" data-autocomplete-related="true" title="查看所选标签的相关词" aria-label="查看所选标签的相关词">🔗</button>${local ? '<button type="button" data-autocomplete-all="local" title="在本地图鉴查看全部匹配" aria-label="在本地图鉴查看全部匹配">▦</button>' : ''}<button type="button" data-autocomplete-close="true" title="关闭候选词" aria-label="关闭候选词">×</button></span>`;
         }}
     });
     completion.register([{
@@ -434,8 +438,12 @@
       const meta = document.createElement('small'); meta.className = 'easy-tag-meta'; meta.textContent = `${item.translation || item.category || ''} · ${Number(item.count || 0).toLocaleString()}`;
       insert.append(name, meta);
       insert.onclick = () => {
-        const section = document.getElementById('tagTarget')?.value || 'manual';
-        global.appendEnglish?.(formatTag(item), section); input.value = ''; root.textContent = `已加入${global.sectionLabel?.(section) || section}。`;
+        const section = global.EasyPanelTagWorkflow?.target() || document.getElementById('tagTarget')?.value || 'manual';
+        if (global.appendEnglish?.(formatTag(item), section)) {
+          global.EasyPanelTagWorkflow?.record(item.tag);
+          insert.classList.add('tag-search-added');
+          insert.title = `已加入${global.sectionLabel?.(section) || section}；可继续选择`;
+        }
       };
       const image = document.createElement('button'); image.type = 'button'; image.textContent = '🖼'; image.title = '查看图片与相关标签'; image.onclick = () => openVisual(item);
       row.append(insert,image); root.append(row);

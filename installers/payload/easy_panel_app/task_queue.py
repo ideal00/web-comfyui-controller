@@ -233,7 +233,7 @@ class TaskQueue:
                 if status in TERMINAL_STATUSES:
                     item["finished_at"] = _now_ms()
                 for key, value in fields.items():
-                    if key in {"prompt_id", "snapshot_id", "generation_id", "error",
+                    if key in {"prompt_id", "snapshot_id", "generation_id", "resolved_seed", "error",
                                "duplicate_of", "label", "selected", "experiment_value",
                                "plan"}:
                         if isinstance(value, str):
@@ -406,6 +406,7 @@ class TaskQueueRunner:
                         prompt_id=str(result.get("prompt_id") or ""),
                         snapshot_id=str(result.get("snapshot_id") or ""),
                         generation_id=str(result.get("generation_id") or ""),
+                        resolved_seed=str(result.get("resolved_seed") or ""),
                         plan=result.get("plan") if isinstance(result.get("plan"), dict) else None,
                         error="")
         if self.on_status:

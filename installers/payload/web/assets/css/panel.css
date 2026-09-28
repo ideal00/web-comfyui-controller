@@ -432,6 +432,22 @@ html.easy-panel-mobile .studio-content-viewport .studio-main-heading{position:st
 .prompt-chip-controls{display:inline-flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:3px;margin-left:6px;vertical-align:middle}
 .prompt-chip-controls button{padding:2px 5px;font-size:11px;line-height:1.4;white-space:nowrap}
 .prompt-section-preset-name{margin-left:5px;color:#80dfa0;font-size:11px;font-weight:600;overflow-wrap:anywhere}
+.prompt-section-label{flex-wrap:wrap}
+.prompt-section-paste-mode{width:auto;max-width:54px;min-width:0;padding:1px 2px;border-radius:4px;font-size:10px;line-height:17px}
+.prompt-section-label{flex-wrap:wrap}.prompt-section-clean{min-width:0;padding:1px 6px;border:1px solid #4d6982;border-radius:4px;background:#1d3446;color:#bce8f4;font-size:10px;line-height:17px}.prompt-section-clean:hover{border-color:#7ec6df;background:#284f65;color:#fff}
+.prompt-tag-search .tag-target{grid-template-columns:minmax(0,1fr) 30px minmax(110px,180px)}
+.tag-search-clear{width:30px;min-width:0;padding:0;border:1px solid var(--line);background:#253047;font-size:19px}
+.tag-recent{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin:5px 0 8px}
+.tag-recent-chip{display:inline-flex;align-items:center;border:1px solid #405271;border-radius:6px;overflow:hidden}
+.tag-recent-chip button{min-width:0;padding:2px 5px;border:0;border-radius:0;background:#233149;font-size:11px}
+.tag-recent-chip button+button{color:#f4ce72;background:#1b293f}
+.tag-search-added{color:#8ce6aa}
+.seed-quick-actions{display:flex;align-items:center;gap:4px}
+.seed-quick-actions input{min-width:0;flex:1 1 auto}
+.seed-quick-actions button{flex:0 0 auto;min-width:30px;padding:7px 5px;font-size:13px}
+.panel-history-button{min-width:29px;padding:4px 6px;border:1px solid #50637e;background:#233148;color:#dceafe;font-size:18px;line-height:1.1}
+.prompt-chip-list.locked-section{pointer-events:none;opacity:.58}
+@media(max-width:620px){.prompt-tag-search .tag-target{grid-template-columns:minmax(0,1fr) 30px}.prompt-tag-search .tag-target select{grid-column:1/-1}}
 .prompt-chip-list{display:flex;align-content:flex-start;flex-wrap:wrap;gap:6px;min-height:64px;padding:8px;border:1px solid var(--line);border-radius:8px}
 .prompt-chip{display:inline-flex;max-width:100%;border:1px solid var(--line);border-radius:15px;background:rgba(110,133,177,.16);overflow:hidden}
 .prompt-chip button{border:0;background:transparent;color:inherit;padding:3px 7px;font-size:12px;overflow-wrap:anywhere}

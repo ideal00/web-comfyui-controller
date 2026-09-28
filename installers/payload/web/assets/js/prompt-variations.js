@@ -12,6 +12,8 @@
   const DEFAULT_LOCKS = {subject:true,appearance:true,clothing:true,style:true};
   let locks = {...DEFAULT_LOCKS};
   try { locks = {...locks, ...JSON.parse(localStorage.getItem(LOCK_KEY) || '{}')}; } catch (_) {}
+  const lockedValues = {};
+  let trustedRestore = 0;
   let pending = null;
   let history = [];
   let nameHistory = [];
@@ -93,6 +95,23 @@
   }
   function serialize(tokens) { return tokens.map(x => x.trim()).filter(Boolean).join(', '); }
   function field(key) { return document.getElementById(SECTIONS[key]); }
+  function isLocked(key) { return !!locks[key]; }
+  function isFieldLocked(id) { return Object.keys(SECTIONS).some(key => SECTIONS[key] === id && isLocked(key)); }
+  function restoreLocked() {
+    if (trustedRestore) return;
+    Object.entries(SECTIONS).forEach(([key,id]) => {
+      if (!locks[key]) return;
+      const input = document.getElementById(id);
+      if (input && Object.prototype.hasOwnProperty.call(lockedValues, key) && input.value !== lockedValues[key]) input.value = lockedValues[key];
+    });
+  }
+  function beginTrustedRestore() { trustedRestore++; }
+  function endTrustedRestore() {
+    if (trustedRestore) trustedRestore--;
+    if (!trustedRestore) Object.entries(SECTIONS).forEach(([key,id]) => {
+      if (locks[key]) lockedValues[key] = document.getElementById(id)?.value || '';
+    });
+  }
   function normalized(token) { return String(token || '').trim().toLowerCase().replace(/\s+/g, ' '); }
   function isTagLocked(key, token) { return (tagLocks[key] || []).includes(normalized(token)); }
   function lockedTerms(key) { return tokenize(field(key).value).filter(token => isTagLocked(key, token)); }
@@ -121,9 +140,10 @@
     renderPresetNames();
     if (typeof global.promptEditorChanged === 'function') global.promptEditorChanged();
   }
-  function write(key, tokens) { field(key).value = serialize(tokens); changed(); }
+  function write(key, tokens) { if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return; } field(key).value = serialize(tokens); changed(); }
   function addTag(key, value) {
     if (!SECTIONS[key]) return false;
+    if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
     const incoming = tokenize(value), existing = tokenize(field(key).value);
     const known = new Set(existing.map(normalized));
     const added = incoming.filter(token => { const id = normalized(token); if (!id || known.has(id)) return false; known.add(id); return true; });
@@ -188,6 +208,7 @@
   function renderChips(key) {
     const input = field(key), host = input?.parentElement.querySelector('.prompt-chip-list');
     if (!input || !host || host.hidden) return;
+    host.classList.toggle('locked-section', isLocked(key));
     host.replaceChildren();
     tokenize(input.value).forEach((token, index) => {
       const chip = document.createElement('span'); chip.className = 'prompt-chip prompt-chip-' + kind(token);
@@ -241,6 +262,7 @@
     host.append(add);
   }
   function moveChip(fromKey, fromIndex, toKey, toIndex) {
+    if (isLocked(fromKey) || isLocked(toKey)) { status('目标分区已锁定，请先解锁。'); return; }
     const source = tokenize(field(fromKey).value), [item] = source.splice(fromIndex, 1);
     if (!item) return;
     if (fromKey === toKey) { source.splice(fromIndex < toIndex ? toIndex - 1 : toIndex, 0, item); field(fromKey).value = serialize(source); }
@@ -248,6 +270,7 @@
     changed();
   }
   function renderAll() {
+    restoreLocked();
     if (selection.key && field(selection.key).value !== selection.source) clearSelection();
     renderPresetNames();
     Object.keys(SECTIONS).forEach(renderChips);
@@ -317,6 +340,7 @@
     return options.length ? options[Math.floor(Math.random() * options.length)] : null;
   }
   function randomTagNow(key, index) {
+    if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
     const terms = tokenize(field(key).value), current = terms[index];
     if (!current) return false;
     if (isTagLocked(key, current)) { status('这个词条已锁定，解锁后才能随机。'); return false; }
@@ -331,7 +355,7 @@
     return true;
   }
   function stage(keys) {
-    const changes = keys.map(key => ({key, before:field(key).value, choice:candidate(key)})).filter(item => item.choice);
+    const changes = keys.filter(key => !isLocked(key)).map(key => ({key, before:field(key).value, choice:candidate(key)})).filter(item => item.choice);
     if (!changes.length) { status('这些分区没有可替换的个人预设或组件；先在“我的提示词预设”中保存对应分区内容。'); return; }
     pending = changes;
     const box = document.getElementById('promptVariationPreview'); box.hidden = false;
@@ -349,6 +373,7 @@
     historyIndex = history.length - 1;
   }
   function randomSectionNow(key) {
+    if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
     const choice = candidate(key);
     if (!choice) { status(lockedTerms(key).length ? `${LABELS[key]}没有同时保留锁定词条的其他预设或组件。` : `${LABELS[key]}没有其他可用的个人预设或组件；先保存一个不同内容的预设。`); return false; }
     if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
@@ -364,6 +389,7 @@
   }
   function accept() {
     if (!pending) return;
+    if (pending.some(item => isLocked(item.key))) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('分区已锁定，请重新随机预览。'); return; }
     if (pending.some(item => field(item.key).value !== item.before)) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('分区内容已变化，请重新随机预览。'); return; }
     if (pending.some(item => lockedTerms(item.key).some(token => !tokenize(item.choice.text).some(candidate => normalized(candidate) === normalized(token))))) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('锁定词条已变化，请重新随机预览。'); return; }
     if (historyIndex < 0 || JSON.stringify(history[historyIndex]) !== JSON.stringify(snapshot())) record();
@@ -446,9 +472,10 @@
       const input = document.getElementById(id), container = input?.parentElement; if (!input || !container) return;
       const title = container.querySelector('.field-title');
       const controls = document.createElement('span'); controls.className = 'prompt-chip-controls';
-      const lock = document.createElement('button'); lock.type = 'button'; lock.title = '锁定后“换一个画面”不会修改此分区';
-      const paintLock = () => { lock.textContent = locks[key] ? '🔒 已锁' : '🔓 可变'; lock.setAttribute('aria-pressed', String(!!locks[key])); };
-      lock.onclick = () => { locks[key] = !locks[key]; try { localStorage.setItem(LOCK_KEY, JSON.stringify(locks)); } catch (_) {} paintLock(); };
+      const lock = document.createElement('button'); lock.type = 'button'; lock.title = '锁定后保留本分区内容，预设、备忘、随机和恢复都不会改动';
+      const paintLock = () => { lock.textContent = locks[key] ? '🔒 已锁' : '🔓 可变'; lock.setAttribute('aria-pressed', String(!!locks[key])); input.readOnly = !!locks[key]; };
+      if (locks[key]) lockedValues[key] = input.value;
+      lock.onclick = () => { locks[key] = !locks[key]; if (locks[key]) lockedValues[key] = input.value; else delete lockedValues[key]; try { localStorage.setItem(LOCK_KEY, JSON.stringify(locks)); } catch (_) {} paintLock(); renderChips(key); };
       paintLock();
       const dice = document.createElement('button'); dice.type = 'button'; dice.textContent = '🎲'; dice.title = '立即从本分区的个人预设或组件换一个'; dice.onclick = () => randomSectionNow(key);
       const mode = document.createElement('button'); mode.type = 'button'; mode.textContent = '标签'; mode.setAttribute('aria-pressed', 'false');
@@ -461,6 +488,6 @@
       chips.ondrop = event => { event.preventDefault(); if (drag) moveChip(drag.key, drag.index, key, tokenize(field(key).value).length); drag = null; };
     });
   }
-  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, presetName, init};
+  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, navigate, randomUnlocked, renderAll, presetName, isLocked, isFieldLocked, restoreLocked, beginTrustedRestore, endTrustedRestore, init};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })(window);

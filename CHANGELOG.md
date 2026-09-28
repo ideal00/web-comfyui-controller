@@ -1,5 +1,13 @@
 # Easy Panel 更新记录
 
+## 双端快捷工作流与任务状态对齐（2026-09-28）
+
+- **工作台快捷操作**：桌面端新增生成面板历史记录的撤销/重做、随机 seed 设置/恢复/复制、提示词格式清理，以及标签的最近使用和收藏快捷入口。
+- **任务状态**：任务队列保存实际解析后的 `resolved_seed`，生成完成后同步记录实际 seed，避免界面显示的随机值与任务结果不一致。
+- **手机端桥接**：Android 客户端补充受信任 WebView 的剪贴板读取接口，手机端快捷操作与桌面端保持一致。
+- **参数与资源**：尺寸选择器支持横竖互换；视觉标签库默认使用项目内 `visual_tag_library` 目录，不再依赖固定的 `G:\QK download` 路径。
+- **发布版本**：Easy Panel 服务端 `v2.2.3`；Android 客户端 `mobile-v1.4.6`（versionCode `1004006`）。
+
 ## 离线翻译（Argos）+ 🇨🇳 解析词条 Prompt Explainer（2026-09-24）
 
 ### 离线翻译（`easy_panel_app/integrations/argos.py`、`web/assets/js/offline-translate.js`）

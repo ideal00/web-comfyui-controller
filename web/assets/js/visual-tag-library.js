@@ -1,7 +1,7 @@
 /* 可视化词条库（Visual Tag Library V1）
  *
  * 双源统一卡片：
- *   本地精选（G:\QK download，1868 条中文词条 + 精选参考图，离线可用）
+ *   本地精选（ComfyUI/visual_tag_library，中文词条 + 精选参考图，离线可用）
  *   Danbooru 云端（只读、每页 20 张、限速 + 缓存 + 失败降级）
  *
  * 所有插入都经过 Prompt 方言层（window.EasyPanelDialect）：
@@ -72,7 +72,7 @@
 
   function targetSection() {
     const select = byId("tagTarget");
-    return (select && select.value) || "manual";
+    return window.EasyPanelTagWorkflow?.resolve(select?.value) || (select && select.value) || "manual";
   }
 
   function targetLabel(section) {
@@ -279,10 +279,10 @@
   }
 
   function addTag(tag, kind, sectionOverride) {
-    const section = sectionOverride || targetSection();
+    const section = window.EasyPanelTagWorkflow?.resolve(sectionOverride) || sectionOverride || targetSection();
     const composed = composeColorTag(tag);
     const formatted = formatTag(composed, kind);
-    if (typeof window.appendEnglish === "function") window.appendEnglish(formatted, section);
+    if (typeof window.appendEnglish === "function" && window.appendEnglish(formatted, section)) window.EasyPanelTagWorkflow?.record(tag);
     const steps = [];
     if (composed !== tag) steps.push(`${tag} → ${composed}（颜色修饰）`);
     if (formatted !== composed) steps.push(`${composed} → ${formatted}（按 ${dialectLabel()} 转换）`);

@@ -885,6 +885,23 @@ public class AdvancedPanelActivity extends Activity {
     /** Minimal, origin-checked bridge for page actions that need system clipboard access. */
     private final class ClipboardBridge {
         @JavascriptInterface
+        public String readText() {
+            if (!isTrustedBridgePage()) return "";
+            try {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (clipboard == null || !clipboard.hasPrimaryClip()) return "";
+                ClipData clip = clipboard.getPrimaryClip();
+                if (clip == null || clip.getItemCount() == 0) return "";
+                CharSequence first = clip.getItemAt(0).coerceToText(AdvancedPanelActivity.this);
+                if (first == null) return "";
+                String value = first.toString();
+                return value.length() <= MAX_CLIPBOARD_TEXT_LENGTH ? value : "";
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
         public boolean copyText(String text) {
             if (!isTrustedBridgePage() || text == null || text.isEmpty()
                 || text.length() > MAX_CLIPBOARD_TEXT_LENGTH) return false;

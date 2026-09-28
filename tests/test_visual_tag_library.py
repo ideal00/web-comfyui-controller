@@ -1,4 +1,4 @@
-"""本地视觉词条库（G:\\QK download → SQLite 索引）的契约测试。
+"""本地视觉词条库（ComfyUI/visual_tag_library → SQLite 索引）的契约测试。
 
 全部用临时合成目录，绝不依赖真实词条库；覆盖四套字段命名体系、BOM、
 水平线分隔符、组合词条、未匹配参考图、越界路径防护与缩略图缓存。
@@ -194,6 +194,11 @@ def write_tree(root: Path) -> None:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     (root / "26-8-26 鞋子展示" / "筛选" / "0001_shoes.jpg").write_bytes(buffer.getvalue())
+
+
+class LocationTests(unittest.TestCase):
+    def test_default_source_is_inside_comfyui_workspace(self):
+        self.assertEqual(vtl.DEFAULT_LIBRARY_ROOT, PROJECT_DIR.parent / "visual_tag_library")
 
 
 class LibraryTestCase(unittest.TestCase):
@@ -724,7 +729,7 @@ class ApiWiringTests(unittest.TestCase):
 
     def test_frontend_scripts_loaded_in_both_panels(self):
         for page in (self.index_html, self.payload_html):
-            self.assertIn("/assets/js/prompt-dialect.js?v=1", page)
+            self.assertIn("/assets/js/prompt-dialect.js?v=2", page)
             self.assertIn("/assets/js/visual-tag-library.js?v=", page)
             self.assertLess(page.index("prompt-dialect.js"), page.index("panel.js?v="))
 

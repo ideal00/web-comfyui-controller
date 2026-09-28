@@ -3,6 +3,7 @@
 interface Window {
   EasyPanelClipboard?: {
     copyText(value: string): boolean
+    readText(): string
   }
   rpgboxDesktop?: {
     platform: 'desktop'

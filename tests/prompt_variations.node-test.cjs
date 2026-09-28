@@ -97,6 +97,25 @@ test('section dice refuses variants that would discard a locked tag', () => {
   assert.equal(elements.promptPose.value, 'standing, looking at viewer');
 });
 
+test('locking a section blocks direct randomization and tag insertion', () => {
+  const {api, elements} = load([{category:'pose', name:'Sit', content:'sitting'}], {
+    easyPanelVariationLocksV1: JSON.stringify({pose:true})
+  });
+  elements.promptPose.value = 'standing';
+  assert.equal(api.isLocked('pose'), true);
+  assert.equal(api.randomSectionNow('pose'), false);
+  assert.equal(api.addTag('pose', 'looking at viewer'), false);
+  assert.equal(elements.promptPose.value, 'standing');
+  api.beginTrustedRestore();
+  elements.promptPose.value = 'kneeling';
+  api.restoreLocked();
+  assert.equal(elements.promptPose.value, 'kneeling');
+  api.endTrustedRestore();
+  elements.promptPose.value = 'running';
+  api.restoreLocked();
+  assert.equal(elements.promptPose.value, 'kneeling');
+});
+
 test('chip editor reuses the color modifier for replacement and removal', () => {
   global.window = global;
   const modifier = require(path.join(__dirname, '../web/assets/js/color-modifier.js'));
