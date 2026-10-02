@@ -43,7 +43,7 @@ function Copy-CleanDirectory([string]$Source, [string]$Destination, [string]$All
 function Sync-CorePayload {
     New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
     foreach ($file in "easy_panel.py", "index.html", "embedding_notes.json", "pose_editor_workflow.json", "README.md", "LORA_MEMO_RULES.md",
-                      "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
+                      "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py", "requirements.txt", "requirements-image-tools.txt",
                       "import_all_sidecars.py", "CHANGELOG.md", "RPG_MOBILE_API.md", "RPG_MOBILE_CHANGELOG.md", "START_HERE_RPG_MOBILE.txt", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
                       "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
         $source = Join-Path $repositoryRoot $file

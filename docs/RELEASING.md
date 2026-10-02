@@ -15,6 +15,7 @@
 
 ```powershell
 Set-Location <仓库目录>
+python -m pip install -r requirements-image-tools.txt
 python -m unittest discover -s tests
 node --test (Get-ChildItem tests/*.node-test.cjs).FullName
 pwsh -NoProfile -File installers/Build-Packages.ps1

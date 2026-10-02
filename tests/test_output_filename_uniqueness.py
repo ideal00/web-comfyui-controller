@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
@@ -58,7 +59,8 @@ class UniquePrefixTests(unittest.TestCase):
             "steps": 28,
             "cfg": 5.0,
         })
-        workflow = easy_panel.build_workflow(payload)
+        with patch.object(easy_panel, "checkpoint_issue", return_value=None):
+            workflow = easy_panel.build_workflow(payload)
         prefixes = {node["inputs"].get("filename_prefix")
                     for node in workflow["prompt"].values()
                     if node.get("class_type") == "SaveImage"}

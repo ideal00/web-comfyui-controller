@@ -46,7 +46,8 @@ def payload(model: str, **overrides) -> dict:
 
 
 def build_nodes(data: dict) -> dict:
-    return easy_panel.build_workflow(data)["prompt"]
+    with patch.object(easy_panel, "checkpoint_issue", return_value=None):
+        return easy_panel.build_workflow(data)["prompt"]
 
 
 def nodes_of(nodes: dict, class_type: str) -> list[dict]:

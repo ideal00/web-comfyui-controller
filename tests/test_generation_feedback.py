@@ -42,7 +42,8 @@ def base_payload(model: str = "anima-base-v1.0.safetensors", **overrides) -> dic
 
 
 def plan_for(data: dict) -> dict:
-    return easy_panel.generation_plan(easy_panel.build_workflow(data))
+    with patch.object(easy_panel, "checkpoint_issue", return_value=None):
+        return easy_panel.generation_plan(easy_panel.build_workflow(data))
 
 
 class FriendlyErrorTests(unittest.TestCase):
@@ -163,6 +164,11 @@ class GenerationPlanTests(unittest.TestCase):
 
 class ExecutionPlanTests(unittest.TestCase):
     """执行计划必须由 workflow builder 产生，前端只做预览。"""
+
+    def setUp(self):
+        availability = patch.object(easy_panel, "checkpoint_issue", return_value=None)
+        availability.start()
+        self.addCleanup(availability.stop)
 
     def test_plan_counts_detailers_separately_from_samplers(self):
         data = base_payload(animaHighres={"enabled": True, "scale": 1.5,

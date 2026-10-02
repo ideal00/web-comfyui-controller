@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -166,7 +167,13 @@ class HandRepairWorkflowTests(unittest.TestCase):
 
     def test_preflight_reports_hand_repair_state(self):
         data = self.hand_data()
-        report = easy_panel.anima_preflight(data)
+        with tempfile.TemporaryDirectory() as folder:
+            models = Path(folder)
+            for kind, name in (("text_encoders", easy_panel.ANIMA_TEXT_ENCODER), ("vae", easy_panel.ANIMA_VAE)):
+                (models / kind).mkdir()
+                (models / kind / name).touch()
+            with patch.object(easy_panel, "COMFY_MODELS", models):
+                report = easy_panel.anima_preflight(data)
         self.assertEqual([], report["errors"])
         self.assertTrue(any("手部修复" in warning for warning in report["warnings"]))
         missing = payload()

@@ -55,7 +55,7 @@ def companion_lora(text_file: Path) -> Path | None:
 
 def note_key(notes: dict, lora: Path, lora_dir: Path, duplicate_names: set[str]) -> str:
     try:
-        relative = lora.resolve().relative_to(lora_dir).as_posix()
+        relative = lora.resolve().relative_to(lora_dir.resolve()).as_posix()
     except ValueError:
         relative = lora.name
     if relative in notes:

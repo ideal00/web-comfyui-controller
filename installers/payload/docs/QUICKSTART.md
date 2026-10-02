@@ -29,6 +29,8 @@ $env:EASY_PANEL_COMFY_URL = 'http://127.0.0.1:8188'
 
 路径配置通过环境变量生效，不需要修改源代码。非便携版将最后一行替换为自己的 Python 命令。
 
+基础图像功能依赖 `requirements.txt` 中的 Pillow；透明抠图与环境光分析还需 NumPy / OpenCV。缺少这些依赖时，在面板目录用实际运行面板的 Python 执行 `python -m pip install -r requirements-image-tools.txt`。官方便携版通常已有这些库，避免装到另一个 Python 环境。
+
 ## 3. 生成第一张图
 
 1. 选择一个实际存在的 SDXL / Illustrious 模型。Anima 与 Krea 2 请先按 [完整说明](../README.md#33-模型文件应该放在哪里) 放好扩散模型、文本编码器和 VAE。

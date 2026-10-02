@@ -21,8 +21,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install image dependency
-        run: python -m pip install pillow
+      - name: Install image test dependencies
+        run: python -m pip install -r requirements-image-tools.txt
       - name: Python regression tests
         run: python -m unittest discover -s tests
       - name: JavaScript regression tests
