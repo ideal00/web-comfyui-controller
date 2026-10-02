@@ -539,3 +539,13 @@ html.easy-panel-mobile .easy-tag-preview-body img{max-height:115px}
 .creative-library-pagination{margin:0 0 13px}
 
 .creative-library-dialog{overflow:hidden}
+
+/* Keep navigation usable when panels stack and tool dialogs scroll. */
+.panel-quick-jumps .quick-jump-menu-toggle{display:none}
+@media(max-width:820px){
+  .panel-quick-jumps .quick-jump-menu-toggle{display:flex;width:44px;min-width:44px;height:44px;padding:0}
+  .panel-quick-jumps:not(.quick-jumps-expanded)>button:not(.quick-jump-menu-toggle){display:none}
+  .panel-quick-jumps .quick-jump-menu-toggle span:last-child{display:none}
+}
+.transparent-extract-dialog>.transparent-editor-head{position:sticky;top:0;z-index:2;background:var(--card)}
+.transparent-extract-dialog #transparentExtractCloseBtn{flex:none;white-space:nowrap}

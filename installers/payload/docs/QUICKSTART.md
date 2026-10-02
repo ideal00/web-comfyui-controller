@@ -1,6 +1,6 @@
 # 从安装到第一张图
 
-当前配套：Easy Panel **2.3.6**，Android **1.4.7**。模型计算在电脑的 ComfyUI 上运行。
+当前配套：Easy Panel **2.3.7**，Android **1.4.7**。模型计算在电脑的 ComfyUI 上运行。
 
 ## 1. 先启动 ComfyUI
 
@@ -8,7 +8,7 @@
 
 ## 2. 安装 Easy Panel
 
-在 [v2.3.6 发布页](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.6) 下载 `EasyPanel-Core-OneClick.zip`，完整解压后双击 `安装-核心面板.cmd`。识别失败时填写包含 `main.py`、`models`、`custom_nodes` 的 ComfyUI 目录。
+在 [v2.3.7 发布页](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.7) 下载 `EasyPanel-Core-OneClick.zip`，完整解压后双击 `安装-核心面板.cmd`。识别失败时填写包含 `main.py`、`models`、`custom_nodes` 的 ComfyUI 目录。
 
 首次只装 Core 即可。需要骨架提取时再装 Pose，需要 LayerStyle 调色时再装 Color；Tags 提供标签检索数据。All 会安装这些模块并检查模型，但**不包含模型权重**。
 
