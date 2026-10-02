@@ -4,7 +4,7 @@
 
 Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作台。选择模型、分区写提示词、调整尺寸和采样参数，面板会组装工作流并交给 ComfyUI 执行。常用操作集中在一个页面，已有的模型与 LoRA 可以直接使用。
 
-[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.3) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
+[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.4) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
 
 ![Easy Panel 桌面工作台：左侧快捷工具、中间分区提示词、右侧生成预览、底部生成与队列操作](docs/screenshots/desktop-overview.jpg)
 
@@ -16,7 +16,7 @@ Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作�
 | --- | --- |
 | 写提示词 | 按人物、外貌、表情、服装、姿势、构图、场景、光线等分区编辑；搜索个人预设、查看例图、锁定要保留的内容，再随机其他分区 |
 | 找到画面方向 | 创作游乐场提供自由草稿、职业与性格建议、镜头卡、搭配检查和对照实验；应用前可以检查每个分区的变化 |
-| 管理模型与 LoRA | 按模型族选择模型，搜索与收藏 LoRA、调整加载顺序和权重、查看备注与有来源的触发词 |
+| 管理模型与 LoRA | 按模型族选择模型，搜索与收藏 LoRA、查看画风参考图、调整加载顺序和权重、查看备注与有来源的触发词 |
 | 调整生成 | 比例与尺寸快捷选择、自动推荐采样参数、生成前检查、高清二采、任务队列与单变量实验 |
 | 继续编辑作品 | 预览、读图还原、生成快照、作品库筛选与收藏、版本谱系；按需使用姿势控制、局部修复、透明抠图与调色 |
 | 手机控制电脑 | Android 快速页编辑常用参数并查看结果；高级面板打开电脑的完整界面，作品库与队列读取电脑端数据 |
@@ -67,10 +67,10 @@ Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作�
 
 ## 当前版本
 
-- Easy Panel 服务端：`2.3.3`。
+- Easy Panel 服务端：`2.3.4`。
 - Android 客户端：`mobile-v1.4.7`（versionCode `1004007`）。
-- 下载入口：服务端 [v2.3.3 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.3) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
-- 本版本补齐手机高级面板生成数量的保存 / 恢复，修复快捷工具自动收缩和批任务操作反馈、超时与刷新覆盖。包含 2.3.1 的候选搜索修复、2.3.2 的轻点填入 / 长按预览修复，保留创作游乐场、分区预设与例图、可视化词条和作品库功能。Android 继续使用 1.4.7，一键 ZIP 包含同版本前后端、教程和校验清单。
+- 下载入口：服务端 [v2.3.4 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.4) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
+- 本版本加入 [LoRA 画风参考图](docs/LORA_PREVIEWS.md)：先看测试效果，再按参考权重加入模型。包含此前的手机数量恢复、快捷工具展开、批任务控制和候选区修复。Android 继续使用 1.4.7，一键 ZIP 包含同版本前后端、教程和校验清单。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
 ## 目录
@@ -1719,3 +1719,5 @@ Easy Panel 网页原有的 `easyPanelPromptPresetsV1`（提示词预设）和 `e
 服务器保留 `easy_panel_shared_state.json.bak` 作为上一次成功写入的备份；主文件读取失败时优先用备份原子恢复，只有主文件与备份都不可用时才会把主文件改名为固定前缀的 `.corrupt.*.json`。文件、Token、模型和 API Key 均不会提交到 Git，也不会写入请求日志。同步是合并操作，离线时保留本机数据，revision 冲突时保留服务器已有记录；空手机集合不会清空电脑收藏。升级后需要手动重启 Easy Panel 进程，才能加载新的 API 和网页资源。
 
 可视化图库已按结构化提示词分区分类：图库可按对应输入框筛选；分区搜索、输入补全及随机可使用已有英文标签、中文说明与原例图，混合词条只写入当前分区。详见 `docs/visual-library-sections.md`。
+
+画风 LoRA 可以绑定本机测试图，在选择前查看效果、放大预览并按测试权重加入。参考图片跟随模型族、分类和搜索筛选，详见 [LoRA 画风参考图](docs/LORA_PREVIEWS.md)。

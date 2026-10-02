@@ -70,6 +70,7 @@ function Sync-CorePayload {
         }
     }
     $toolSources = @(
+        "tools\import_lora_previews.py",
         "tools\rebuild_creative_index.py",
         "tools\migrate_creative_index_ids.py",
         "tools\EasyPanel-Service.ps1",

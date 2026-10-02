@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <link rel="stylesheet" href="/assets/css/lora-previews.css?v=1">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ComfyUI 生成面板</title>
   <script>
@@ -148,8 +149,10 @@
       <div class="lora-search"><input id="loraSearch" type="search" autocomplete="off" placeholder="搜索 LoRA 文件名中的文字…" aria-label="搜索 LoRA" oninput="refreshLoraSelects()"><button id="loraSearchClear" class="secondary" type="button" onclick="clearLoraSearch()">清除</button></div>
       <div class="small lora-order-help">LoRA 从上到下依次加载，自动触发词也使用同一顺序。可拖动“↕序号”，或使用 ↑ / ↓ 调整。</div>
       <div class="row lora-filter"><span class="field-title">LoRA 分类</span><select id="loraFolder" onchange="refreshLoraSelects()"></select><span id="loraFilterInfo" class="small"></span></div>
+      <details id="loraReferenceBrowser" class="lora-reference-browser"><summary>画风参考图（<span id="loraReferenceCount">0</span>）</summary><p class="small">先看效果再加入 LoRA；参考图跟随当前模型族、分类与搜索筛选。图片是本机统一参数测试，点击可放大。</p><div id="loraReferenceList" class="lora-reference-list"></div></details>
       <div id="loras"></div>
       <details class="memo embedding-picker" id="embeddingSection"><summary class="embedding-picker-summary"><span><b>Embedding 嵌入</b><small>低频资源：按用途自动写入对应提示词分区</small></span><span id="embeddingSummary" class="small">默认收起</span></summary><div class="embedding-picker-body"><div class="field-title"><span>筛选与选择</span><span class="small">选中后再应用</span></div><select id="embeddingFolder" onchange="refreshEmbeddingSelect()"><option value="">全部分类</option></select><select id="embeddingSelect" onchange="updateEmbeddingInfo()" style="margin-top:8px"><option value="">请选择 Embedding</option></select><div id="embeddingInfo" class="small" style="margin-top:7px">正在读取本地 Embedding…</div><div class="actions"><button type="button" onclick="applySelectedEmbedding()">应用到提示词</button><button class="secondary" type="button" onclick="removeSelectedEmbedding()">从提示词移除</button></div></div></details>
+      <div id="loraSelectedReference" class="lora-selected-reference" hidden></div>
       <section class="memo" id="loraMemo"><div class="field-title"><h3>LoRA 备忘与服装预设</h3><span id="memoActiveLora" class="small">选中任一 LoRA 后显示</span></div><label class="memo-apply-mode"><input id="memoOutfitOverwriteMode" type="checkbox" checked onchange="toggleMemoOutfitOverwriteMode()"><span><b>同主类覆盖模式</b><small id="memoOutfitModeInfo">开启：跨 LoRA 只替换相同主类，不同主类并存</small></span></label><div id="memoDisplay" class="small">尚未选择 LoRA。</div><div class="actions"><button id="memoEditButton" class="secondary" type="button" onclick="showMemoEditor()" disabled>放大编辑此 LoRA 备忘</button></div></section>
       </div>
     </section>
@@ -266,6 +269,7 @@
     <div class="studio-tool-drawer-panel"><header><div><span class="studio-kicker">按需展开</span><h2>高级创作工具</h2></div><button class="secondary" type="button" onclick="toggleStudioToolDrawer(false)">关闭</button></header><p class="small">姿势控制、场景融合、多人分区、调色和整图重绘集中在这里；关闭侧栏不会清除设置。</p><div id="studioToolDrawerContent"></div></div>
   </aside>
 </main>
+<dialog id="loraReferenceDialog" class="lora-reference-dialog"><header><h2 id="loraReferenceTitle">画风参考图</h2><button id="loraReferenceClose" class="secondary" type="button">关闭</button></header><p id="loraReferenceSettings" class="small"></p><img id="loraReferenceImage" alt="画风参考图"></dialog>
 <dialog id="loraMemoDialog" class="lora-memo-dialog" onclose="closeLoraMemoEditor()">
   <header class="lora-memo-dialog-head"><div><span class="studio-kicker">LoRA 资料库</span><h2 id="loraMemoDialogTitle">编辑 LoRA 备忘</h2></div><button class="secondary" type="button" onclick="closeLoraMemoEditor()">关闭</button></header>
   <div id="memoEditor" class="memo-editor"></div>
@@ -429,7 +433,8 @@
 <script src="/assets/js/prompt-dialect.js?v=2"></script>
 <script src="/assets/js/color-modifier.js?v=1"></script>
 <script src="/assets/js/preset-examples.js?v=5"></script>
-<script src="/assets/js/panel.js?v=105"></script>
+<script src="/assets/js/lora-previews.js?v=1"></script>
+<script src="/assets/js/panel.js?v=106"></script>
 <script src="/assets/js/panel-quick-actions.js?v=5"></script>
 <script src="/assets/js/prompt-variations.js?v=16"></script>
 <script src="/assets/js/prompt-mode.js?v=1"></script>

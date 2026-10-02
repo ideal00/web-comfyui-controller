@@ -51,7 +51,7 @@ def verify(tag: str = "", packages: bool = False) -> None:
     files = ["easy_panel.py", "index.html", "README.md", "CHANGELOG.md", "LORA_MEMO_RULES.md",
              "RPG_MOBILE_API.md", "RPG_MOBILE_CHANGELOG.md", "START_HERE_RPG_MOBILE.txt",
              "android-client/README.md", "android-client/android/app/src/main/res/drawable-nodpi/easy_panel_brand_source.png", "embedding_notes.json", "pose_editor_workflow.json",
-             "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py", "import_all_sidecars.py", "requirements.txt", "requirements-image-tools.txt"]
+             "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py", "import_all_sidecars.py", "requirements.txt", "requirements-image-tools.txt", "tools/import_lora_previews.py"]
     for directory in ("easy_panel_app", "web", "docs"):
         for path in (ROOT / directory).rglob("*"):
             relative = path.relative_to(ROOT)
