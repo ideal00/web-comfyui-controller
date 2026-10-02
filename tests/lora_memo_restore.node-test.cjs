@@ -166,6 +166,7 @@ test('Android WebView snapshot restores LoRA state and memo provenance together'
     ${line('setAppliedOutfits')}
     ${line('reconcileAppliedOutfitsAfterRestore')}
     ${line('mobilePanelMode')}
+    ${line('normalizeGenerationCount')}
     ${line('mobilePanelSnapshot')}
     ${line('saveMobilePanelState')}
     ${block('restoreMobilePanelState', 'startMobilePanelKeep')}`, context);

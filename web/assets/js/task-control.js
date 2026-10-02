@@ -9,13 +9,14 @@
     pending: '排队中', running: '执行中', completed: '已完成',
     error: '失败', cancelled: '已取消', skipped: '已跳过',
   };
-  var state = { snapshot: null, timer: 0, busy: false, pendingDuplicate: null };
+  var state = { snapshot: null, timer: 0, busy: false, controlBusy: false, refreshSequence: 0,
+    notice: '', listMarkup: null, listNode: null, pendingDuplicate: null };
 
   function $(id) { return document.getElementById(id); }
 
   function text(id, value) {
     var node = $(id);
-    if (node) node.textContent = value;
+    if (node && node.textContent !== value) node.textContent = value;
   }
 
   function status(message) {
@@ -30,12 +31,21 @@
   }
 
   async function json(path, options) {
-    var response = await fetch(path, options);
-    var data = await response.json().catch(function () { return {}; });
-    if (!response.ok || (data && data.error)) {
-      throw new Error((data && data.error) || ('请求失败：' + response.status));
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, 10000);
+    try {
+      var response = await fetch(path, Object.assign({}, options || {}, { signal: controller.signal }));
+      var data = await response.json().catch(function () { throw new Error('服务端返回了无效的队列响应，请检查连接。'); });
+      if (!response.ok || (data && data.error)) {
+        throw new Error((data && data.error) || ('请求失败：' + response.status));
+      }
+      return data || {};
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('请求超时，请检查连接后重试。');
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    return data || {};
   }
 
   function post(path, body) {
@@ -48,11 +58,15 @@
 
   /* ------------------------------------------------------------ 服务端队列 */
   async function refresh() {
+    if (state.controlBusy) return;
+    var sequence = ++state.refreshSequence;
     try {
       var snapshot = await json('/api/tasks');
+      if (sequence !== state.refreshSequence || state.controlBusy) return;
       state.snapshot = snapshot;
       render(snapshot);
     } catch (error) {
+      if (sequence !== state.refreshSequence || state.controlBusy) return;
       text('taskQueueNotice', '任务队列读取失败：' + error.message);
     }
   }
@@ -82,12 +96,18 @@
     var list = $('taskQueueServerList');
     if (list) {
       var items = snapshot.items || [];
-      list.innerHTML = items.length
+      var markup = items.length
         ? items.map(renderItem).join('')
         : '<div class="small muted">暂无服务端任务。点击“发送队列”后任务会先进入这里，可随时暂停或取消。</div>';
+      if (state.listNode !== list || state.listMarkup !== markup) {
+        var scrollTop = list.scrollTop;
+        list.innerHTML = markup;
+        list.scrollTop = scrollTop;
+        state.listNode = list; state.listMarkup = markup;
+      }
     }
     text('taskQueueServerCounts', countsText(snapshot.counts));
-    var notice = [snapshot.message || ''];
+    var notice = [state.notice || snapshot.message || ''];
     if (snapshot.runner && snapshot.runner.last_error) notice.push('后台错误：' + snapshot.runner.last_error);
     text('taskQueueNotice', notice.filter(Boolean).join(' '));
     var autoSkip = $('taskAutoSkip');
@@ -97,24 +117,31 @@
     var paused = snapshot.paused === true;
     var pauseBtn = $('taskPauseBtn');
     if (pauseBtn) {
-      pauseBtn.disabled = paused;
+      pauseBtn.disabled = state.controlBusy || paused;
       pauseBtn.classList.toggle('primary', !paused);
     }
     var runBtn = $('taskRunBtn');
     if (runBtn) {
-      runBtn.disabled = !paused;
+      runBtn.disabled = state.controlBusy || !paused;
       runBtn.classList.toggle('primary', paused);
     }
     var cleanBtn = $('taskCleanFailedBtn');
     if (cleanBtn) {
       var failed = (snapshot.counts && (snapshot.counts.error + snapshot.counts.cancelled + snapshot.counts.skipped)) || 0;
-      cleanBtn.disabled = failed <= 0;
+      cleanBtn.disabled = state.controlBusy || failed <= 0;
     }
+    ['taskCancelCurrentBtn','taskCancelPendingBtn','taskCleanFinishedBtn','taskAutoSkip','taskSelectOnly'].forEach(function (id) {
+      var node = $(id); if (node) node.disabled = state.controlBusy;
+    });
   }
 
   async function control(action, extra) {
-    if (state.busy) return;
-    state.busy = true;
+    if (state.controlBusy) return;
+    state.controlBusy = true;
+    ++state.refreshSequence;
+    state.notice = '正在执行队列操作…';
+    text('taskQueueNotice', state.notice);
+    if (state.snapshot) render(state.snapshot);
     try {
       var payload = Object.assign({ action: action }, extra || {});
       var snapshot = await post('/api/tasks/control', payload);
@@ -122,9 +149,12 @@
       render(snapshot);
       notifyControl(action, snapshot);
     } catch (error) {
-      status('队列操作失败：' + error.message);
+      state.notice = '队列操作失败：' + error.message;
+      text('taskQueueNotice', state.notice);
+      status(state.notice);
     } finally {
-      state.busy = false;
+      state.controlBusy = false;
+      if (state.snapshot) render(state.snapshot);
     }
   }
 
@@ -134,11 +164,13 @@
       'cancel-current': '已中断当前任务。', 'cancel-pending': '已取消后续任务。',
       'clean-failed': '已清理失败/取消/跳过的任务。', 'clean-finished': '已清理全部结束的任务。',
     };
-    var message = snapshot.message || messages[action] || '队列已更新。';
+    var message = messages[action] || snapshot.message || '队列已更新。';
     if (action === 'cancel-pending' || action === 'cancel-current') {
       var comfy = snapshot.comfy || {};
       message += '（ComfyUI 队列删除 ' + (comfy.deleted || 0) + ' 项）';
     }
+    state.notice = message;
+    text('taskQueueNotice', message);
     status(message);
   }
 
@@ -294,9 +326,10 @@
     var body = Object.assign({ jobs: jobs, duplicatePolicy: 'skip' }, options || {});
     var result = await post('/api/tasks/add', body);
     state.snapshot = result;
-    render(result);
     var message = '已加入任务队列：' + (result.added_count || 0) + ' 个';
     if (result.duplicate_skipped) message += '，跳过重复任务 ' + result.duplicate_skipped + ' 个';
+    state.notice = message + '。';
+    render(result);
     status(message + '。');
     return result;
   }

@@ -1,6 +1,6 @@
 # 从安装到第一张图
 
-当前配套：Easy Panel **2.3.2**，Android **1.4.7**。模型计算在电脑的 ComfyUI 上运行。
+当前配套：Easy Panel **2.3.3**，Android **1.4.7**。模型计算在电脑的 ComfyUI 上运行。
 
 ## 1. 先启动 ComfyUI
 
@@ -8,7 +8,7 @@
 
 ## 2. 安装 Easy Panel
 
-在 [v2.3.2 发布页](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.2) 下载 `EasyPanel-Core-OneClick.zip`，完整解压后双击 `安装-核心面板.cmd`。识别失败时填写包含 `main.py`、`models`、`custom_nodes` 的 ComfyUI 目录。
+在 [v2.3.3 发布页](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.3) 下载 `EasyPanel-Core-OneClick.zip`，完整解压后双击 `安装-核心面板.cmd`。识别失败时填写包含 `main.py`、`models`、`custom_nodes` 的 ComfyUI 目录。
 
 首次只装 Core 即可。需要骨架提取时再装 Pose，需要 LayerStyle 调色时再装 Color；Tags 提供标签检索数据。All 会安装这些模块并检查模型，但**不包含模型权重**。
 
@@ -57,6 +57,10 @@ $env:EASY_PANEL_COMFY_URL = 'http://127.0.0.1:8188'
 在手机填写 `http://电脑局域网IP:8190`，跨网络则使用电脑的 Tailscale 地址。Token 来自面板目录中的 `rpg_mobile_token.txt`。点击“测试连接”，再“读取模型”。完整连接与故障排查见 [Android 教程](../android-client/README.md)。
 
 快速页提供常用生成操作；需要分区、LoRA 备忘、游乐场和修复工作台时打开“高级面板”。
+
+高级面板的“生成数量”会独立保存，重新进入后恢复你选择的数量。升级后旧记录没有数量时默认 1 张；需要多图时再设置数量。
+
+批量操作先点“加入队列”保存各组参数，再点底部“发送队列”提交。左侧“任务批处理控制”里的“运行 / 暂停”用于继续或暂停已发送的任务，不会提交仍留在本地的待发送队列。操作结果和连接错误会显示在该区域。
 
 ## 5. 更新与备份
 

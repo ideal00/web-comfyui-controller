@@ -7,6 +7,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const vm = require('node:vm')
 
 global.window = global
 const storage = new Map()
@@ -115,3 +116,43 @@ test('队列计数 → 折叠摘要短标签', () => {
   assert.equal(fold.summarizeTaskCounts(undefined), '读取中…')
   assert.equal(fold.summarizeTaskCounts('排队中 5'), '排队 5')
 })
+
+function railHarness() {
+  const timers=[], observers=[], saved=new Map();
+  const node={id:'taskQueueFold',dataset:{railFold:''},open:false,tagName:'DETAILS',
+    querySelector(){return {textContent:'任务批处理控制',setAttribute(){},addEventListener(){}}},addEventListener(){},closest(){return null}};
+  const nodes=[node];let badgeWrites=0;
+  const makeBadge=()=>({value:'',get textContent(){return this.value},set textContent(value){badgeWrites++;this.value=value}});
+  const badge=makeBadge();
+  const elements={taskQueueSummary:badge,taskQueueServerCounts:{dataset:{},textContent:'排队中 0 · 执行中 0'},customFeatureState:makeBadge(),imageReadState:makeBadge()};
+  const rail={};
+  const context={window:{setTimeout:fn=>timers.push(fn)},localStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value)},
+    MutationObserver:class {constructor(callback){this.callback=callback;observers.push(this)}observe(target){this.target=target}},
+    document:{readyState:'loading',addEventListener(){},getElementById:id=>elements[id]||null,querySelector:()=>rail,querySelectorAll:()=>nodes}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../web/assets/js/rail-fold.js'),'utf8'),context);
+  const api=context.window.EasyPanelRailFold;api.install();
+  return {api,node,nodes,timers,badge,context,get badgeWrites(){return badgeWrites},
+    mutate(addedNodes){observers.find(observer=>observer.target===rail).callback([{type:'childList',addedNodes}])},
+    drain(){while(timers.length)timers.shift()()}};
+}
+
+test('task polling mutations never reapply old fold state or queue a sidebar reinstall',()=>{
+  const page=railHarness();page.node.open=true;
+  page.mutate([{nodeType:3,textContent:'排队中 1'}]);
+  assert.equal(page.timers.length,0,'a task count or row update must not reinstall the sidebar');
+  assert.equal(page.node.open,true);
+});
+
+test('binding a newly mounted tool preserves an existing fold before its toggle event is persisted',()=>{
+  const page=railHarness();page.node.open=true;
+  const added={...page.node,id:'transparentOutputPanel',nodeType:1,dataset:{railFold:''},open:true,matches:()=>true,querySelectorAll:()=>[]};
+  page.nodes.push(added);page.mutate([added]);page.drain();
+  assert.equal(page.node.open,true,'an unpersisted user click must not be overwritten by installation');
+  assert.equal(added.dataset.railFoldBound,'1');
+});
+
+test('installing the fold layer twice does not rewrite unchanged badges or open state',()=>{
+  const page=railHarness();page.node.open=true;
+  const writes=page.badgeWrites;page.api.install();
+  assert.equal(page.node.open,true);assert.equal(page.badgeWrites,writes);
+});

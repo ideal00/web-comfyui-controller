@@ -133,7 +133,8 @@
     const count = list
       ? Array.from(list.children).filter((item) => !item.hidden && item.getAttribute?.("aria-hidden") !== "true").length
       : 0;
-    badge.textContent = count ? `${count} 项快捷入口` : "快捷入口";
+    const text = count ? `${count} 项快捷入口` : "快捷入口";
+    if (badge.textContent !== text) badge.textContent = text;
   }
 
   function updateImageReadState() {
@@ -141,7 +142,8 @@
     if (!badge) return;
     const result = (byId("imgReadResult")?.textContent || "").trim();
     const preview = (byId("imgReadPreview")?.textContent || "").trim();
-    badge.textContent = result || preview ? "已读取参数" : "上传或选输出图";
+    const text = result || preview ? "已读取参数" : "上传或选输出图";
+    if (badge.textContent !== text) badge.textContent = text;
   }
 
   /** 服务端队列计数（“排队中 0 · 执行中 1 · 已完成 12 …”）→ 折叠摘要短标签。 */
@@ -165,7 +167,8 @@
   function updateTaskQueueState() {
     const badge = byId("taskQueueSummary");
     if (!badge) return;
-    badge.textContent = summarizeTaskCounts(byId("taskQueueServerCounts")?.textContent);
+    const text = summarizeTaskCounts(byId("taskQueueServerCounts")?.textContent);
+    if (badge.textContent !== text) badge.textContent = text;
   }
 
   /** 队列计数是其它脚本按 id 写入的：监听它刷新折叠摘要。 */
@@ -197,6 +200,7 @@
     if (!nodes.length) return false;
     const state = readFoldState();
     nodes.forEach((node) => {
+      if (node.dataset.railFoldBound === "1") return;
       applyFoldState(node, state);
       bindNode(node);
     });
@@ -224,7 +228,17 @@
     if (observer || typeof MutationObserver === "undefined") return;
     const rail = document.querySelector(".studio-left");
     if (!rail) return;
-    observer = new MutationObserver(() => queueInstall());
+    observer = new MutationObserver((records) => {
+      const needsBinding = records.some((record) => Array.from(record.addedNodes || []).some((node) => {
+        if (node.nodeType !== 1) return false;
+        return (node.matches?.("details[data-rail-fold]") && node.dataset.railFoldBound !== "1")
+          || foldNodes(node).some((fold) => fold.dataset.railFoldBound !== "1");
+      }));
+      if (needsBinding) queueInstall();
+      // These badges can change when a feature or an image-reader result arrives.
+      updateCustomFeatureState();
+      updateImageReadState();
+    });
     observer.observe(rail, { childList: true, subtree: true });
   }
 

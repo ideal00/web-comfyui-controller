@@ -39,8 +39,8 @@ Python 与 pnpm 使用自己的实际命令 / 路径。Android 构建还需要 J
 3. 创建并推送对应版本标签。示例：
 
 ```powershell
-git tag v2.3.2
-git push origin v2.3.2
+git tag v2.3.3
+git push origin v2.3.3
 ```
 
 服务端标签触发 Windows 回归、重建七个安装器 ZIP、校验包内容，然后发布 ZIP 与 `SHA256SUMS.txt`。只有 Android 本身有新版本时，再创建新的 `mobile-v<版本>` 标签，触发 JavaScript / 原生测试、Capacitor 同步、Debug APK 构建与发布。双端同时升级时，两个新标签指向本次验证的同一提交；只更新服务端网页时保留现有 APK 和手机标签，不重复创建或移动已发布标签。
