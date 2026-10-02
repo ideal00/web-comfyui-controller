@@ -4,7 +4,7 @@
 
 Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作台。选择模型、分区写提示词、调整尺寸和采样参数，面板会组装工作流并交给 ComfyUI 执行。常用操作集中在一个页面，已有的模型与 LoRA 可以直接使用。
 
-[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.1) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
+[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.2) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
 
 ![Easy Panel 桌面工作台：左侧快捷工具、中间分区提示词、右侧生成预览、底部生成与队列操作](docs/screenshots/desktop-overview.jpg)
 
@@ -67,10 +67,10 @@ Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作�
 
 ## 当前版本
 
-- Easy Panel 服务端：`2.3.1`。
+- Easy Panel 服务端：`2.3.2`。
 - Android 客户端：`mobile-v1.4.7`（versionCode `1004007`）。
-- 下载入口：服务端 [v2.3.1 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.1) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
-- 本版本修复手机与桌面的标签候选搜索卡死，补上搜索状态、请求超时与手机弹窗定位。保留 2.3.0 的创作游乐场、分区预设与例图、可视化词条和作品库功能；Android 继续使用 1.4.7。一键 ZIP 包含同版本前后端、教程和校验清单。
+- 下载入口：服务端 [v2.3.2 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.2) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
+- 本版本修复手机候选反复预览却无法填入的问题：轻点直接填入，长按查看参考图，有图和无图的候选操作一致；滑动只滚动。包含 2.3.1 的搜索队列、超时与手机定位修复，保留 2.3.0 的创作游乐场、分区预设与例图、可视化词条和作品库功能。Android 继续使用 1.4.7，一键 ZIP 包含同版本前后端、教程和校验清单。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
 ## 目录

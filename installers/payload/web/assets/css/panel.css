@@ -505,7 +505,7 @@ html.easy-panel-mobile .studio-content-viewport .studio-main-heading{position:st
 html.easy-panel-mobile .easy-tag-preview{width:174px;max-height:184px}
 html.easy-panel-mobile .easy-tag-preview-body img{max-height:115px}
 .easy-advanced-tag-search #tagResults{max-height:440px;overflow:auto}
-.easy-tag-dropdown .textcomplete-item{margin:0;padding:0;border-radius:5px}
+.easy-tag-dropdown .textcomplete-item{margin:0;padding:0;border-radius:5px;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .easy-tag-dropdown .textcomplete-item.active{background:#37456a}
 .easy-tag-dropdown .textcomplete-item>a{display:flex;align-items:center;gap:8px;min-width:220px;padding:6px 7px;color:inherit;text-decoration:none;cursor:pointer}
 .easy-tag-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600}

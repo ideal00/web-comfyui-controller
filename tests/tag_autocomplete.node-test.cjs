@@ -102,7 +102,7 @@ test('mouse activation leaves scroll position alone; arrow navigation reveals hi
 });
 
 function completionHarness(fetch, options={}) {
-  const listeners = new Map(), instances = [],positionHandlers=new Map(),windowListeners=new Map();
+  const listeners = new Map(), instances = [],positionHandlers=new Map(),windowListeners=new Map(),dropdownListeners=new Map(),completionHandlers=new Map(),nodes=new Map();
   const field = {id:'promptPose',value:'',selectionStart:0,selectionEnd:0,dataset:{},
     addEventListener(type,listener) { listeners.set(type,listener); },
     removeEventListener(type,listener) { if(listeners.get(type)===listener)listeners.delete(type); },
@@ -112,12 +112,14 @@ function completionHarness(fetch, options={}) {
     static editors = {Textarea:class {constructor(el){this.el=el;} getCursorOffset(){return {top:120,left:10};}}};
     constructor(editor) {
       this.editor=editor; this.isQueryInFlight=false; this.nextPendingQuery=null; this.hits=[];
-      this.dropdown={shown:false,items:[],on(type,fn){positionHandlers.set(type,fn);},getActiveItem(){return null;},
-        el:{scrollTop:0,scrollHeight:220,style:{},addEventListener(){},querySelector(){return null;},getBoundingClientRect(){return {width:300};}}};
+      const handlers=new Map();
+      this.dropdown={shown:false,items:[],selected:[],on(type,fn){const list=handlers.get(type)||[];list.push(fn);handlers.set(type,list);positionHandlers.set(type,(...args)=>list.forEach(handler=>handler(...args)));},getActiveItem(){return null;},
+        select:item=>{this.dropdown.selected.push(item);let prevented=false;completionHandlers.get('select')?.({detail:{searchResult:item.searchResult},preventDefault(){prevented=true;}});if(!prevented)field.value=item.searchResult.data.tag+', ';},
+        el:{scrollTop:0,scrollHeight:220,style:{},addEventListener(type,fn,options){const list=dropdownListeners.get(type)||[];list.push({fn,capture:options===true});dropdownListeners.set(type,list);},querySelector(){return null;},getBoundingClientRect(){return {width:300,left:10,right:310,top:140};}}};
       instances.push(this);
     }
     register(strategies) { this.strategy=strategies[0]; }
-    on() {}
+    on(type,fn) { completionHandlers.set(type,fn); }
     hide() { this.dropdown.shown=false; }
     // Textcomplete 0.18.2 drains its latest pending query only when search calls back.
     trigger(text) {
@@ -134,13 +136,16 @@ function completionHarness(fetch, options={}) {
   }
   const context={window:{Textcomplete,visualViewport:options.visualViewport},fetch,setTimeout,clearTimeout,URLSearchParams,AbortController,
     innerWidth:390,innerHeight:844,scrollX:0,scrollY:0,
-    document:{readyState:'loading',getElementById:id=>id===field.id?field:null,
+    matchMedia:()=>({matches:false}),
+    document:{readyState:'loading',getElementById:id=>id===field.id?field:nodes.get(id)||null,
+      createElement(){return {style:{},dataset:{},isConnected:true,append(){},replaceChildren(){},remove(){nodes.delete(this.id);this.isConnected=false;}};},
+      body:{append(node){if(node.id)nodes.set(node.id,node);}},documentElement:{classList:{contains(){return false;}}},
       querySelector(){return null;},addEventListener(){}},addEventListener(){}};
   context.window.addEventListener=(type,fn)=>windowListeners.set(type,fn);
   context.window.removeEventListener=(type,fn)=>{if(windowListeners.get(type)===fn)windowListeners.delete(type);};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../web/assets/js/tag-autocomplete.js'),'utf8'),context);
   context.window.EasyPanelTagAutocomplete.init();
-  return {field,completion:instances[0],listeners,positionHandlers,windowListeners,api:context.window.EasyPanelTagAutocomplete,context,
+  return {field,completion:instances[0],listeners,positionHandlers,windowListeners,dropdownListeners,completionHandlers,nodes,api:context.window.EasyPanelTagAutocomplete,context,
     input(text){field.value=text;field.selectionStart=field.selectionEnd=text.length;instances[0].trigger(text);}};
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
@@ -162,6 +167,88 @@ test('changing text during a request releases the pending search instead of free
   assert.ok(queried.includes('hair'));
   input('瘦');for(let i=0;i<6;i++)await flush();
   assert.equal(completion.dropdown.items[0].tag,'瘦');
+});
+
+function touchHarness(data) {
+  const harness=completionHarness(async()=>({ok:true,json:async()=>({})}));
+  const timers=new Map();let timerId=0;
+  harness.context.setTimeout=(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;};
+  harness.context.clearTimeout=id=>timers.delete(id);
+  harness.context.window.EasyPanelPresetExamples={url:image=>image?'local-example.png':null};
+  const row={className:'',removeEventListener(){}};
+  const target={closest:selector=>selector==='.textcomplete-item'?row:null};
+  const item={el:row,searchResult:{data},activate(){return this;}};
+  harness.completion.dropdown.items=[item];harness.completion.dropdown.shown=true;
+  harness.context.document.elementFromPoint=()=>target;
+  return {...harness,item,target,timers,
+    event(type,{x=30,y=180,target:eventTarget=target,multi=false}={}){
+      const event={target:eventTarget,touches:multi?[{clientX:x,clientY:y},{clientX:x+1,clientY:y}]:[{clientX:x,clientY:y}],changedTouches:[{clientX:x,clientY:y}],prevented:false,stopped:false,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;}};
+      for(const {fn} of (harness.dropdownListeners.get(type)||[]).slice().sort((a,b)=>Number(b.capture)-Number(a.capture))){fn(event);if(event.stopped)break;}
+      return event;
+    }};
+}
+
+for(const exampleImage of ['example-1',''])test(`one touch fills a preset ${exampleImage?'with':'without'} an example image`,()=>{
+  const data={source:'preset',id:'preset-1',tag:'测试坐姿',name:'测试坐姿',text:'sitting',exampleImage,range:{before:'坐',start:0,end:1}};
+  const harness=touchHarness(data);const applied=[];
+  harness.context.window.EasyPanelPresetSearch={apply(...args){applied.push(args);return true;}};
+  harness.event('touchstart');harness.event('touchend');
+  assert.equal(harness.completion.dropdown.selected.length,1,'a first tap must insert, without waiting for a preview');
+  assert.equal(applied.length,1);assert.equal(applied[0][0],data);assert.equal(applied[0][1],'promptPose');
+  assert.equal(harness.nodes.has('easyTagPreview'),false);
+  const mouse=harness.event('mousedown');assert.equal(mouse.prevented,true,'synthetic mouse must not insert a second time');
+});
+
+test('one touch inserts a dictionary tag even when no preview image exists',()=>{
+  const harness=touchHarness({source:'index',tag:'sitting'});
+  harness.event('touchstart');harness.event('touchend');
+  assert.equal(harness.field.value,'sitting, ');
+  assert.equal(harness.completion.dropdown.selected.length,1);
+});
+
+test('scrolling, cancelled and multiple touches never insert candidates or open a preview',()=>{
+  const harness=touchHarness({source:'preset',id:'preset-1',tag:'测试坐姿'});
+  harness.event('touchstart');harness.event('touchmove',{y:240});harness.event('touchend',{y:240});
+  harness.event('touchstart');harness.event('touchcancel');harness.event('touchend');
+  harness.event('touchstart',{multi:true});harness.event('touchend');
+  harness.event('touchstart');harness.event('touchmove',{multi:true});harness.event('touchend');
+  assert.equal(harness.completion.dropdown.selected.length,0);
+  assert.equal(harness.nodes.size,0);assert.equal(harness.timers.size,0);
+});
+
+test('long press previews once without insertion, and a following tap still inserts',()=>{
+  const harness=touchHarness({source:'preset',id:'preset-1',tag:'测试坐姿',exampleImage:'example-1'});
+  harness.event('touchstart');
+  assert.equal(harness.timers.size,1);
+  [...harness.timers.values()][0].fn();harness.event('touchend');
+  assert.equal(harness.nodes.has('easyTagPreview'),true);
+  assert.equal(harness.completion.dropdown.selected.length,0);
+  harness.event('touchstart');harness.event('touchend');
+  assert.equal(harness.completion.dropdown.selected.length,1);
+});
+
+test('a rerendered list cancels the old gesture instead of selecting a different row',()=>{
+  const harness=touchHarness({source:'index',tag:'sitting'});
+  harness.event('touchstart');harness.completion.dropdown.items=[];
+  harness.positionHandlers.get('rendered')();harness.event('touchend');
+  assert.equal(harness.completion.dropdown.selected.length,0);assert.equal(harness.timers.size,0);
+});
+
+test('keyboard reflow cannot redirect a tap to the row now under its old coordinates',()=>{
+  const harness=touchHarness({source:'index',tag:'sitting'});
+  harness.context.document.elementFromPoint=()=>null;
+  harness.event('touchstart');harness.event('touchend');
+  assert.equal(harness.completion.dropdown.selected[0],harness.item);
+  harness.event('mousemove');
+  assert.equal(harness.nodes.has('easyTagPreview'),false,'synthetic mousemove cannot open a ghost preview');
+});
+
+test('the touch close button works once without inserting a candidate',()=>{
+  const harness=touchHarness({source:'index',tag:'sitting'});
+  const target={closest:selector=>selector==='[data-autocomplete-close]'?{}:null};
+  harness.event('touchstart',{target});harness.event('touchend',{target});
+  assert.equal(harness.completion.dropdown.shown,false);
+  assert.equal(harness.completion.dropdown.selected.length,0);assert.equal(harness.timers.size,0);
 });
 
 test('IME composition cancelling an outstanding request still allows the committed Chinese query',async()=>{

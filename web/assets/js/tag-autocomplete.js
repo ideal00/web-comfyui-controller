@@ -306,6 +306,11 @@
   function connectPreview(completion, touchAction) {
     const dropdown = completion.dropdown;
     let touch = null;
+    let holdTimer = null;
+    function cancelHold() {
+      if (holdTimer !== null) { clearTimeout(holdTimer); holdTimer = null; }
+    }
+    function cancelTouch() { cancelHold(); touch = null; }
     function itemAt(target) {
       const row = target?.closest?.('.textcomplete-item');
       return dropdown.items.find(item => item.el === row);
@@ -316,36 +321,53 @@
       return item;
     }
     completion.dropdown.el.addEventListener('mousemove', event => {
+      if (touch || Date.now() < suppressTouchMouseUntil) return;
       previewAt(event.target);
     });
     dropdown.el.addEventListener('touchstart', event => {
-      if (event.target.closest?.('[data-autocomplete-color]')) { touch = null; return; }
+      cancelTouch();
+      suppressTouchMouseUntil = Date.now() + 700;
+      if (event.touches.length !== 1 || event.target.closest?.('[data-autocomplete-color]')) return;
       const point = event.touches[0];
-      touch = event.touches.length === 1 ? {x:point.clientX,y:point.clientY,moved:false} : null;
+      const item = itemAt(event.target);
+      touch = {x:point.clientX,y:point.clientY,target:event.target,item,moved:false,previewed:false};
+      if (!item || event.target.closest?.('[data-autocomplete-image]')) return;
+      const gesture = touch;
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        if (touch !== gesture || touch.moved || !dropdown.shown || !dropdown.items.includes(item)) return;
+        touch.previewed = true;
+        item.activate(); showPreview(item.searchResult.data, completion);
+      }, 450);
     }, {passive:true});
     dropdown.el.addEventListener('touchmove', event => {
-      if (!touch || event.touches.length !== 1) return;
+      if (event.touches.length !== 1) { cancelTouch(); return; }
+      if (!touch) return;
       const point = event.touches[0];
-      if (Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > 8) touch.moved = true;
+      if (Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > 8) {
+        touch.moved = true; cancelHold(); hidePreview();
+      }
     }, {passive:true});
     dropdown.el.addEventListener('touchend', event => {
       if (!touch) return;
+      const gesture = touch;
       const point = event.changedTouches[0];
-      const moved = touch.moved || Math.hypot(point.clientX - touch.x, point.clientY - touch.y) > 8;
-      touch = null;
+      const moved = gesture.moved || !point || Math.hypot(point.clientX - gesture.x, point.clientY - gesture.y) > 8;
+      cancelTouch();
       suppressTouchMouseUntil = Date.now() + 700;
-      const target = document.elementFromPoint(point.clientX, point.clientY);
-      if (moved) { previewAt(target); return; }
+      if (moved) return;
       event.preventDefault();
-      if (touchAction(target)) return;
-      const item = itemAt(target);
-      if (!item) return;
-      const alreadyPreviewed = document.getElementById('easyTagPreview')?.dataset.tag === normalized(item.searchResult.data.tag);
+      if (gesture.previewed || !dropdown.shown) return;
+      if (touchAction(gesture.target)) return;
+      // Keep the row touched at the start: keyboard reflow can change hit testing.
+      const item = gesture.item;
+      if (!item || !dropdown.items.includes(item)) return;
+      hidePreview();
       item.activate();
-      if (alreadyPreviewed) dropdown.select(item);
-      else showPreview(item.searchResult.data, completion);
-    });
-    dropdown.el.addEventListener('touchcancel', () => { touch = null; });
+      dropdown.select(item);
+    }, {passive:false});
+    dropdown.el.addEventListener('touchcancel', cancelTouch);
+    dropdown.el.addEventListener('contextmenu', event => { if (touch?.previewed) event.preventDefault(); });
     dropdown.el.addEventListener('mousedown', event => {
       if (Date.now() < suppressTouchMouseUntil) { event.preventDefault(); event.stopPropagation(); }
     }, true);
@@ -353,8 +375,9 @@
       if (Date.now() < suppressTouchMouseUntil) { event.preventDefault(); event.stopPropagation(); }
     }, true);
     completion.dropdown.el.addEventListener('mouseleave', hidePreview);
-    completion.dropdown.on('hidden', hidePreview);
+    completion.dropdown.on('hidden', () => { cancelTouch(); hidePreview(); });
     completion.dropdown.on('rendered', () => {
+      cancelTouch();
       completion.dropdown.items.forEach(item => {
         item.el.removeEventListener('mouseover', item.onMouseover);
         item.el.removeEventListener('touchstart', item.onClick);
