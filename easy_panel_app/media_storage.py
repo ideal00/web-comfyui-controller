@@ -202,12 +202,12 @@ def clean_transparent_residue(name: str, *, tolerance: float = 20, area_limit: i
     import numpy as np
     from PIL import Image
 
+    path = _output_path(name)
     try:
         from scipy import ndimage
     except ImportError:
         return {"name": str(name), "removed": 0, "skipped": "缺少 scipy，跳过缝隙清理"}
 
-    path = _output_path(name)
     with Image.open(path) as handle:
         image = handle.convert("RGBA")
     rgba = np.asarray(image).astype(np.float32)
