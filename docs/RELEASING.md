@@ -39,19 +39,18 @@ Python 与 pnpm 使用自己的实际命令 / 路径。Android 构建还需要 J
 3. 创建并推送对应版本标签。示例：
 
 ```powershell
-git tag v2.3.0
-git tag mobile-v1.4.7
-git push origin v2.3.0 mobile-v1.4.7
+git tag v2.3.1
+git push origin v2.3.1
 ```
 
-服务端标签触发 Windows 回归、重建七个安装器 ZIP、校验包内容，然后发布 ZIP 与 `SHA256SUMS.txt`。手机标签触发 JavaScript / 原生测试、Capacitor 同步、Debug APK 构建，再发布 APK 与 `app-debug.apk.sha256`。两个标签应指向本次验证的同一个提交。
+服务端标签触发 Windows 回归、重建七个安装器 ZIP、校验包内容，然后发布 ZIP 与 `SHA256SUMS.txt`。只有 Android 本身有新版本时，再创建新的 `mobile-v<版本>` 标签，触发 JavaScript / 原生测试、Capacitor 同步、Debug APK 构建与发布。双端同时升级时，两个新标签指向本次验证的同一提交；只更新服务端网页时保留现有 APK 和手机标签，不重复创建或移动已发布标签。
 
 工作流运行中的包可从 Actions 下载；正式下载链接只有发布完成后才有效。Android 使用 Debug 签名，自动构建环境与维护者本机的签名可能不同；若覆盖安装提示签名冲突，应先备份客户端设置，再处理安装。正式签名发行需要另行配置自己的稳定签名密钥。
 
 ## 发布后验收
 
 - 比较 `git rev-list --left-right --count HEAD...origin/main`，应为 `0 0`；用 `git status --short` 检查剩余改动。
-- 确认两个标签指向同一提交，两个 Release 的附件数量和校验文件正确；手机发布不会覆盖服务端 Latest。
+- 确认新标签指向本次验证的提交，Release 的附件数量和校验文件正确；同步发布的双端标签应一致，继续配套的旧 APK 保留原标签。手机发布不会覆盖服务端 Latest。
 - 解压 Core，检查版本、前端、教程与源代码一致。APK 的 versionName、versionCode 和包名应与版本约定相符。
 - 在目标电脑和手机验证连接、文件选择器、下载、恢复快照与一次实际出图。自动测试和构建成功不等于真机或 GPU 验收完成。
 

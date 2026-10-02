@@ -64,13 +64,20 @@
     const key = term.toLowerCase();
     if (!cache.has(key)) {
       const read = async (url) => {
-        try { const response = await fetch(url); if (!response.ok) return null; return await response.json(); }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
+        try { const response = await fetch(url, {signal:controller.signal}); if (!response.ok) return null; return await response.json(); }
         catch (_) { return null; }
+        finally { clearTimeout(timeout); }
       };
       const request = Promise.all([
         read('/api/visual-tags?' + new URLSearchParams({q:term,limit:'200'})),
         read('/api/tags?' + new URLSearchParams({q:term,limit:'120'}))
-      ]).then(([visual, dictionary]) => mergeResults(visual?.results || [], dictionary?.tags || [], visual?.matched));
+      ]).then(([visual, dictionary]) => {
+        // A temporary connection failure must not become an empty permanent cache hit.
+        if ((!visual || !dictionary) && cache.get(key) === request) cache.delete(key);
+        return mergeResults(visual?.results || [], dictionary?.tags || [], visual?.matched);
+      });
       cache.set(key, request);
       if (cache.size > 80) cache.delete(cache.keys().next().value);
     }
@@ -227,22 +234,29 @@
   }
   function connectPositioning(field, completion, editor) {
     const dropdown = completion.dropdown, viewport = field.closest('.studio-content-viewport');
+    const visualViewport = global.visualViewport;
     function position() {
       if (!dropdown.shown) return;
       const fieldRect = field.getBoundingClientRect();
       const viewRect = viewport?.getBoundingClientRect();
-      const visibleTop = Math.max(8, viewRect?.top || 8);
-      const visibleBottom = Math.min(innerHeight - 8, viewRect?.bottom || innerHeight - 8);
+      const screenTop = visualViewport?.offsetTop || 0;
+      const screenBottom = screenTop + (visualViewport?.height || innerHeight);
+      const visibleTop = Math.max(screenTop + 8, viewRect?.top || 8);
+      const visibleBottom = Math.min(screenBottom - 8, viewRect?.bottom || innerHeight - 8);
       if (fieldRect.bottom <= visibleTop || fieldRect.top >= visibleBottom) { completion.hide(); return; }
-      const caret = editor.getCursorOffset();
+      const picker = field.closest('.easy-chip-picker');
+      const pickerRect = picker?.getBoundingClientRect();
+      const isChipPicker = Boolean(picker);
+      const caret = isChipPicker ? {top:pickerRect.bottom + scrollY,left:fieldRect.left + scrollX} : editor.getCursorOffset();
       const caretTop = caret.top - scrollY;
-      if (caretTop < visibleTop || caretTop > visibleBottom || caretTop < fieldRect.top || caretTop > fieldRect.bottom + 24) {
+      if (caretTop < visibleTop || caretTop > visibleBottom || (!isChipPicker && (caretTop < fieldRect.top || caretTop > fieldRect.bottom + 24))) {
         completion.hide(); return;
       }
-      const dock = viewport && document.getElementById('studioActionDock')?.getBoundingClientRect();
-      const bottom = Math.min(visibleBottom, dock?.top || visibleBottom);
+      const dock = document.getElementById('studioActionDock')?.getBoundingClientRect();
+      const bottom = dock && dock.top > visibleTop ? Math.min(visibleBottom, dock.top) : visibleBottom;
       const availableBelow = bottom - caretTop - 6;
-      const availableAbove = caretTop - visibleTop - 6;
+      const anchorTop = isChipPicker ? pickerRect.top : caretTop;
+      const availableAbove = anchorTop - visibleTop - 6;
       const desiredHeight = Math.min(390, innerHeight * .65, dropdown.el.scrollHeight);
       const above = availableBelow < Math.min(desiredHeight, 180) && availableAbove > availableBelow;
       const room = Math.max(80, above ? availableAbove : availableBelow);
@@ -252,15 +266,26 @@
       const width = dropdown.el.getBoundingClientRect().width;
       const caretLeft = (caret.left ?? caret.right ?? fieldRect.left) - scrollX;
       dropdown.el.style.left = Math.max(8, Math.min(caretLeft, innerWidth - width - 8)) + 'px';
-      dropdown.el.style.top = (above ? Math.max(visibleTop, caretTop - Math.min(desiredHeight, room) - 6) : caretTop + 6) + 'px';
+      dropdown.el.style.top = (above ? Math.max(visibleTop, anchorTop - Math.min(desiredHeight, room) - 6) : caretTop + 6) + 'px';
       const preview = document.getElementById('easyTagPreview');
       if (preview) positionPreview(preview, completion);
     }
     dropdown.on('rendered', position);
-    window.addEventListener('scroll', event => { if (event.target !== dropdown.el) position(); }, true);
+    const onScroll = event => { if (event.target !== dropdown.el) position(); };
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', position);
+    visualViewport?.addEventListener('resize', position);
+    visualViewport?.addEventListener('scroll', position);
     field.addEventListener('click', position);
     field.addEventListener('keyup', position);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', position);
+      visualViewport?.removeEventListener('resize', position);
+      visualViewport?.removeEventListener('scroll', position);
+      field.removeEventListener('click', position);
+      field.removeEventListener('keyup', position);
+    };
   }
   function activateWithoutScroll(item) {
     if (!item.active) {
@@ -354,6 +379,8 @@
     });
     let lookup = 0;
     completion.cancelLookup = () => { lookup++; completion.hide(); };
+    const pickerStatus = field.closest('.easy-chip-picker')?.querySelector('[data-picker-status]');
+    const setStatus = text => { if (pickerStatus) pickerStatus.textContent = text; };
     completion.register([{
       id:'easy-panel-tags', match:MATCH, index:2,
       search(term, callback) {
@@ -361,24 +388,35 @@
         const presetSearch = onChipInsert ? null : global.EasyPanelPresetSearch;
         const range = presetSearch?.queryRange(field);
         let matches = presetSearch ? presetSearch.candidates(field.id,query,30).map(item => ({...item,range})) : [];
-        if (field.readOnly || field.disabled || field.dataset.composing === '1' || !searchable(query) || !/^\s*(?:[,;\n]|$)/.test(field.value.slice(field.selectionEnd))) { callback([]); return; }
-        if (matches.length || field.id === 'promptNaturalLanguage') callback(matches);
-        if (field.id === 'promptNaturalLanguage') return;
+        if (field.readOnly || field.disabled || field.dataset.composing === '1' || !searchable(query) || !/^\s*(?:[,;\n]|$)/.test(field.value.slice(field.selectionEnd))) {
+          setStatus(field.dataset.composing === '1' ? '确认中文输入后显示候选。' : '输入中文标签或至少两个英文字母。');
+          callback([]); return;
+        }
+        // Textcomplete's callback completes one lookup and unlocks its pending query.
+        // Calling it twice or skipping it on stale input corrupts that queue.
+        if (field.id === 'promptNaturalLanguage') { callback(matches); return; }
+        setStatus('正在搜索候选…');
         const before = field.value, caret = field.selectionEnd;
         Promise.all([search(query),presetSearch?.ready?.().catch(()=>{})]).then(([items]) => {
-          if (lookup !== request || field.value !== before || field.selectionEnd !== caret || field.dataset.composing === '1') return;
+          if (lookup !== request || field.value !== before || field.selectionEnd !== caret || field.dataset.composing === '1') { callback([]); return; }
           if (presetSearch) matches = presetSearch.candidates(field.id,query,30).map(item => ({...item,range}));
           const used = onChipInsert ? currentTerms(fieldForKey(onChipInsert)) : currentTerms(field);
           const selected = completion.dropdown.getActiveItem()?.searchResult.data;
           const scrollTop = completion.dropdown.el.scrollTop;
-          callback(matches.concat(items.slice(0, 180 - matches.length).map(item => ({...item, existing:used.has(baseTag(item.tag))}))));
+          const candidates = matches.concat(items.slice(0, 180 - matches.length).map(item => ({...item, existing:used.has(baseTag(item.tag))})));
+          setStatus(candidates.length ? `找到 ${candidates.length} 个候选` : '没有找到匹配标签；可换个关键词重试。');
+          callback(candidates);
           if (selected) {
             const active = completion.dropdown.items.find(item => selected.source === 'preset'
               ? item.searchResult.data.source === 'preset' && item.searchResult.data.id === selected.id
               : item.searchResult.data.source !== 'preset' && normalized(item.searchResult.data.tag) === normalized(selected.tag));
             if (active) { completion.dropdown.el.scrollTop = scrollTop; active.activate(); showPreview(active.searchResult.data, completion); }
           }
-        }, () => { if (lookup === request && field.value === before && field.selectionEnd === caret) callback(matches); });
+        }, () => {
+          const current = lookup === request && field.value === before && field.selectionEnd === caret;
+          if (current) setStatus('候选搜索暂不可用，请重新输入重试。');
+          callback(current ? matches : []);
+        });
       },
       template(item) { return `<span class="easy-tag-result${item.existing ? ' existing' : ''}">${resultMarkup(item)}</span>`; },
       replace(item) {
@@ -398,7 +436,7 @@
     });
     const touchAction = connectImageButtons(completion, field);
     connectPreview(completion, touchAction);
-    connectPositioning(field, completion, editor);
+    completion.disposePositioning = connectPositioning(field, completion, editor);
     field.addEventListener('keydown', event => {
       if (event.key === 'Escape') lookup++;
       if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && completion.dropdown.shown) {
@@ -420,6 +458,9 @@
   function closeChipPicker() {
     if (!chipPicker) return;
     hidePreview();
+    chipPicker.completion?.cancelLookup();
+    chipPicker.completion?.disposePositioning();
+    chipPicker.disposePositioning();
     chipPicker.completion?.destroy();
     chipPicker.node.remove(); chipPicker = null;
   }
@@ -427,14 +468,34 @@
     closeChipPicker();
     const node = document.createElement('div'); node.className = 'easy-chip-picker';
     node.dataset.sectionKey = key;
-    node.innerHTML = '<textarea rows="1" placeholder="输入英文或中文标签…" aria-label="搜索并添加标签"></textarea><button type="button" data-picker="raw" title="添加未收录的英文标签">添加原文</button><button type="button" data-picker="close" aria-label="关闭">×</button>';
+    node.innerHTML = '<textarea rows="1" placeholder="输入英文或中文标签…" aria-label="搜索并添加标签"></textarea><button type="button" data-picker="raw" title="添加未收录的英文标签">添加原文</button><button type="button" data-picker="close" aria-label="关闭">×</button><span data-picker-status role="status" aria-live="polite">输入英文或中文标签后显示候选。</span>';
     document.body.append(node);
-    const rect = anchor.getBoundingClientRect();
-    node.style.left = Math.min(rect.left, window.innerWidth - Math.min(340, window.innerWidth - 16) - 8) + 'px';
-    node.style.top = Math.min(rect.bottom + 5, window.innerHeight - 90) + 'px';
+    const visualViewport = global.visualViewport;
+    function positionPicker() {
+      const rect = anchor.getBoundingClientRect();
+      const screenTop = visualViewport?.offsetTop || 0;
+      const screenBottom = screenTop + (visualViewport?.height || innerHeight);
+      const dock = document.getElementById('studioActionDock')?.getBoundingClientRect();
+      const bottom = dock && dock.top > screenTop ? Math.min(screenBottom, dock.top) : screenBottom;
+      const width = node.getBoundingClientRect().width;
+      node.style.left = Math.max(8, Math.min(rect.left, innerWidth - width - 8)) + 'px';
+      node.style.top = Math.max(screenTop + 8, Math.min(rect.bottom + 5, bottom - node.offsetHeight - 8)) + 'px';
+    }
+    positionPicker();
     const input = node.querySelector('textarea');
-    const completion = createCompletion(input, key);
-    chipPicker = {node,completion};
+    let completion = null;
+    const onScroll = event => { if (!node.contains(event.target) && !completion?.dropdown.el.contains(event.target)) positionPicker(); };
+    window.addEventListener('resize', positionPicker);
+    window.addEventListener('scroll', onScroll, true);
+    visualViewport?.addEventListener('resize', positionPicker);
+    visualViewport?.addEventListener('scroll', positionPicker);
+    completion = createCompletion(input, key);
+    chipPicker = {node,completion,disposePositioning() {
+      window.removeEventListener('resize', positionPicker);
+      window.removeEventListener('scroll', onScroll, true);
+      visualViewport?.removeEventListener('resize', positionPicker);
+      visualViewport?.removeEventListener('scroll', positionPicker);
+    }};
     node.querySelector('[data-picker="close"]').onclick = closeChipPicker;
     node.querySelector('[data-picker="raw"]').onclick = () => {
       const value = input.value.trim();
@@ -443,6 +504,7 @@
     };
     input.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeChipPicker(); } });
     input.focus();
+    positionPicker();
   }
   function collapseAdvancedSearch() {
     const block = document.querySelector('#promptComposer > .prompt-tag-search');

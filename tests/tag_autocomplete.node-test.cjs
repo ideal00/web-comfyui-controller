@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const autocomplete = require(path.join(__dirname, '../web/assets/js/tag-autocomplete.js'));
 
 test('query uses the tag beside the caret and avoids replacing a partial suffix', () => {
@@ -97,4 +99,125 @@ test('mouse activation leaves scroll position alone; arrow navigation reveals hi
   assert.equal(dropdown.activeItem, item);
   autocomplete.keepActiveVisible(dropdown, item);
   assert.equal(dropdown.scrollTop, 60);
+});
+
+function completionHarness(fetch, options={}) {
+  const listeners = new Map(), instances = [],positionHandlers=new Map(),windowListeners=new Map();
+  const field = {id:'promptPose',value:'',selectionStart:0,selectionEnd:0,dataset:{},
+    addEventListener(type,listener) { listeners.set(type,listener); },
+    removeEventListener(type,listener) { if(listeners.get(type)===listener)listeners.delete(type); },
+    getBoundingClientRect(){return options.fieldRect || {top:100,bottom:134,left:10};},
+    closest(selector) { return selector==='.easy-chip-picker' ? options.picker || null : null; }};
+  class Textcomplete {
+    static editors = {Textarea:class {constructor(el){this.el=el;} getCursorOffset(){return {top:120,left:10};}}};
+    constructor(editor) {
+      this.editor=editor; this.isQueryInFlight=false; this.nextPendingQuery=null; this.hits=[];
+      this.dropdown={shown:false,items:[],on(type,fn){positionHandlers.set(type,fn);},getActiveItem(){return null;},
+        el:{scrollTop:0,scrollHeight:220,style:{},addEventListener(){},querySelector(){return null;},getBoundingClientRect(){return {width:300};}}};
+      instances.push(this);
+    }
+    register(strategies) { this.strategy=strategies[0]; }
+    on() {}
+    hide() { this.dropdown.shown=false; }
+    // Textcomplete 0.18.2 drains its latest pending query only when search calls back.
+    trigger(text) {
+      if(this.isQueryInFlight) { this.nextPendingQuery=text; return; }
+      this.isQueryInFlight=true;this.nextPendingQuery=null;
+      const hit = items => {
+        this.hits.push(items);this.dropdown.items=items;this.dropdown.shown=items.length>0;
+        this.isQueryInFlight=false;
+        if(this.nextPendingQuery!==null)this.trigger(this.nextPendingQuery);
+      };
+      const match=text.match(this.strategy.match);
+      if(match)this.strategy.search(match[2],hit);else hit([]);
+    }
+  }
+  const context={window:{Textcomplete,visualViewport:options.visualViewport},fetch,setTimeout,clearTimeout,URLSearchParams,AbortController,
+    innerWidth:390,innerHeight:844,scrollX:0,scrollY:0,
+    document:{readyState:'loading',getElementById:id=>id===field.id?field:null,
+      querySelector(){return null;},addEventListener(){}},addEventListener(){}};
+  context.window.addEventListener=(type,fn)=>windowListeners.set(type,fn);
+  context.window.removeEventListener=(type,fn)=>{if(windowListeners.get(type)===fn)windowListeners.delete(type);};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../web/assets/js/tag-autocomplete.js'),'utf8'),context);
+  context.window.EasyPanelTagAutocomplete.init();
+  return {field,completion:instances[0],listeners,positionHandlers,windowListeners,api:context.window.EasyPanelTagAutocomplete,context,
+    input(text){field.value=text;field.selectionStart=field.selectionEnd=text.length;instances[0].trigger(text);}};
+}
+const flush = () => new Promise(resolve=>setImmediate(resolve));
+
+test('changing text during a request releases the pending search instead of freezing all later input',async()=>{
+  let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const queried=[];
+  const {input,completion}=completionHarness(async url=>{
+    const term=new URL(url,'http://local').searchParams.get('q');queried.push(term);
+    if(term==='ha')await gate;
+    return {ok:true,json:async()=>url.startsWith('/api/tags?')?{tags:[{tag:term}]}:{results:[]}};
+  });
+  input('ha');input('hair');release();
+  for(let i=0;i<6;i++)await flush();
+  assert.equal(completion.isQueryInFlight,false);
+  assert.equal(completion.dropdown.items[0].tag,'hair');
+  assert.equal(completion.hits.filter(items=>items.length).length,1,'stale results must never render');
+  assert.ok(queried.includes('hair'));
+  input('瘦');for(let i=0;i<6;i++)await flush();
+  assert.equal(completion.dropdown.items[0].tag,'瘦');
+});
+
+test('IME composition cancelling an outstanding request still allows the committed Chinese query',async()=>{
+  let release;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const {input,field,completion,listeners}=completionHarness(async url=>{
+    const term=new URL(url,'http://local').searchParams.get('q');
+    if(term==='sh')await gate;
+    return {ok:true,json:async()=>url.startsWith('/api/tags?')?{tags:[{tag:term}]}:{results:[]}};
+  });
+  input('sh');listeners.get('compositionstart')();
+  input('瘦');listeners.get('compositionend')();release();
+  for(let i=0;i<6;i++)await flush();
+  assert.equal(field.dataset.composing,'0');
+  assert.equal(completion.isQueryInFlight,false);
+  assert.equal(completion.dropdown.items[0].tag,'瘦');
+});
+
+test('personal preset lookup completes once so an old response cannot clear a newer search',async()=>{
+  const harness=completionHarness(async url=>({ok:true,json:async()=>url.startsWith('/api/tags?')?{tags:[{tag:'sitting'}]}:{results:[]}}));
+  harness.context.window.EasyPanelPresetSearch={queryRange(){return {};},candidates(){return [{source:'preset',tag:'坐姿'}];},ready:async()=>{}};
+  harness.input('坐');for(let i=0;i<6;i++)await flush();
+  assert.equal(harness.completion.hits.length,1);
+  assert.equal(harness.completion.dropdown.items[0].source,'preset');
+});
+
+test('a stalled source times out, retains the other source, and permits a later retry',async()=>{
+  const timers=[];let online=false,aborted=false;
+  const harness=completionHarness(async (url,{signal})=>{
+    if(url.startsWith('/api/visual-tags?')&&!online) return new Promise((_,reject)=>{
+      signal.addEventListener('abort',()=>{aborted=true;reject(new Error('timeout'));},{once:true});
+    });
+    return {ok:true,json:async()=>url.startsWith('/api/tags?')?{tags:[{tag:'smile'}]}:{results:[{tag:'local_smile'}]}};
+  });
+  harness.context.setTimeout=fn=>{timers.push(fn);return fn;};
+  harness.context.clearTimeout=()=>{};
+  const first=harness.api.search('smile');
+  timers[0]();
+  assert.equal((await first)[0].tag,'smile');
+  assert.equal(aborted,true);
+  online=true;
+  assert.equal((await harness.api.search('smile'))[0].tag,'local_smile');
+});
+
+test('candidate placement respects the keyboard viewport and leaves the entire picker clear',()=>{
+  const viewportListeners=new Map();
+  const viewport={offsetTop:0,height:400,addEventListener(type,fn){viewportListeners.set(type,fn);},removeEventListener(type,fn){if(viewportListeners.get(type)===fn)viewportListeners.delete(type);}};
+  const picker={querySelector(){return null;},getBoundingClientRect(){return {top:300,bottom:369};}};
+  const {completion,positionHandlers,windowListeners}=completionHarness(async()=>({ok:true,json:async()=>({})}),{visualViewport:viewport,picker,fieldRect:{top:307,bottom:341,left:42}});
+  completion.dropdown.shown=true;
+  positionHandlers.get('rendered')();
+  const style=completion.dropdown.el.style;
+  assert.equal(style.position,'fixed');
+  assert.ok(parseFloat(style.top)>=8);
+  assert.ok(parseFloat(style.top)+parseFloat(style.maxHeight)<=300,'list must be above the picker, clear of the keyboard');
+  completion.disposePositioning();
+  assert.equal(viewportListeners.size,0);
+  assert.equal(windowListeners.size,0,'closing a picker must not leave global positioning listeners');
 });
