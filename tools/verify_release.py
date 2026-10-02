@@ -8,6 +8,7 @@ import json
 import re
 import zipfile
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 PAYLOAD = ROOT / "installers" / "payload"
@@ -20,11 +21,29 @@ def panel_version() -> str:
     raise ValueError("PANEL_VERSION missing")
 
 
+def verify_document_links() -> None:
+    """Keep public tutorials and screenshot links usable in a fresh checkout."""
+    documents = [ROOT / "README.md", ROOT / "android-client/README.md"]
+    documents.extend((ROOT / "docs").glob("*.md"))
+    for document in documents:
+        content = document.read_text(encoding="utf-8")
+        links = re.findall(r'\]\(([^\s)]+)\)', content)
+        links.extend(re.findall(r'<img\b[^>]*\bsrc="([^"]+)"', content))
+        for link in links:
+            parsed = urlsplit(link)
+            if parsed.scheme or not parsed.path or parsed.path.startswith("/"):
+                continue
+            target = (document.parent / unquote(parsed.path)).resolve()
+            assert target.is_relative_to(ROOT), f"Document link outside repository: {document.name}: {link}"
+            assert target.exists(), f"Missing document resource: {document.relative_to(ROOT)}: {link}"
+
+
 def verify(tag: str = "", packages: bool = False) -> None:
     server = panel_version()
     mobile = json.loads((ROOT / "android-client/package.json").read_text(encoding="utf-8"))["version"]
     if tag and tag not in {f"v{server}", f"mobile-v{mobile}"}:
         raise ValueError(f"Tag {tag} differs from server v{server} / mobile-v{mobile}")
+    verify_document_links()
     for name in ("README.md", "RPG_MOBILE_API.md", "android-client/README.md", "docs/QUICKSTART.md", "docs/FEATURE_MATRIX.md"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert server in text and mobile in text, f"Version missing in {name}"

@@ -8,6 +8,10 @@
 
 当前配套：Easy Panel **2.3.0** / Android **1.4.7**（versionCode `1004007`）。完整能力与共享范围见 [电脑 / 手机功能对照](../docs/FEATURE_MATRIX.md)。
 
+<img src="../docs/screenshots/mobile-home.jpg" alt="Mobile Studio 首页" width="260"> <img src="../docs/screenshots/mobile-connect.jpg" alt="电脑地址与 Token 连接表单" width="260">
+
+同版客户端共用页面的手机尺寸浏览器预览，展示未连接状态；Android 系统栏、文件选择与下载由原生层处理。完整入口说明见 [界面图解](../docs/INTERFACE_GUIDE.md)。
+
 ## 功能入口
 
 - **快速生图**：手机编辑正向提示词、负向提示词、Checkpoint、质量档位、宽高和轮询间隔；内置复用高级面板规则的“中文描述转换”，会按当前模型族生成 DeepSeek 指令，支持复制/打开、读取或粘贴 AI 回答并分别加入正向/负面词；只有点击“生成图片”才提交任务。模型列表来自 Easy Panel 的 `/api/rpg/models`，任务通过 API v2 异步执行。

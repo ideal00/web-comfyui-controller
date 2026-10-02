@@ -1,6 +1,65 @@
-# ComfyUI Easy Panel（web-comfyui-controller）
+# ComfyUI Easy Panel
 
-ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本地 Web 控制面板。它不替代 ComfyUI，而是在 ComfyUI 前面提供更容易理解的中文界面，自动整理提示词、选择模型参数并生成 ComfyUI 工作流。
+**用中文界面组织角色、提示词和生成参数，让 ComfyUI 出图更顺手。**
+
+Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作台。选择模型、分区写提示词、调整尺寸和采样参数，面板会组装工作流并交给 ComfyUI 执行。常用操作集中在一个页面，已有的模型与 LoRA 可以直接使用。
+
+[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.0) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
+
+![Easy Panel 桌面工作台：左侧快捷工具、中间分区提示词、右侧生成预览、底部生成与队列操作](docs/screenshots/desktop-overview.jpg)
+
+*桌面界面实截。示例未提交生成任务，右侧预览为空；生成后会在这里查看结果。*
+
+## 面板能帮你做什么
+
+| 创作环节 | 面板提供的操作 |
+| --- | --- |
+| 写提示词 | 按人物、外貌、表情、服装、姿势、构图、场景、光线等分区编辑；搜索个人预设、查看例图、锁定要保留的内容，再随机其他分区 |
+| 找到画面方向 | 创作游乐场提供自由草稿、职业与性格建议、镜头卡、搭配检查和对照实验；应用前可以检查每个分区的变化 |
+| 管理模型与 LoRA | 按模型族选择模型，搜索与收藏 LoRA、调整加载顺序和权重、查看备注与有来源的触发词 |
+| 调整生成 | 比例与尺寸快捷选择、自动推荐采样参数、生成前检查、高清二采、任务队列与单变量实验 |
+| 继续编辑作品 | 预览、读图还原、生成快照、作品库筛选与收藏、版本谱系；按需使用姿势控制、局部修复、透明抠图与调色 |
+| 手机控制电脑 | Android 快速页编辑常用参数并查看结果；高级面板打开电脑的完整界面，作品库与队列读取电脑端数据 |
+
+适合已经能运行 ComfyUI、希望更方便地做角色图、整理提示词或从手机操作电脑的用户。计算始终在电脑上完成；安装包提供面板与模块安装入口，模型权重需要自行准备。
+
+## 看看实际界面
+
+### 分区编辑，保留角色，只改变想改的内容
+
+“角色与动作”和“画面与风格”分别组织人物、服装、表情、姿势以及构图、场景、光线。每个分区都有预设搜索、标签入口与锁定开关，组合预设也可以只提取当前分区。详细操作见 [提示词工具教程](docs/PROMPT_TOOLS.md)。
+
+<details>
+<summary>查看画面与风格分区截图</summary>
+
+![构图、场景、光线和画风分别编辑，每个分区有锁定与预设搜索入口](docs/screenshots/prompt-sections.jpg)
+
+</details>
+
+### 创作游乐场，把想法变成可以修改的草稿
+
+先挑选构图或创作建议，再选择哪些分区保留、追加或替换；镜头卡的尺寸需要单独确认。下面的卡片是面板内置的**构图示意**，用于解释人物占比与镜头位置。
+
+![创作游乐场的镜头卡：平视近景和完整角色展示，附构图说明与尺寸按钮](docs/screenshots/playground-camera.jpg)
+
+### 电脑出图，手机配置与查看
+
+手机快速页提供提示词、模型、尺寸与质量档位；复杂操作进入“高级面板”。连接前先在电脑启动 Easy Panel 与 ComfyUI，再填写电脑地址和 Token。见 [手机安装与连接教程](android-client/README.md)。
+
+<img src="docs/screenshots/mobile-home.jpg" alt="Easy Panel Mobile 首页，提供快速生图、高级面板、作品库、任务队列和角色图集入口" width="260"> <img src="docs/screenshots/mobile-connect.jpg" alt="手机连接电脑：局域网地址、Tailscale 地址、Token、测试连接与读取模型" width="260">
+
+*手机图为 1.4.7 客户端共用页面在 390×844 浏览器中的预览，展示未连接状态；Android 系统栏、文件选择与下载由原生客户端处理。截图未填写地址或 Token。*
+
+## 从这里开始
+
+| 你想做什么 | 教程入口 |
+| --- | --- |
+| 安装、启动并生成第一张图 | [新手快速开始](docs/QUICKSTART.md) |
+| 看懂界面上的入口 | [界面图解](docs/INTERFACE_GUIDE.md) |
+| 学习分区、预设、例图、锁定和游乐场 | [提示词工具](docs/PROMPT_TOOLS.md) |
+| 了解电脑和手机各自支持什么 | [双端功能对照](docs/FEATURE_MATRIX.md) |
+| 查看模型兼容、姿势、修复、调色与备份的详细说明 | [完整教程目录](#目录) |
+| 查看改动或维护发布 | [更新记录](CHANGELOG.md) · [发布流程](docs/RELEASING.md) |
 
 面板默认运行在 `http://127.0.0.1:8190`，连接本机 `http://127.0.0.1:8188` 的 ComfyUI。图片仍由 ComfyUI 生成并保存到 ComfyUI 的 `output` 目录。
 
@@ -17,6 +76,7 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 ## 目录
 
 - [新手快速开始](docs/QUICKSTART.md)
+- [界面图解](docs/INTERFACE_GUIDE.md)
 - [提示词、预设例图与创作游乐场](docs/PROMPT_TOOLS.md)
 - [电脑 / 手机功能对照](docs/FEATURE_MATRIX.md)
 - [维护者发布与同步流程](docs/RELEASING.md)

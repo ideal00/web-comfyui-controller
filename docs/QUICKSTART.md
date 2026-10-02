@@ -33,6 +33,10 @@ $env:EASY_PANEL_COMFY_URL = 'http://127.0.0.1:8188'
 
 ## 3. 生成第一张图
 
+操作入口可对照 [界面图解](INTERFACE_GUIDE.md)。尺寸设置如下：
+
+![先选图片比例，再调长边或选择推荐档位](screenshots/generation-settings.jpg)
+
 1. 选择一个实际存在的 SDXL / Illustrious 模型。Anima 与 Krea 2 请先按 [完整说明](../README.md#33-模型文件应该放在哪里) 放好扩散模型、文本编码器和 VAE。
 2. 保持自动推荐的采样器、步数和 CFG，选择一个适合显存的推荐尺寸。
 3. 在人物框填 `1girl`，服装框填 `white shirt`，场景框填 `garden`；可替换为自己的英文描述。
@@ -41,6 +45,10 @@ $env:EASY_PANEL_COMFY_URL = 'http://127.0.0.1:8188'
 6. 基础生成正常后，一次只增加一项功能，便于定位错误。
 
 ## 4. 手机连接
+
+<img src="screenshots/mobile-connect.jpg" alt="手机连接电脑的表单示意，Token 为空" width="260">
+
+*同版客户端页面的浏览器预览；地址和 Token 请填写自己的连接信息。*
 
 从 [mobile-v1.4.7 发布页](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) 下载 `app-debug.apk`。这是测试签名 APK，包名 `app.rpgbox.mobile.debug`。
 
