@@ -19,8 +19,9 @@
     const result={preset: Object.hasOwn(presets,saved.preset)?saved.preset:'custom'};
     fields.forEach(key=>result[key]=saved[key].toLowerCase()); return result;
   }
-  let state;
-  try { state=normalize(JSON.parse(g.localStorage.getItem(KEY))); } catch { state=normalize(null); }
+  let state, raw=null, saved=false, storageAvailable=true;
+  try { raw=g.localStorage.getItem(KEY); } catch { storageAvailable=false; }
+  try { const value=JSON.parse(raw); state=normalize(value); saved=!!value&&(value.preset==='original'||fields.every(key=>valid(value[key]))); } catch { state=normalize(null); }
   const root=document.documentElement;
   function apply() {
     if (state.preset==='original') {
@@ -44,9 +45,10 @@
       color.disabled=hex.disabled=state.preset==='original';
     }
     const minimum=Math.min(...['background','panel','input'].map(key=>contrast(state.text,state[key])));
-    document.getElementById('panelThemeStatus').textContent=state.preset==='original'?'已恢复原来的蓝色配色。':minimum<4.5?'已保存。文字与背景较接近，可以调亮文字或调暗背景。':'已保存到当前浏览器；刷新、退出再进入会保留。';
+    const storageMessage=!storageAvailable?'配色已生效，但浏览器未允许保存，刷新后可能恢复默认。':!saved?'当前使用默认配色；修改后会自动保存。':state.preset==='original'?'已恢复原来的蓝色配色。':'已保存到当前浏览器；刷新、退出再进入会保留。';
+    document.getElementById('panelThemeStatus').textContent=storageMessage+(state.preset!=='original'&&minimum<4.5?' 文字与背景较接近，可以调整文字或背景颜色。':'');
   }
-  function save(next) { state=normalize(next); apply(); let stored=true; try{g.localStorage.setItem(KEY,JSON.stringify(state));}catch{stored=false;} sync(); if(!stored&&document.getElementById('panelThemeStatus'))document.getElementById('panelThemeStatus').textContent='配色已生效，但浏览器未允许保存，刷新后可能恢复默认。'; }
+  function save(next) { state=normalize(next); apply(); try{g.localStorage.setItem(KEY,JSON.stringify(state));saved=true;storageAvailable=true;}catch{saved=false;storageAvailable=false;} sync(); }
   function selectPreset(name) { if(name==='original')save({preset:name});else if(presets[name])save({preset:name,...presets[name]}); }
   function setColor(key,value) { if(!fields.includes(key)||!valid(value))return false; save({...state,preset:'custom',[key]:value}); return true; }
   function open() { const dialog=document.getElementById('panelThemeDialog'); sync(); if(!dialog.open)dialog.showModal(); }

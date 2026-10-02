@@ -4,7 +4,7 @@
 
 Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作台。选择模型、分区写提示词、调整尺寸和采样参数，面板会组装工作流并交给 ComfyUI 执行。常用操作集中在一个页面，已有的模型与 LoRA 可以直接使用。
 
-[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.5) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
+[下载电脑面板](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.6) · [下载 Android APK](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7) · [安装与第一张图](docs/QUICKSTART.md) · [界面图解](docs/INTERFACE_GUIDE.md)
 
 ![Easy Panel 桌面工作台：左侧快捷工具、中间分区提示词、右侧生成预览、底部生成与队列操作](docs/screenshots/desktop-overview.jpg)
 
@@ -67,10 +67,10 @@ Easy Panel 是面向动漫、二次元与角色 LoRA 创作的本地 Web 工作�
 
 ## 当前版本
 
-- Easy Panel 服务端：`2.3.5`。
+- Easy Panel 服务端：`2.3.6`。
 - Android 客户端：`mobile-v1.4.7`（versionCode `1004007`）。
-- 下载入口：服务端 [v2.3.5 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.5) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
-- 本版本加入 [自定义面板配色](docs/PANEL_COLORS.md)，默认使用柔和灰，支持深浅色预设和五项颜色调整；保留 [LoRA 画风参考图](docs/LORA_PREVIEWS.md)。包含此前的手机数量恢复、快捷工具展开、批任务控制和候选区修复。Android 继续使用 1.4.7，一键 ZIP 包含同版本前后端、教程和校验清单。
+- 下载入口：服务端 [v2.3.6 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.6) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
+- 本版本增加基础模型路径复制，改进局域网与 Android 的复制反馈，并修正配色保存状态提示。支持 [自定义面板配色](docs/PANEL_COLORS.md) 和 [LoRA 画风参考图](docs/LORA_PREVIEWS.md)，包含此前的手机数量恢复、快捷工具展开、批任务控制和候选区修复。Android 继续使用 1.4.7，一键 ZIP 包含同版本前后端、教程和校验清单。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
 ## 目录

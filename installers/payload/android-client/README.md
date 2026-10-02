@@ -6,7 +6,7 @@
 
 图标源图保存在 `android/app/src/main/res/drawable-nodpi/easy_panel_brand_source.png`；Android 自适应图标、圆形/传统密度图标和启动图均由同一品牌标记生成，前景内容留在安全区内，未修改包名。
 
-当前配套：Easy Panel **2.3.5** / Android **1.4.7**（versionCode `1004007`）。完整能力与共享范围见 [电脑 / 手机功能对照](../docs/FEATURE_MATRIX.md)。
+当前配套：Easy Panel **2.3.6** / Android **1.4.7**（versionCode `1004007`）。完整能力与共享范围见 [电脑 / 手机功能对照](../docs/FEATURE_MATRIX.md)。
 
 <img src="../docs/screenshots/mobile-home.jpg" alt="Mobile Studio 首页" width="260"> <img src="../docs/screenshots/mobile-connect.jpg" alt="电脑地址与 Token 连接表单" width="260">
 

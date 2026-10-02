@@ -43,4 +43,7 @@ html[data-panel-theme] * { scrollbar-color:var(--theme-line) var(--theme-panel);
 .panel-theme-dialog [aria-invalid=true] { outline:2px solid #bd725f; }
 .panel-theme-dialog .actions { justify-content:flex-end; margin-top:16px; }
 #panelThemeStatus { min-height:2.8em; }
+.model-path-row { display:flex; gap:6px; align-items:center; margin:5px 0 8px; }
+.model-path-row .model-path-info { flex:1; min-width:0; margin:0; }
+.model-path-copy { flex:none; font-size:11px; padding:5px 7px; }
 @media(max-width:480px) { .panel-theme-dialog { padding:16px; }.panel-theme-color-row { grid-template-columns:minmax(78px,1fr) 42px 110px; gap:8px; }.panel-theme-color-row input[type=color] { width:42px; } }

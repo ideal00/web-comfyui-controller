@@ -5,7 +5,7 @@
   <link rel="stylesheet" href="/assets/css/lora-previews.css?v=1">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ComfyUI 生成面板</title>
-  <script src="/assets/js/panel-theme.js?v=1"></script>
+  <script src="/assets/js/panel-theme.js?v=2"></script>
   <script>
     if (new URLSearchParams(window.location.search).get('mobile') === '1') {
       document.documentElement.classList.add('easy-panel-mobile');
@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="/assets/css/panel-polish.css?v=1">
 
 <link rel="stylesheet" href="/assets/css/creative-playground.css?v=3">
-<link rel="stylesheet" href="/assets/css/panel-theme.css?v=1">
+<link rel="stylesheet" href="/assets/css/panel-theme.css?v=2">
 </head>
 <body>
 <main class="app">
@@ -148,7 +148,7 @@
       <div id="loraPanelBody" class="resource-panel-body">
       <div class="field-title"><span>基础模型</span><span id="modelInfo" class="small"></span></div>
       <select id="model" onchange="modelChanged()"></select>
-      <div id="modelPathInfo" class="small model-path-info" title="当前模型完整路径"></div>
+      <div class="model-path-row"><div id="modelPathInfo" class="small model-path-info" title="当前模型完整路径"></div><button id="modelPathCopy" class="secondary model-path-copy" type="button" onclick="copyModelPath()" title="复制基础模型在模型目录中的路径" disabled>复制路径</button></div>
       <div class="actions"><button onclick="addLora()">+ 添加 LoRA</button><button id="loraFavoritesQuick" class="secondary lora-favorites-quick" type="button" onclick="showFavoriteLoras()">☆ 我的收藏 <span id="loraFavoriteCount">0</span></button><button onclick="clearLoras()">清空 LoRA</button></div>
       <div class="lora-search"><input id="loraSearch" type="search" autocomplete="off" placeholder="搜索 LoRA 文件名中的文字…" aria-label="搜索 LoRA" oninput="refreshLoraSelects()"><button id="loraSearchClear" class="secondary" type="button" onclick="clearLoraSearch()">清除</button></div>
       <div class="small lora-order-help">LoRA 从上到下依次加载，自动触发词也使用同一顺序。可拖动“↕序号”，或使用 ↑ / ↓ 调整。</div>
@@ -452,7 +452,7 @@
 <script src="/assets/js/color-modifier.js?v=1"></script>
 <script src="/assets/js/preset-examples.js?v=5"></script>
 <script src="/assets/js/lora-previews.js?v=1"></script>
-<script src="/assets/js/panel.js?v=106"></script>
+<script src="/assets/js/panel.js?v=107"></script>
 <script src="/assets/js/panel-quick-actions.js?v=5"></script>
 <script src="/assets/js/prompt-variations.js?v=16"></script>
 <script src="/assets/js/prompt-mode.js?v=1"></script>

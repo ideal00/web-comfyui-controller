@@ -2,7 +2,8 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync(require('node:path').join(__dirname,'../web/assets/js/panel-theme.js'),'utf8');
 function load(saved,blocked=false) {
   const storage={value:saved},style=new Map([['--input-font-size','19px']]),root={dataset:{},style:{setProperty:(k,v)=>style.set(k,v),removeProperty:k=>style.delete(k)},removeAttribute:()=>delete root.dataset.panelTheme};
-  const nodes={panelThemeStatus:{textContent:''}};
+  const nodes={panelThemeStatus:{textContent:''},panelThemePreset:{value:''},panelThemeDialog:{open:false,showModal(){this.open=true;}}};
+  for(const key of ['background','panel','input','text','accent'])for(const prefix of ['panelColor-','panelHex-'])nodes[prefix+key]={value:'',removeAttribute(){}};
   const window={localStorage:{getItem(){if(blocked)throw Error('blocked');return storage.value;},setItem(k,v){if(blocked)throw Error('blocked');storage.value=v;}}};
   vm.runInNewContext(source,{window,document:{documentElement:root,readyState:'loading',addEventListener(){},getElementById:id=>nodes[id]||null}});
   return {api:window.EasyPanelTheme,storage,style,root,nodes};
@@ -33,4 +34,13 @@ test('original colors remove theme overrides and preserve unrelated preferences'
 test('storage unavailable still applies colors and explains that saving failed',()=>{
   const {api,root,nodes}=load(null,true); assert.doesNotThrow(()=>api.selectPreset('warm'));
   assert.equal(root.dataset.panelTheme,'warm'); assert.match(nodes.panelThemeStatus.textContent,/未允许保存/);
+});
+test('reopening the dialog preserves storage errors instead of claiming colors were saved',()=>{
+  const {api,nodes}=load(null,true); api.selectPreset('warm'); api.open();
+  assert.match(nodes.panelThemeStatus.textContent,/未允许保存/); api.open(); assert.match(nodes.panelThemeStatus.textContent,/未允许保存/);
+});
+test('initial defaults and malformed saved data do not claim a successful save',()=>{
+  for(const saved of [null,'broken']){
+    const {api,nodes}=load(saved);api.open();assert.match(nodes.panelThemeStatus.textContent,/默认配色/);assert.doesNotMatch(nodes.panelThemeStatus.textContent,/已保存|未允许保存/);
+  }
 });
