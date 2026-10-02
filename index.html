@@ -5,6 +5,7 @@
   <link rel="stylesheet" href="/assets/css/lora-previews.css?v=1">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ComfyUI 生成面板</title>
+  <script src="/assets/js/panel-theme.js?v=1"></script>
   <script>
     if (new URLSearchParams(window.location.search).get('mobile') === '1') {
       document.documentElement.classList.add('easy-panel-mobile');
@@ -16,6 +17,7 @@
 <link rel="stylesheet" href="/assets/css/panel-polish.css?v=1">
 
 <link rel="stylesheet" href="/assets/css/creative-playground.css?v=3">
+<link rel="stylesheet" href="/assets/css/panel-theme.css?v=1">
 </head>
 <body>
 <main class="app">
@@ -33,8 +35,9 @@
     </nav>
     <div class="studio-header-actions">
       <details class="studio-more" id="studioMoreMenu">
-        <summary title="框宽 / 功能编辑 / 打开 ComfyUI">⋯ 更多</summary>
+        <summary title="配色 / 框宽 / 功能编辑 / 打开 ComfyUI">⋯ 更多</summary>
         <div class="studio-more-body">
+      <button class="studio-comfy-link" type="button" data-panel-theme-open>🎨 面板配色</button>
       <button class="studio-comfy-link" type="button" onclick="openFeatureEditor()">🧩 功能编辑</button>
       <details class="layout-size-menu">
         <summary>↔ 框宽</summary>
@@ -56,8 +59,9 @@
   <div class="studio-layout" id="studioLayout">
   <aside class="studio-rail studio-left" aria-label="快捷工具">
   <div class="studio-rail-title"><span>快捷工具</span><div class="studio-rail-title-actions"><button id="leftRailToggle" class="rail-collapse-toggle" type="button" onclick="toggleLeftRail()" aria-controls="studioLayout" aria-expanded="true" title="折叠快捷工具栏">⇤</button><details class="rail-appearance" id="railAppearanceMenu">
-      <summary title="外观 / 界面设置：输入框字号">⚙ 界面</summary>
+      <summary title="外观 / 界面设置：配色与输入框字号">⚙ 界面</summary>
       <div class="rail-appearance-body">
+        <button class="secondary" type="button" data-panel-theme-open>🎨 自定义面板配色</button>
         <div class="field-title"><span>输入框字号</span><output id="inputFontSizeValue">15px</output></div>
         <label class="input-size-row"><input id="inputFontSize" type="range" min="11" max="24" step="1" value="15" oninput="applyInputFontSize(this.value)" title="调节所有输入框 / 文本域 / 下拉框的文字大小"></label>
         <p class="small">低频全局设置：拖动即时生效，只保存在当前浏览器。</p>
@@ -269,6 +273,20 @@
     <div class="studio-tool-drawer-panel"><header><div><span class="studio-kicker">按需展开</span><h2>高级创作工具</h2></div><button class="secondary" type="button" onclick="toggleStudioToolDrawer(false)">关闭</button></header><p class="small">姿势控制、场景融合、多人分区、调色和整图重绘集中在这里；关闭侧栏不会清除设置。</p><div id="studioToolDrawerContent"></div></div>
   </aside>
 </main>
+<dialog id="panelThemeDialog" class="panel-theme-dialog" aria-labelledby="panelThemeTitle">
+  <header><h2 id="panelThemeTitle">面板配色</h2><button id="panelThemeClose" class="secondary" type="button">关闭</button></header>
+  <p class="small">选择柔和预设，或调整下面的颜色。即时预览，自动保存到当前浏览器。</p>
+  <label class="panel-theme-preset">配色预设<select id="panelThemePreset"><option value="gray">柔和灰（默认）</option><option value="warm">暖灰夜间</option><option value="sage">浅色鼠尾草</option><option value="paper">暖色纸张</option><option value="original">原来的蓝色</option><option value="custom" disabled>自定义</option></select></label>
+  <div class="panel-theme-colors">
+    <div class="panel-theme-color-row"><label for="panelColor-background">页面背景</label><input id="panelColor-background" type="color" aria-label="页面背景颜色"><input id="panelHex-background" type="text" maxlength="7" spellcheck="false" aria-label="页面背景颜色代码"></div>
+    <div class="panel-theme-color-row"><label for="panelColor-panel">卡片与弹窗</label><input id="panelColor-panel" type="color" aria-label="卡片与弹窗颜色"><input id="panelHex-panel" type="text" maxlength="7" spellcheck="false" aria-label="卡片与弹窗颜色代码"></div>
+    <div class="panel-theme-color-row"><label for="panelColor-input">输入框</label><input id="panelColor-input" type="color" aria-label="输入框颜色"><input id="panelHex-input" type="text" maxlength="7" spellcheck="false" aria-label="输入框颜色代码"></div>
+    <div class="panel-theme-color-row"><label for="panelColor-text">文字</label><input id="panelColor-text" type="color" aria-label="文字颜色"><input id="panelHex-text" type="text" maxlength="7" spellcheck="false" aria-label="文字颜色代码"></div>
+    <div class="panel-theme-color-row"><label for="panelColor-accent">强调色</label><input id="panelColor-accent" type="color" aria-label="强调色"><input id="panelHex-accent" type="text" maxlength="7" spellcheck="false" aria-label="强调色代码"></div>
+  </div>
+  <p id="panelThemeStatus" class="small" role="status"></p>
+  <div class="actions"><button id="panelThemeReset" class="secondary" type="button">恢复柔和灰</button></div>
+</dialog>
 <dialog id="loraReferenceDialog" class="lora-reference-dialog"><header><h2 id="loraReferenceTitle">画风参考图</h2><button id="loraReferenceClose" class="secondary" type="button">关闭</button></header><p id="loraReferenceSettings" class="small"></p><img id="loraReferenceImage" alt="画风参考图"></dialog>
 <dialog id="loraMemoDialog" class="lora-memo-dialog" onclose="closeLoraMemoEditor()">
   <header class="lora-memo-dialog-head"><div><span class="studio-kicker">LoRA 资料库</span><h2 id="loraMemoDialogTitle">编辑 LoRA 备忘</h2></div><button class="secondary" type="button" onclick="closeLoraMemoEditor()">关闭</button></header>
