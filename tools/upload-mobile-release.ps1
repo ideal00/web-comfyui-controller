@@ -18,8 +18,10 @@
 [CmdletBinding()]
 param(
     [string]$Repo = 'ideal00/web-comfyui-controller',
-    [string]$ArtifactsDir = 'release-artifacts',
-    [string]$NotesFile = 'release-artifacts/mobile-release-notes.md',
+    [string]$ArtifactsDir = 'android-client/android/app/build/outputs/apk/debug',
+    [string]$NotesFile = '',
+    [string]$Commit = '',
+    [switch]$ReplaceAssets,
     [switch]$Draft,
     [switch]$Prerelease
 )
@@ -35,10 +37,21 @@ if (-not $token.Trim()) {
 
 $version = (Get-Content 'android-client/package.json' -Raw | ConvertFrom-Json).version
 $tag = "mobile-v$version"
+if (-not $NotesFile) { $NotesFile = "docs/releases/$tag.md" }
+if (-not $Commit) { $Commit = (git rev-parse HEAD).Trim() }
+if ($LASTEXITCODE -ne 0 -or $Commit -notmatch '^[0-9a-f]{40}$') { throw 'A verified full Git commit SHA is required.' }
+if (git status --porcelain --untracked-files=no) { throw 'Commit tracked changes before publishing.' }
+if (-not (Test-Path -LiteralPath $NotesFile -PathType Leaf)) { throw "Missing release notes: $NotesFile" }
 $apk = Join-Path $ArtifactsDir 'app-debug.apk'
 $sha = Join-Path $ArtifactsDir 'app-debug.apk.sha256'
-foreach ($file in @($apk, $sha)) {
+foreach ($file in @($apk)) {
     if (-not (Test-Path $file)) { throw "Missing artifact: $file (build it with 'pnpm android:apk' first)." }
+}
+$metadataPath = Join-Path $ArtifactsDir 'output-metadata.json'
+if (-not (Test-Path -LiteralPath $metadataPath)) { throw 'Missing Gradle output-metadata.json; rebuild the APK first.' }
+$metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+if ($metadata.elements[0].versionName -ne $version -or $metadata.applicationId -ne 'app.rpgbox.mobile.debug') {
+    throw 'APK build metadata does not match package.json or the expected Debug package.'
 }
 
 $actual = (Get-FileHash $apk -Algorithm SHA256).Hash.ToLower()
@@ -65,9 +78,12 @@ try {
     $release = Invoke-GitHub -Method Get -Uri "$api/tags/$tag"
     Write-Host "Reusing existing release $tag"
 } catch {
+    if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
     $body = @{
         tag_name   = $tag
+        target_commitish = $Commit
         name       = "Easy Panel Android $tag"
+        make_latest = 'false'
         draft      = [bool]$Draft
         prerelease = [bool]$Prerelease
     }
@@ -75,6 +91,10 @@ try {
         -Body ([Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Compress))) `
         -ContentType 'application/json; charset=utf-8'
     Write-Host "Created release $tag"
+}
+
+if (@($release.assets).Count -gt 0 -and -not $ReplaceAssets) {
+    throw 'Release already has assets. Use a new version, or explicitly pass -ReplaceAssets to repair it.'
 }
 
 if (Test-Path $NotesFile) {

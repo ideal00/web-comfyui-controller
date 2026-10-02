@@ -6301,6 +6301,7 @@ textarea:focus-visible {
 .epm-library-message.success { color: var(--epm-accent-strong); }
 .epm-library-message.failure { color: var(--epm-danger); }
 .epm-library-load-more { width: 100%; min-height: 38px; margin-top: 10px; padding: 0 12px; border: 1px solid var(--epm-line-strong); border-radius: 10px; background: rgba(27, 50, 47, .56); color: var(--epm-accent-strong); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; cursor: pointer; }
+.epm-library-pagination{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;padding:10px 0;color:var(--epm-muted);font-size:11px}.epm-library-pagination>span{flex-basis:100%;text-align:center}.epm-library-page-buttons,.epm-library-page-jump,.epm-library-page-jump label{display:flex;align-items:center;gap:8px}.epm-library-pagination button{min-height:44px;padding:8px 12px;width:auto}.epm-library-page-jump input{width:64px;min-width:0;min-height:44px;padding:8px;border:1px solid var(--epm-line-strong);border-radius:8px;background:var(--epm-bg);color:inherit}.epm-library-page-jump{margin:0}
 .epm-library-load-more:hover { border-color: var(--epm-accent); background: rgba(38, 70, 63, .58); }
 .epm-library-load-more:disabled { opacity: .62; cursor: wait; }
 

@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -139,7 +140,7 @@ def build_migration_plan(path: str | Path) -> dict[str, Any]:
     sidecars = _sidecar_paths(database)
     conflicts: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
-    with _connect(database) as connection:
+    with closing(_connect(database)) as connection:
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
         foreign_key_errors = [
             list(row) for row in connection.execute("PRAGMA foreign_key_check")
@@ -324,7 +325,7 @@ def _backup_database(database: Path, backup: Path) -> None:
     backup.parent.mkdir(parents=True, exist_ok=True)
     if backup.exists():
         raise FileExistsError(f"备份目标已存在，为避免覆盖未执行迁移：{backup}")
-    with _connect(database) as source:
+    with closing(_connect(database)) as source:
         target = sqlite3.connect(str(backup))
         try:
             source.backup(target)
@@ -333,7 +334,7 @@ def _backup_database(database: Path, backup: Path) -> None:
 
 
 def _validate_database(database: Path) -> None:
-    with _connect(database) as connection:
+    with closing(_connect(database)) as connection:
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
         if integrity != "ok":
             raise ValueError(f"迁移后 integrity_check 失败：{integrity}")

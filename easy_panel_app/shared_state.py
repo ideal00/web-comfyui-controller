@@ -19,6 +19,8 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from easy_panel_app.preset_examples import normalize_example_id
+
 
 SHARED_STATE_SCHEMA = 1
 SHARED_STATE_FILENAME = "easy_panel_shared_state.json"
@@ -50,6 +52,7 @@ PROMPT_PRESET_CATEGORIES = {
     "expression",
     "negative",
     "manual",
+    "naturalLanguage",
 }
 PROMPT_SECTION_CATEGORIES = PROMPT_PRESET_CATEGORIES - {"combo"}
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
@@ -345,6 +348,7 @@ def _normalize_prompt_item(item: Any) -> dict[str, Any] | None:
         "description": _text(item.get("description"), MAX_PRESET_DESCRIPTION_CHARS, "description"),
         "mode": mode,
         "model": _text(item.get("model"), MAX_PRESET_MODEL_CHARS, "model"),
+        "exampleImage": normalize_example_id(item.get("exampleImage")),
         "updatedAt": updated_at,
     }
     if len(_encode_json(normalized)) > MAX_PRESET_ITEM_BYTES:

@@ -13,6 +13,23 @@
   const MAX_PAGE_SIZE = 100;
   const MAX_OFFSET = 1000000;
   const IMAGE_PATH = '/api/rpg/image';
+  const THUMBNAIL_CONCURRENCY = 4;
+  const THUMBNAIL_CACHE_SIZE = 96;
+
+  function thumbnailPath(value, baseOrigin) {
+    const path = safeLibraryImagePath(value, baseOrigin);
+    if (!path) return '';
+    const parsed = new URL(path, baseOrigin || global.location?.origin || 'http://localhost');
+    parsed.searchParams.set('preview', '1');
+    return parsed.pathname + parsed.search;
+  }
+
+  function pageOffset(value, total, size = PAGE_SIZE) {
+    const text = asText(value);
+    const pages = Math.max(1, Math.ceil(total / size));
+    if (!/^\d+$/u.test(text) || !Number.isSafeInteger(Number(text)) || Number(text) < 1 || Number(text) > pages) return null;
+    return (Number(text) - 1) * size;
+  }
 
   function asText(value) {
     return value == null ? '' : String(value).trim();
@@ -195,7 +212,7 @@
   function libraryErrorMessage(error, action) {
     const status = errorStatus(error);
     if (status === 404) return '当前电脑端版本不支持作品库，现有生成面板仍可继续使用。';
-    if (status === 401 || status === 403) return `${action || '读取作品库'}需要 RPG Token，或当前 Token 无效。`;
+    if (status === 401 || status === 403) return `${action || '读取作品库'}访问凭据已失效，请刷新面板后重试。`;
     if (status === 503) return '电脑端尚未配置 RPG Token；请先检查 Easy Panel 启动配置。';
     if (error && error.name === 'AbortError') return `${action || '读取作品库'}已取消。`;
     if (error && error.message) return `${action || '读取作品库'}失败：${error.message}`;
@@ -239,12 +256,12 @@
     return data;
   }
 
-  async function requestBlob(path, token, fetchImpl) {
+  async function requestBlob(path, token, fetchImpl, signal) {
     const fetcher = fetchImpl || global.fetch;
     if (typeof fetcher !== 'function') throw new Error('当前浏览器不支持网络请求。');
     const headers = {};
     if (asText(token)) headers['X-RPG-Token'] = asText(token);
-    const response = await fetcher(path, { method: 'GET', credentials: 'same-origin', headers });
+    const response = await fetcher(path, { method: 'GET', credentials: 'same-origin', headers, ...(signal ? { signal } : {}) });
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}`);
       error.status = response.status;
@@ -275,6 +292,8 @@
     safeOutputSubfolder,
     groupLabel,
     groupsOf,
+    thumbnailPath,
+    pageOffset,
   };
 
   global.EasyPanelCreativeLibrary = testApi;
@@ -294,6 +313,10 @@
     requestNumber: 0,
     galleryNumber: 0,
     imageUrls: new Map(),
+    thumbnailTargets: new Map(),
+    thumbnailObserver: null,
+    thumbnailControllers: new Set(),
+    thumbnailPaths: new Map(),
     lastFocus: null,
     listScrollTop: 0,
     groups: [],
@@ -352,16 +375,26 @@
     return typeof global.URL !== 'undefined' && typeof global.URL.createObjectURL === 'function';
   }
 
-  function clearImageUrls() {
-    if (global.URL && typeof global.URL.revokeObjectURL === 'function') {
-      state.imageUrls.forEach((url) => global.URL.revokeObjectURL(url));
-    }
-    state.imageUrls.clear();
+  function stopThumbnails() {
+    state.thumbnailObserver?.disconnect();
+    state.thumbnailObserver = null;
+    state.thumbnailControllers.forEach((controller) => controller.abort());
+    state.thumbnailControllers.clear();
   }
 
-  function showAuth(show) {
-    const form = byId('creativeLibraryAuth');
-    if (form) form.hidden = !show;
+  function clearImageUrls(keepThumbnails = false) {
+    if (global.URL && typeof global.URL.revokeObjectURL === 'function') {
+      state.imageUrls.forEach((url, key) => {
+        if (keepThumbnails && key.startsWith('thumb:')) return;
+        global.URL.revokeObjectURL(url);
+        state.imageUrls.delete(key);
+        state.thumbnailPaths.delete(key);
+      });
+    }
+    if (!keepThumbnails) {
+      state.imageUrls.clear();
+      state.thumbnailPaths.clear();
+    }
   }
 
   function showNotice(message, kind) {
@@ -424,12 +457,17 @@
   }
 
   function appendThumbnail(parent, item) {
+    state.thumbnailTargets.set(item.generation_id, parent);
+    parent.replaceChildren();
     const source = state.imageUrls.get(imageKeyForThumbnail(item.generation_id));
     if (source) {
       const image = createElement('img');
       image.src = source;
       image.alt = `${asText(item.model) || '作品'} 缩略图`;
       image.loading = 'lazy';
+      image.decoding = 'async';
+      image.width = 78;
+      image.height = 92;
       parent.append(image);
     } else {
       parent.append(createElement('span', 'creative-library-thumb-placeholder',
@@ -441,6 +479,7 @@
     const root = byId('creativeLibraryList');
     if (!root) return;
     root.replaceChildren();
+    state.thumbnailTargets.clear();
     if (state.loading) {
       root.append(createElement('p', 'creative-library-loading', '正在读取作品库…'));
       return;
@@ -500,6 +539,13 @@
       wrap.append(remove);
       root.append(wrap);
     });
+    if (state.thumbnailObserver) {
+      state.thumbnailObserver.disconnect();
+      state.thumbnailTargets.forEach((target, id) => {
+        target.dataset.generationId = id;
+        state.thumbnailObserver.observe(target);
+      });
+    }
   }
 
   function renderPagination() {
@@ -513,7 +559,17 @@
     if (next) next.disabled = !state.hasMore || state.loading;
     const first = state.total ? state.offset + 1 : 0;
     const last = Math.min(state.total, state.offset + state.items.length);
-    if (pageInfo) pageInfo.textContent = state.total ? `${first}–${last} / ${state.total}` : '0 / 0';
+    const pages = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+    const page = Math.floor(state.offset / PAGE_SIZE) + 1;
+    if (pageInfo) pageInfo.textContent = state.total ? `第 ${page} / ${pages} 页 · ${first}–${last} / ${state.total}` : '0 / 0';
+    const input = byId('creativeLibraryPageNumber');
+    if (input) {
+      input.value = String(page);
+      input.max = String(pages);
+      input.disabled = state.loading || !state.total;
+    }
+    const jump = byId('creativeLibraryJumpButton');
+    if (jump) jump.disabled = state.loading || !state.total;
   }
 
   function filterValues() {
@@ -606,7 +662,6 @@
         showNotice(wanted.length ? `已保存该作品的收藏组（${wanted.length} 个）。` : '已移出全部收藏组。', 'success');
       } catch (error) {
         showNotice(libraryErrorMessage(error, '保存收藏组'), errorStatus(error) === 404 ? 'warning' : 'error');
-        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       }
     })();
   }
@@ -620,7 +675,6 @@
         await loadList();
       } catch (error) {
         showNotice(libraryErrorMessage(error, '收藏组操作'), errorStatus(error) === 404 ? 'warning' : 'error');
-        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       }
     })();
   }
@@ -646,7 +700,6 @@
         }
       } catch (error) {
         showNotice(libraryErrorMessage(error, '新建收藏组'), errorStatus(error) === 404 ? 'warning' : 'error');
-        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       }
     })();
   }
@@ -750,7 +803,6 @@
         }
       } catch (error) {
         showNotice(libraryErrorMessage(error, '保存收藏标记'), errorStatus(error) === 404 ? 'warning' : 'error');
-        showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       }
     })();
   }
@@ -767,8 +819,9 @@
 
   async function loadImage(path, key, requestNumber) {
     if (!canCreateObjectUrl()) return;
-    const safePath = safeLibraryImagePath(path);
+    const safePath = key.startsWith('thumb:') ? thumbnailPath(path) : safeLibraryImagePath(path);
     if (!safePath) return;
+    if (state.imageUrls.has(key) && state.thumbnailPaths.get(key) === safePath) return;
     try {
       const blob = await requestBlob(safePath, state.token);
       if (requestNumber !== state.requestNumber) return;
@@ -776,15 +829,82 @@
       const previous = state.imageUrls.get(key);
       if (previous && global.URL.revokeObjectURL) global.URL.revokeObjectURL(previous);
       state.imageUrls.set(key, source);
+      if (key.startsWith('thumb:')) state.thumbnailPaths.set(key, safePath);
     } catch (_) {
       // A missing output should leave a usable metadata-only card.
     }
   }
 
-  async function loadListThumbnails(items, requestNumber) {
+  function loadListThumbnails(items, requestNumber) {
     if (!canCreateObjectUrl()) return;
-    await Promise.all(items.map((item) => loadImage(item.thumbnail_url, imageKeyForThumbnail(item.generation_id), requestNumber)));
-    if (requestNumber === state.requestNumber) renderList();
+    stopThumbnails();
+    const queue = [], queued = new Set();
+    let active = 0;
+    const pump = () => {
+      while (requestNumber === state.requestNumber && active < THUMBNAIL_CONCURRENCY && queue.length) {
+        const item = queue.shift();
+        const key = imageKeyForThumbnail(item.generation_id);
+        const path = thumbnailPath(item.thumbnail_url);
+        if (!path) continue;
+        const controller = typeof global.AbortController === 'function' ? new global.AbortController() : null;
+        if (controller) state.thumbnailControllers.add(controller);
+        active++;
+        void requestBlob(path, state.token, undefined, controller?.signal).then((blob) => {
+          if (requestNumber !== state.requestNumber || controller?.signal.aborted) return;
+          const previous = state.imageUrls.get(key);
+          if (previous) global.URL.revokeObjectURL(previous);
+          state.imageUrls.delete(key);
+          state.imageUrls.set(key, global.URL.createObjectURL(blob));
+          state.thumbnailPaths.set(key, path);
+          const target = state.thumbnailTargets.get(item.generation_id);
+          if (target) appendThumbnail(target, item);
+          const thumbs = [...state.imageUrls.keys()].filter((entry) => entry.startsWith('thumb:'));
+          for (const stale of thumbs.slice(0, Math.max(0, thumbs.length - THUMBNAIL_CACHE_SIZE))) {
+            global.URL.revokeObjectURL(state.imageUrls.get(stale));
+            state.imageUrls.delete(stale);
+            state.thumbnailPaths.delete(stale);
+          }
+        }).catch(() => {}).finally(() => {
+          if (controller) state.thumbnailControllers.delete(controller);
+          active--;
+          pump();
+        });
+      }
+    };
+    const enqueue = (item) => {
+      const key = imageKeyForThumbnail(item.generation_id);
+      if (queued.has(key)) return;
+      const path = thumbnailPath(item.thumbnail_url);
+      if (!path) return;
+      if (state.imageUrls.has(key) && state.thumbnailPaths.get(key) === path) {
+        const cached = state.imageUrls.get(key);
+        state.imageUrls.delete(key);
+        state.imageUrls.set(key, cached);
+        return;
+      }
+      queued.add(key);
+      queue.push(item);
+      pump();
+    };
+    if (typeof global.IntersectionObserver === 'function') {
+      const byIdMap = new Map(items.map((item) => [item.generation_id, item]));
+      state.thumbnailObserver = new global.IntersectionObserver((entries) => {
+        if (requestNumber !== state.requestNumber) return;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const item = byIdMap.get(entry.target.dataset.generationId);
+          if (item) enqueue(item);
+          state.thumbnailObserver?.unobserve(entry.target);
+        }
+      }, { root: byId('creativeLibraryListView'), rootMargin: '180px 0px' });
+      for (const item of items) {
+        const target = state.thumbnailTargets.get(item.generation_id);
+        if (target) {
+          target.dataset.generationId = item.generation_id;
+          state.thumbnailObserver.observe(target);
+        }
+      }
+    } else items.forEach(enqueue);
   }
 
   function responseItems(data) {
@@ -796,15 +916,15 @@
 
   async function loadList() {
     const requestNumber = ++state.requestNumber;
+    stopThumbnails();
     state.loading = true;
     state.detail = null;
     state.lineage = null;
     showListView();
     showNotice('正在读取电脑端作品库…');
-    showAuth(false);
     renderList();
     renderPagination();
-    clearImageUrls();
+    clearImageUrls(true);
     try {
       const query = buildListQuery({ ...state.filters, limit: PAGE_SIZE, offset: state.offset });
       const data = await requestJson(`/api/rpg/library/generations?${query}`, state.token);
@@ -812,6 +932,13 @@
       adoptGroups(data);
       state.items = responseItems(data);
       state.total = clampInteger(data && data.total, state.items.length, 0, MAX_OFFSET);
+      if (!state.items.length && state.offset > 0 && state.total > 0) {
+        const lastOffset = (Math.ceil(state.total / PAGE_SIZE) - 1) * PAGE_SIZE;
+        if (lastOffset !== state.offset) {
+          state.offset = lastOffset;
+          return loadList();
+        }
+      }
       state.hasMore = Boolean(data && data.has_more);
       state.loading = false;
       showNotice(state.items.length ? `已读取 ${state.items.length} 条作品。` : '电脑端暂无符合条件的作品。', 'success');
@@ -825,7 +952,6 @@
       state.total = 0;
       state.hasMore = false;
       showNotice(libraryErrorMessage(error, '读取作品库'), errorStatus(error) === 404 ? 'warning' : 'error');
-      showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       renderList();
       renderPagination();
     }
@@ -1161,7 +1287,15 @@
       if (typeof global.openProjectPicker === 'function') global.openProjectPicker(detail.generation_id);
       else showNotice('项目功能尚未载入。', 'error');
     });
-    actions.append(reproduce, seedVariant, continueEdit, addToProject, remove);
+    const addToVisual = createElement('button', 'secondary', '加入可视化图库');
+    addToVisual.type = 'button';
+    addToVisual.disabled = !previewArtifact || previewArtifact.exists === false || !artifactPath(previewArtifact);
+    addToVisual.addEventListener('click', () => {
+      if (global.EasyPanelVisualTagEditor?.openFromGeneration) {
+        global.EasyPanelVisualTagEditor.openFromGeneration(detail, previewArtifact);
+      } else showNotice('图库添加功能尚未载入，请刷新页面。', 'error');
+    });
+    actions.append(reproduce, seedVariant, continueEdit, addToProject, addToVisual, remove);
     root.append(actions);
     root.append(createElement('p', 'creative-library-safe-note', '这些操作只恢复参数，不会自动提交任务；请确认后手动点击“生成图片”。'));
     appendGroupSection(root, detail);
@@ -1193,12 +1327,12 @@
     const listView = byId('creativeLibraryListView');
     if (listView && !listView.hidden) state.listScrollTop = listView.scrollTop;
     const requestNumber = ++state.requestNumber;
+    stopThumbnails();
     state.loading = true;
     state.detail = null;
     state.lineage = null;
     showDetailView();
     showNotice('正在读取作品详情…');
-    showAuth(false);
     setText('creativeLibraryDetailStatus', '读取中…');
     const root = byId('creativeLibraryDetail');
     if (root) root.replaceChildren(createElement('p', 'creative-library-loading', '正在读取作品详情…'));
@@ -1229,7 +1363,6 @@
       state.lineage = null;
       setText('creativeLibraryDetailStatus', '读取失败');
       showNotice(libraryErrorMessage(error, '读取作品详情'), errorStatus(error) === 404 ? 'warning' : 'error');
-      showAuth(errorStatus(error) === 401 || errorStatus(error) === 403);
       if (root) root.replaceChildren(createElement('p', 'creative-library-muted', '无法显示该作品详情；可以返回列表继续使用现有面板。'));
     }
   }
@@ -1315,12 +1448,11 @@
 
   function cleanupAfterClose() {
     state.requestNumber += 1;
+    stopThumbnails();
     state.loading = false;
     state.detail = null;
     state.lineage = null;
     state.token = '';
-    const token = byId('creativeLibraryToken');
-    if (token) token.value = '';
     clearImageUrls();
     state.lastFocus?.focus?.();
     state.lastFocus = null;
@@ -1342,13 +1474,6 @@
     void loadGroups();
   }
 
-  function submitAuth(event) {
-    event.preventDefault();
-    state.token = asText(byId('creativeLibraryToken')?.value);
-    state.offset = 0;
-    void loadList();
-  }
-
   function applyFilters(event) {
     event.preventDefault();
     state.filters = filterValues();
@@ -1368,14 +1493,33 @@
     void loadList();
   }
 
+  function jumpToPage(event) {
+    event.preventDefault();
+    if (state.loading) return;
+    const offset = pageOffset(byId('creativeLibraryPageNumber')?.value, state.total);
+    if (offset === null) {
+      showNotice(`请输入 1–${Math.max(1, Math.ceil(state.total / PAGE_SIZE))} 的整数页码。`, 'warning');
+      return;
+    }
+    if (offset === state.offset) return;
+    state.offset = offset;
+    state.listScrollTop = 0;
+    const list = byId('creativeLibraryListView');
+    if (list) list.scrollTop = 0;
+    void loadList();
+  }
+
   function backToList() {
     const generationId = state.detail?.generation_id;
+    state.requestNumber += 1;
+    state.loading = false;
     state.detail = null;
     state.lineage = null;
     showListView();
     showNotice(state.items.length ? '已返回作品列表。' : '作品列表为空。', state.items.length ? 'success' : '');
     renderList();
     renderPagination();
+    loadListThumbnails(state.items, state.requestNumber);
     const listView = byId('creativeLibraryListView');
     if (listView) {
       listView.scrollTop = state.listScrollTop;
@@ -1453,10 +1597,10 @@
     byId('creativeLibraryRefresh')?.addEventListener('click', () => { state.offset = 0; void loadList(); });
     byId('creativeLibraryPurgeFailed')?.addEventListener('click', () => { void purgeFailedLibrary(); });
     byId('creativeLibraryRepair')?.addEventListener('click', () => { void repairLibrary(); });
-    byId('creativeLibraryAuth')?.addEventListener('submit', submitAuth);
     byId('creativeLibraryFilters')?.addEventListener('submit', applyFilters);
     byId('creativeLibraryPrevious')?.addEventListener('click', goPrevious);
     byId('creativeLibraryNext')?.addEventListener('click', goNext);
+    byId('creativeLibraryJump')?.addEventListener('submit', jumpToPage);
     byId('creativeLibraryBack')?.addEventListener('click', backToList);
     byId('creativeLibraryDialog')?.addEventListener('close', cleanupAfterClose);
     global.document.addEventListener('easy-panel:open-generation', (event) => {

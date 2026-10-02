@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function load(presets = [], saved = {}) {
+function load(presets = [], saved = {}, examples = undefined) {
   const elements = Object.fromEntries([
     'promptSubject', 'promptAppearance', 'promptExpression', 'promptClothing', 'promptPose',
     'promptComposition', 'promptScene', 'promptLighting', 'promptStyle'
@@ -12,7 +12,7 @@ function load(presets = [], saved = {}) {
   elements.promptVariationStatus = {textContent: ''};
   elements.promptPresetName_pose = {textContent: '', hidden: true};
   const context = {
-    window: {},
+    window: {EasyPanelPresetExamples:examples},
     document: {readyState: 'loading', addEventListener() {}, getElementById(id) { return elements[id]; }},
     localStorage: {getItem(key) { return saved[key] || null; }, setItem(key, value) { saved[key] = value; }},
     userPromptPresets: presets,
@@ -73,6 +73,22 @@ test('section dice replaces its own field immediately and history restores it', 
   assert.equal(elements.promptScene.value, 'beach');
 });
 
+test('clothing dice excludes pose-led combo overrides and changes only clothing', () => {
+  const {api, elements} = load([
+    {category:'pose', name:'Sitting', content:'sitting'},
+    {category:'combo', name:'Chair pose', sections:{pose:'sitting, legs crossed',clothing:'dress'}},
+    {category:'clothing', name:'Office suit', content:'blazer, pencil skirt'},
+  ], {easyPanelVariationLocksV1:JSON.stringify({clothing:false})});
+  assert.deepEqual(Array.from(api.pool('clothing'), item => item.name), ['Office suit']);
+  assert.equal(api.pool('pose').some(item => item.name === 'Chair pose'), true);
+  elements.promptPose.value = 'standing';
+  elements.promptClothing.value = 'hoodie';
+  assert.equal(api.randomSectionNow('clothing'), true);
+  assert.equal(elements.promptClothing.value, 'blazer, pencil skirt');
+  assert.equal(elements.promptPose.value, 'standing');
+  assert.equal(api.presetName('clothing'), 'Office suit');
+});
+
 test('tag dice changes only one token and locked tags constrain section variants', () => {
   const presets = [{category:'pose', name:'Sit', content:'sitting, looking at viewer'}];
   const {api, history, elements} = load(presets, {
@@ -85,16 +101,16 @@ test('tag dice changes only one token and locked tags constrain section variants
   history.step(-1);
   assert.equal(elements.promptPose.value, 'standing, looking at viewer');
   assert.equal(api.randomSectionNow('pose'), true);
-  assert.equal(elements.promptPose.value, 'sitting, looking at viewer');
+  assert.equal(elements.promptPose.value, 'looking at viewer, sitting');
 });
 
-test('section dice refuses variants that would discard a locked tag', () => {
+test('section dice retains locked tags while drawing a source that does not contain them', () => {
   const {api, elements} = load([{category:'pose', name:'Sit', content:'sitting, legs crossed'}], {
     easyPanelVariationTagLocksV1: JSON.stringify({pose:['looking at viewer']})
   });
   elements.promptPose.value = 'standing, looking at viewer';
-  assert.equal(api.randomSectionNow('pose'), false);
-  assert.equal(elements.promptPose.value, 'standing, looking at viewer');
+  assert.equal(api.randomSectionNow('pose'), true);
+  assert.equal(elements.promptPose.value, 'looking at viewer, sitting, legs crossed');
 });
 
 test('locking a section blocks direct randomization and tag insertion', () => {
@@ -157,4 +173,72 @@ test('chip translations reuse the explainer glossary and skip protected tokens',
   });
   assert.deepEqual(calls, ['smile']);
   assert.equal(JSON.parse(stored.get('easyPanelPromptGlossaryV1')).smile, '微笑');
+});
+
+
+test('random section and staged preview carry the matching preset example', () => {
+  const image = 'a'.repeat(64), seen = {};
+  const examples = {showSection(key,choice) { seen[key] = choice; }, figure(id,name) { return {image:id,name}; }};
+  const {api,elements,context} = load([
+    {id:'chair',category:'pose',name:'Chair',content:'sitting',exampleImage:image},
+    {id:'combo',category:'combo',name:'Room',sections:{scene:'bedroom'},exampleImage:image}
+  ], {}, examples);
+  assert.equal(api.pool('pose')[0].exampleImage,image);
+  assert.equal(api.pool('scene')[0].id,'combo');
+  assert.equal(api.randomSectionNow('pose'),true);
+  assert.equal(seen.pose.exampleImage,image);
+  elements.promptPose.value='standing'; api.renderAll();
+  assert.equal(seen.pose,null);
+  const list={rows:[],replaceChildren(){this.rows=[];},append(row){this.rows.push(row);}};
+  elements.promptVariationPreview={hidden:true,querySelector(){return list;}};
+  context.document.createElement=()=>({children:[],append(item){this.children.push(item);}});
+  api.stage(['scene']);
+  assert.equal(elements.promptScene.value,'');
+  assert.equal(elements.promptVariationPreview.hidden,false);
+  assert.equal(list.rows[0].children[0].image,image);
+  api.accept();
+  assert.equal(elements.promptScene.value,'bedroom');
+  assert.equal(seen.scene.exampleImage,image);
+});
+
+
+test('section and single-tag dice include illustrated gallery choices and show their image',()=>{
+  const calls=[];
+  const {api,elements,context}=load([],{}, {showSection(key,choice){if(choice)calls.push({key,choice});}});
+  context.window.EasyPanelVisualPresetSource={loaded:true,candidates(key){return key==='pose'?[{id:'visual:vt123456789abc:pose',name:'坐姿图库',text:'sitting',exampleImage:{source:'visual',id:'vt123456789abc'}}]:[];}};
+  elements.promptPose.value='standing';
+  assert.equal(api.randomSectionNow('pose'),true);
+  assert.equal(elements.promptPose.value,'sitting');
+  assert.equal(calls.at(-1).choice.exampleImage.id,'vt123456789abc');
+  elements.promptPose.value='standing, hands_up';
+  assert.equal(api.randomTagNow('pose',0),true);
+  assert.equal(elements.promptPose.value,'sitting, hands_up');
+  assert.equal(calls.at(-1).choice.name,'坐姿图库');
+});
+
+
+test('a locked single-tag gallery result leaves the dice able to draw a next tag',()=>{
+  const calls=[];
+  const {api,elements,history,context}=load([], {easyPanelVariationTagLocksV1:JSON.stringify({pose:['sitting']})}, {showSection(key,choice){if(choice)calls.push(choice);}});
+  context.window.EasyPanelVisualPresetSource={loaded:true,candidates(section){return section==='pose'?[{id:'sit',name:'坐姿',text:'sitting'},{id:'wave',name:'挥手',text:'waving',exampleImage:'a'.repeat(64)}]:[];}};
+  elements.promptPose.value='sitting';
+  assert.equal(api.randomSectionNow('pose'),true);
+  assert.equal(elements.promptPose.value,'sitting, waving');
+  assert.equal(calls.at(-1).name,'挥手');
+  assert.equal(calls.at(-1).presetText,'waving');
+  history.step(-1);assert.equal(elements.promptPose.value,'sitting');
+  assert.equal(api.randomSectionNow('pose'),true);
+  assert.equal(elements.promptPose.value,'sitting, waving');
+});
+
+test('locked weighted terms keep their original weight without duplicate unweighted tags',()=>{
+  const {api,elements}=load([{category:'pose',name:'Wave',content:'sitting, waving'}], {easyPanelVariationTagLocksV1:JSON.stringify({pose:['(sitting:1.2)']})});
+  elements.promptPose.value='(sitting:1.2), standing';
+  assert.equal(api.randomSectionNow('pose'),true);
+  assert.equal(elements.promptPose.value,'(sitting:1.2), waving');
+});
+
+test('a pool containing only locked terms leaves input intact',()=>{
+  const {api,elements}=load([{category:'pose',name:'Sit',content:'sitting'}], {easyPanelVariationTagLocksV1:JSON.stringify({pose:['sitting']})});
+  elements.promptPose.value='sitting';assert.equal(api.randomSectionNow('pose'),false);assert.equal(elements.promptPose.value,'sitting');
 });

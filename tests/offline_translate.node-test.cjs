@@ -94,31 +94,14 @@ test('机翻结果做标签化清理', () => {
   assert.equal(offline.cleanTranslatedTag(''), '')
 })
 
-test('页面接线：12 个框各带一个「翻译」按钮（与清空/粘贴同排）', () => {
-  const buttons = [...html.matchAll(/data-translate-field="([a-zA-Z]+)"/g)].map((m) => m[1])
-  assert.equal(buttons.length, 12)
-  for (const field of ['promptSubject', 'promptAppearance', 'promptExpression', 'promptClothing',
-                       'promptPose', 'promptComposition', 'promptScene', 'promptLighting',
-                       'promptStyle', 'promptNaturalLanguage', 'prompt', 'negative']) {
-    assert.ok(buttons.includes(field), field)
-    assert.ok(html.includes(`translateArgosField('${field}')`), field)
-  }
-  assert.ok(html.includes('class="prompt-section-translate"'))
-  const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'css', 'panel.css'), 'utf8')
-  assert.ok(css.includes('.prompt-section-translate{'))
-  assert.ok(css.includes('.prompt-section-translate:hover'))
-  assert.ok(css.includes('.prompt-section-translate-status{'))
-})
-
-test('按框翻译：每个框都有独立状态位（不再写全局 tokenHint）', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'offline-translate.js'), 'utf8')
-  for (const field of ['promptSubject', 'promptAppearance', 'promptExpression', 'promptClothing',
-                       'promptPose', 'promptComposition', 'promptScene', 'promptLighting',
-                       'promptStyle', 'promptNaturalLanguage', 'prompt', 'negative']) {
-    assert.ok(html.includes(`data-translate-status="${field}"`), field)
-  }
-  assert.ok(source.includes('function setFieldHint(fieldId, message, error)'))
-  assert.ok(source.includes('data-translate-status="${fieldId}"'))
+test('页面移除逐框翻译入口，保留标签编辑与整段离线翻译', () => {
+  assert.ok(!html.includes('data-translate-field='))
+  assert.ok(!html.includes('data-translate-status='))
+  assert.ok(!html.includes('translateArgosField('))
+  assert.ok(html.includes('translateArgosOffline()'))
+  assert.ok(html.includes('/assets/js/prompt-explain.js'))
+  const explain = fs.readFileSync(path.join(__dirname, '..', 'web', 'assets', 'js', 'prompt-explain.js'), 'utf8')
+  assert.ok(explain.includes('标签'))
 })
 
 test('按框翻译：只翻该框的中文片段，使用全局撤销', () => {

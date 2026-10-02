@@ -48,7 +48,7 @@ from easy_panel_app.anima_refine import (
     merge_anima_detail_prompt,
     normalize_anima_detail_refine,
 )
-from easy_panel_app import camera_control
+from easy_panel_app import camera_control, preset_examples
 from easy_panel_app.tag_classifier import classify_tag
 from easy_panel_app import danbooru_client, prompt_dialect, visual_tag_library
 from easy_panel_app.config import (
@@ -549,7 +549,7 @@ PROMPT_SECTION_LABELS = {
 }
 MATURE_NEGATIVE_TERMS = ("nsfw", "nude", "nudity", "explicit", "sex", "sexual",
                          "porn", "hentai", "uncensored")
-PANEL_VERSION = "2.2.2"
+PANEL_VERSION = "2.3.0"
 SNAPSHOT_FILE = PROJECT_DIR / "generation_snapshots.json"
 SNAPSHOT_SCHEMA_VERSION = 2
 SNAPSHOT_SOURCE_SECTION_KEYS = (
@@ -1261,7 +1261,7 @@ def prune_creative_missing_outputs() -> dict:
     """Throttled cleanup: drop library records whose output image files are gone.
 
     Runs at most once every ``_CREATIVE_PRUNE_INTERVAL_SECONDS`` and is called
-    before library reads so both the desktop and mobile galleries stop showing
+    by the background reconciler so desktop and mobile galleries stop showing
     records whose images were already deleted from disk.  Never raises: a
     cleanup failure must not break an otherwise read-only library request.
     """
@@ -1680,7 +1680,7 @@ def _creative_reconcile_interval_seconds() -> float:
 
 
 def start_creative_index_reconciler() -> threading.Event:
-    """Start the daemon that reconciles client-independent job state."""
+    """Maintain job state and missing outputs without blocking library reads."""
 
     stop_event = threading.Event()
     interval = _creative_reconcile_interval_seconds()
@@ -1692,7 +1692,11 @@ def start_creative_index_reconciler() -> threading.Event:
             except Exception:
                 # Reconciliation is best effort and must never affect the API
                 # server or the ComfyUI worker.
-                continue
+                pass
+            try:
+                prune_creative_missing_outputs()
+            except Exception:
+                pass
 
     thread = threading.Thread(
         target=run,
@@ -5755,6 +5759,10 @@ class Handler(BaseHTTPRequestHandler):
     def require_panel_auth(self):
         """Protect the legacy panel API while preserving local desktop access."""
         if self.is_loopback_client():
+            # Local panel access already trusts this computer. Reuse the
+            # configured token through an HttpOnly session for library reads.
+            if not self.has_valid_rpg_session():
+                self.issue_rpg_session()
             return True
         if not _rpg_expected_token():
             self.send_auth_error("远程面板未配置访问 Token。", HTTPStatus.SERVICE_UNAVAILABLE)
@@ -5944,7 +5952,21 @@ class Handler(BaseHTTPRequestHandler):
                         and not parsed.path.startswith("/api/rpg/"))):
                 if not self.require_panel_auth():
                     return
-            if parsed.path == "/api/shared-state":
+            if parsed.path == "/api/preset-examples/image":
+                query = urllib.parse.parse_qs(parsed.query)
+                file = preset_examples.example_path(query.get("id", [""])[0])
+                if not file.is_file():
+                    self.send_error(HTTPStatus.NOT_FOUND, "Example image not found")
+                    return
+                content = file.read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/webp")
+                self.send_header("Cache-Control", "private, max-age=86400")
+                self.send_header("Content-Length", str(len(content)))
+                self.add_rpg_session_header()
+                self.end_headers()
+                self.wfile.write(content)
+            elif parsed.path == "/api/shared-state":
                 state, recovered = SHARED_STATE_STORE.read_with_metadata()
                 self.send_json({"ok": True, "state": state, "recovered": recovered})
             elif parsed.path == "/api/rpg/ping":
@@ -5974,8 +5996,6 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
-                reconcile_creative_index_jobs()
-                prune_creative_missing_outputs()
                 result = creative_index.list_generations(
                     limit=query.get("limit", [20])[0],
                     offset=query.get("offset", [0])[0],
@@ -6037,8 +6057,6 @@ class Handler(BaseHTTPRequestHandler):
                 generation_id = parsed.path.split("/")[-2].lower()
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
-                reconcile_creative_index_jobs()
-                prune_creative_missing_outputs()
                 lineage = creative_index.get_lineage(generation_id)
                 if lineage is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
@@ -6054,8 +6072,6 @@ class Handler(BaseHTTPRequestHandler):
                 generation_id = parsed.path.rsplit("/", 1)[-1].lower()
                 creative_index = get_creative_index()
                 ensure_creative_index_from_legacy_best_effort(creative_index)
-                reconcile_creative_index_jobs()
-                prune_creative_missing_outputs()
                 generation = creative_index.get_generation(generation_id)
                 if generation is None:
                     self.send_json({"error": "没有找到该作品。"}, HTTPStatus.NOT_FOUND)
@@ -6290,6 +6306,8 @@ class Handler(BaseHTTPRequestHandler):
                 query = params.get("q", [""])[0]
                 limit = bounded(params.get("limit", ["28"])[0], 28, 1, 200)
                 self.send_json({"tags": search_tags(query[:100], limit=limit), "total": len(TAG_INDEX)})
+            elif parsed.path == "/api/visual-tags/section-presets":
+                self.send_json({"ok": True, **visual_tag_library.section_presets()})
             elif parsed.path == "/api/visual-tags":
                 query = urllib.parse.parse_qs(parsed.query)
                 if query.get("stats", [""])[0] in {"1", "true", "yes"}:
@@ -6301,6 +6319,7 @@ class Handler(BaseHTTPRequestHandler):
                         query.get("q", [""])[0][:120],
                         limit=bounded(query.get("limit", ["48"])[0], 48, 1, visual_tag_library.MAX_SEARCH_LIMIT),
                         category=query.get("category", [""])[0][:60],
+                        section=query.get("section", [""])[0][:30],
                         offset=bounded(query.get("offset", ["0"])[0], 0, 0, 20000),
                     )
                     resolved = prompt_dialect.resolve_dialect(family, dialect)
@@ -6420,7 +6439,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/argos-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/upload-flux-mask", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/classify-tags", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
+        if path == "/api/preset-examples/upload":
+            if not self.require_panel_auth():
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= preset_examples.MAX_UPLOAD_BYTES + 65536:
+                    self.send_json({"error": "例图上传为空或超过 20 MB。"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    return
+                body = self.rfile.read(size)
+                if len(body) != size:
+                    raise ValueError("例图上传不完整。")
+                content = extract_image_upload(self.headers.get("Content-Type", ""), body)
+                self.send_json(preset_examples.save_example(content))
+            except CLIENT_DISCONNECT_ERRORS:
+                return
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if path not in {"/api/generate", "/api/generate-batch", "/api/generate-check", "/api/tasks/add", "/api/tasks/control", "/api/clarity-upscale", "/api/preview-pose", "/api/translate", "/api/google-translate", "/api/argos-translate", "/api/prompt-instruction", "/api/lora-notes", "/api/lora-import-sidecar", "/api/upload-pose", "/api/upload-transparent-source", "/api/upload-flux-mask", "/api/transparent-extract", "/api/anima-tags", "/api/anima-preflight", "/api/illustrious-preflight", "/api/prompt-compile", "/api/classify-tags", "/api/camera-prompt", "/api/visual-tags/rebuild", "/api/visual-tags/add", "/api/read-image", "/api/read-output", "/api/upload-inpaint", "/api/krea2-preflight", "/api/preview-color", "/api/snapshot-outputs", "/api/rpg/generate", "/api/rpg/generate-check", "/api/rpg/tasks", "/api/rpg/tasks/add", "/api/rpg/tasks/control", "/api/rpg/prompt-instruction", "/api/rpg/profiles", "/api/rpg/library/delete", "/api/rpg/library/purge", "/api/rpg/library/favorite", "/api/rpg/library/groups", "/api/rpg/library/repair", "/api/rpg/library/projects", "/api/shared-state"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/") and not path.startswith("/api/rpg/") and not self.require_panel_auth():
@@ -6441,6 +6478,45 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("共享数据请求必须是 JSON 对象。")
                 payload = data.get("state") if isinstance(data.get("state"), dict) else data
                 self.send_json(SHARED_STATE_STORE.merge(payload, data.get("baseRevision")))
+                return
+            if self.path == "/api/visual-tags/add":
+                try:
+                    size = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    raise ValueError("无效的上传大小。") from None
+                if size <= 0 or size > 28_000_000:
+                    self.send_json({"error": "上传请求为空或超过 28 MB。"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    return
+                raw = self.rfile.read(size)
+                if len(raw) != size:
+                    raise ValueError("上传请求不完整。")
+                data = json.loads(raw.decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("上传请求必须是 JSON 对象。")
+                generation_id = str(data.get("generation_id") or "")
+                artifact_id = str(data.get("artifact_id") or "")
+                if generation_id:
+                    if not re.fullmatch(r"[0-9a-f]{32}", generation_id):
+                        raise ValueError("来源作品编号无效。")
+                    generation = get_creative_index().get_generation(generation_id)
+                    artifact = next((item for item in (generation or {}).get("artifacts", [])
+                                     if item.get("artifact_id") == artifact_id and item.get("exists") is not False), None)
+                    if not artifact:
+                        raise ValueError("来源作品或输出图片不存在，请刷新作品库。")
+                    file = resolve_rpg_output_image(artifact["filename"], artifact.get("subfolder", ""))
+                    if file.stat().st_size > visual_tag_library.MAX_UPLOAD_BYTES:
+                        raise ValueError("来源图片超过 20 MB。")
+                    content = file.read_bytes()
+                else:
+                    encoded = data.get("image", "")
+                    if not isinstance(encoded, str) or not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\s]+", encoded):
+                        raise ValueError("请上传 PNG、JPEG 或 WebP 图片。")
+                    try:
+                        content = base64.b64decode(encoded.split(",", 1)[1], validate=True)
+                    except ValueError:
+                        raise ValueError("图片编码无效。") from None
+                entry = visual_tag_library.add_entry(content, data, generation_id=generation_id, artifact_id=artifact_id if generation_id else "")
+                self.send_json({"ok": True, "entry": entry})
                 return
             if self.path in {"/api/upload-pose", "/api/read-image", "/api/upload-inpaint",
                              "/api/upload-transparent-source", "/api/upload-flux-mask"}:

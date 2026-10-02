@@ -8,14 +8,18 @@ ComfyUI Easy Panel 是一个面向动漫、二次元和角色 LoRA 出图的本�
 
 ## 当前版本
 
-- Easy Panel 服务端：`2.2.2`。
-- Android 客户端：`mobile-v1.4.6`（versionCode `1004006`）。
-- 下载入口：服务端 [v2.2.2 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.2.2) ｜ Android APK [mobile-v1.4.6 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.6)。
-- 本版本：手机端与电脑端对齐「执行链 / 产物阶段」——结果卡显示实际执行链（阶段、主采样、局部重绘、计划输出），作品库显示产物来源与「⏳ 文件保存中」，失败时可在「技术详情」里查看内部分类；文案明确了 Anima 高清重建内部已包含 Anime6B 超分，与「输出增强」互斥。
+- Easy Panel 服务端：`2.3.0`。
+- Android 客户端：`mobile-v1.4.7`（versionCode `1004007`）。
+- 下载入口：服务端 [v2.3.0 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/v2.3.0) ｜ Android APK [mobile-v1.4.7 Release](https://github.com/ideal00/web-comfyui-controller/releases/tag/mobile-v1.4.7)。
+- 本版本：创作游乐场、分区预设搜索与例图、可视化词条编辑和上传、词条锁定随机，以及桌面 / 手机作品库翻页与缓存；修复 Windows 作品索引迁移的数据库句柄未关闭问题。一键 ZIP 包含同版本前后端、教程和校验清单。
 - 升级前请先备份运行目录中的快照、共享状态、预设、收藏、LoRA 备注和 Token 文件；升级后重启 Easy Panel，ComfyUI `8188` 无需因面板更新而重启。
 
 ## 目录
 
+- [新手快速开始](docs/QUICKSTART.md)
+- [提示词、预设例图与创作游乐场](docs/PROMPT_TOOLS.md)
+- [电脑 / 手机功能对照](docs/FEATURE_MATRIX.md)
+- [维护者发布与同步流程](docs/RELEASING.md)
 - [更新记录](CHANGELOG.md)
 - [Android 客户端](android-client/README.md)
 - [1. 项目如何工作](#1-项目如何工作)
@@ -85,7 +89,9 @@ Easy Panel 预览区
 - 本地常用词转换和 Danbooru 中英文标签搜索；搜索结果的「写入：xxx」可选外貌 / 人物与角色 / 服装与材质 / 姿势 / **表情** / 构图 / 场景 / 光线 / 画风与上色 / 其他补充，点候选标签直接进对应分区。
 - **颜色修饰（写入时的可选修饰词）**：「标签搜索与填入」标题行右侧的「颜色修饰」下拉（无 / 浅 light / 深 dark / 淡 pale / 浓 deep / 明亮 bright / 鲜艳 vivid / 压低 muted / 柔和 soft / 低饱和 desaturated / 浓郁 rich）会在**写入 Prompt 的那一刻**拼到颜色标签前面（`blue_hair` + 深 → `dark_blue_hair`，再按当前模型方言写成 `dark blue hair`）。**可视化词条库**与**标签搜索与填入**两个入口都走同一条写入管线，词条库卡片上的「写入：」也会实时跟着变；修饰词**只在颜色标签上生效**（`long_hair`、`hair_ribbon`、`ice_cream`、`blue_archive` 这类同形标签不受影响），已带修饰词的标签不会叠加（`dark_blue_hair` + 深 → 原样，换成「淡」则替换为 `pale_blue_hair`）。它只是写入形式，标签库与提示词组件存档保存的仍是 Danbooru 原形，状态记在 `localStorage easyPanelColorModifierV1`。
 - 人物、外貌、**表情**、服装、姿势、构图、场景、光线、画风、自然语言等提示词分区。
-- 我的提示词预设支持姿势串 / 画师串 / 构图 / 光线 / 场景 / 服装 / 外貌 / 人物 / **表情** / 负面词 / 其他补充 分类与组合保存；「表情」是独立分类，不会再和“其他补充”混在一起。
+- 我的提示词预设支持姿势串 / 画师串 / 构图 / 光线 / 场景 / 服装 / 外貌 / 人物 / **表情** / 自然语言 / 负面词 / 其他补充 分类与组合保存；「表情」是独立分类，不会再和“其他补充”混在一起。
+- 个人预设支持绑定例图：编辑预设时可上传 PNG/JPG/WebP 或选用当前生成结果。例图独立保存并随预设同步；随机预览与分区抽取显示对应例图，无图的旧预设仍可使用。点击例图可放大或下载供参考。
+- 结构化编译器的 12 个分区均支持预设搜索：输入关键词时，补全候选优先显示本分区预设和例图；方向键选择、Enter/Tab 写入。分区“搜索预设”按钮或 Ctrl+Space 打开独立搜索，可选追加或替换。组合预设只提取当前分区；锁定分区保持锁定。
 - LoRA 自动触发词、备忘、推荐权重、同名 TXT 说明和多套服装预设。
 - WAI、Milmu、Spectacular、Gock、Anima、Krea 2 等模型的专用采样组合。
 - DWPose / OpenPose 骨架提取、预览、缓存和手动编辑。
@@ -153,7 +159,7 @@ G:\ComfyUI\
     └── README.md
 ```
 
-盘符和文件夹名称可以不同，但稍后必须把 `easy_panel.py` 顶部路径改成真实位置。
+盘符和文件夹名称可以不同。一键安装器会识别路径；手动安装通过环境变量配置，见第 4 节，无需修改 `easy_panel.py`。
 
 ### 3.3 模型文件应该放在哪里
 
@@ -1543,7 +1549,9 @@ Get-NetTCPConnection -LocalPort 8190 -ErrorAction SilentlyContinue
 Set-Location G:\ComfyUI\ComfyUI_Easy_Panel
 & "G:\ComfyUI\ComfyUI_windows_portable\python_embeded\python.exe" -m py_compile .\easy_panel.py .\lora_txt_generator.py .\lora_txt_to_json.py .\easy_panel_app\config.py .\easy_panel_app\model_profiles.py .\easy_panel_app\lora_sidecars.py .\easy_panel_app\tag_classifier.py
 & "G:\ComfyUI\ComfyUI_windows_portable\python_embeded\python.exe" -m unittest discover -s tests -v
-& "C:\Program Files\nodejs\node.exe" --check .\web\assets\js\panel.js
+node --test (Get-ChildItem tests/*.node-test.cjs).FullName
+pwsh -NoProfile -File .\installers\Build-Packages.ps1
+& "G:\ComfyUI\ComfyUI_windows_portable\python_embeded\python.exe" tools/verify_release.py --packages
 ```
 
 测试覆盖模型推荐、高级参数、SAG/PAG、模型级高清采样、Anime6B / SeedVR2 / Ultimate 输出增强、FaceDetailer、原生色彩匹配、元数据恢复、多人区域隔离、任务队列展开、LoRA 标签分类、TXT 解析、safetensors 头部读取和 JSON 安全合并等核心逻辑。真实 GPU 多模型画质 A/B 与外部翻译端到端测试仍分别需要显卡运行和有效 API Key。
@@ -1649,3 +1657,5 @@ Easy Panel 2.2.x Creative Library Foundation 的桌面 Web / Android 只读作�
 Easy Panel 网页原有的 `easyPanelPromptPresetsV1`（提示词预设）和 `easyPanelLoraFavoritesV1`（界面内 LoRA 收藏，其中包括角色 LoRA）会通过 `/api/shared-state` 合并到 Easy Panel 项目目录下的 `easy_panel_shared_state.json`。首次打开新版页面会自动尝试迁移本机数据；Android 高级面板使用同一个 `8190` 地址即可读取，页面内也可以点击“立即同步”。
 
 服务器保留 `easy_panel_shared_state.json.bak` 作为上一次成功写入的备份；主文件读取失败时优先用备份原子恢复，只有主文件与备份都不可用时才会把主文件改名为固定前缀的 `.corrupt.*.json`。文件、Token、模型和 API Key 均不会提交到 Git，也不会写入请求日志。同步是合并操作，离线时保留本机数据，revision 冲突时保留服务器已有记录；空手机集合不会清空电脑收藏。升级后需要手动重启 Easy Panel 进程，才能加载新的 API 和网页资源。
+
+可视化图库已按结构化提示词分区分类：图库可按对应输入框筛选；分区搜索、输入补全及随机可使用已有英文标签、中文说明与原例图，混合词条只写入当前分区。详见 `docs/visual-library-sections.md`。

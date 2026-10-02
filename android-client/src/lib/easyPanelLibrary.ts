@@ -11,6 +11,16 @@ import type { EasyPanelGenerationDetail } from '../services/easyPanelLibrary'
 
 export type EasyPanelLibraryRestoreMode = 'reproduce' | 'seed-variant' | 'continue-edit'
 
+export const LIBRARY_PAGE_SIZE = 30
+
+export function libraryPageOffset(value: string | number, total: number): number | null {
+  const text = String(value).trim()
+  const pages = Math.max(1, Math.ceil(total / LIBRARY_PAGE_SIZE))
+  const page = Number(text)
+  if (!/^\d+$/u.test(text) || !Number.isSafeInteger(page) || page < 1 || page > pages) return null
+  return (page - 1) * LIBRARY_PAGE_SIZE
+}
+
 export interface EasyPanelLibraryRestoreResult {
   settings: EasyPanelControllerSettings
   snapshot?: EasyPanelSnapshotRecord

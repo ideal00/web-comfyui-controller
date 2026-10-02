@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { pendingDerivationContextForLibraryGeneration, restoreLibraryGenerationToSettings } from './easyPanelLibrary'
+import { libraryPageOffset, pendingDerivationContextForLibraryGeneration, restoreLibraryGenerationToSettings } from './easyPanelLibrary'
 import type { EasyPanelControllerSettings } from './easyPanelController'
 import type { EasyPanelGenerationDetail } from '../services/easyPanelLibrary'
+
+describe('library quick page jump', () => {
+  it('requests the target slice directly including the partial last page', () => {
+    expect(libraryPageOffset('1', 61)).toBe(0)
+    expect(libraryPageOffset('2', 61)).toBe(30)
+    expect(libraryPageOffset('3', 61)).toBe(60)
+    expect(libraryPageOffset('1', 0)).toBe(0)
+  })
+  it('rejects empty, fractional, unsafe and out-of-range page numbers', () => {
+    for (const value of ['', '0', '-1', '1.5', '1e1', '4', 'Infinity', '9007199254740992']) {
+      expect(libraryPageOffset(value, 61)).toBeNull()
+    }
+  })
+})
 
 const current: EasyPanelControllerSettings = {
   baseUrl: 'http://desktop:8190',

@@ -58,26 +58,26 @@ class LoraFavoritesTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-        aliases = module.load_lora_rename_aliases()
         import json
+        import tempfile
+        from unittest.mock import patch
 
-        alias_files = Path("lora_imports").glob("*_chinese_filenames.json")
-        total = sum(len(json.loads(path.read_text(encoding="utf-8"))) for path in alias_files)
-        # Every entry yields three keys: the shared Illustrious path, the path as
-        # recorded (Anima folders keep their own top-level folder) and the bare name.
-        self.assertEqual(len(aliases), 3 * total)
-        self.assertEqual(
-            aliases["Illustrious_Hosiery_Test/01_服装/maidify.safetensors"],
-            "Illustrious_Hosiery_Test/01_服装/女仆化服装（Maidify）.safetensors",
-        )
-        self.assertEqual(
-            aliases["Illustrious_Hosiery_Test/02_人物模板/Odette.safetensors"],
-            "Illustrious_Hosiery_Test/02_人物模板/奥黛塔（原神）.safetensors",
-        )
-        self.assertEqual(
-            aliases["Anima_Soft_Illustration/01_NSFW_人物/honoka.safetensors"],
-            "Anima_Soft_Illustration/01_NSFW_人物/穗乃果（Honoka·Anima自训）.safetensors",
-        )
+        entries = {
+            "01_clothing/old.safetensors": "01_clothing/new.safetensors",
+            "Anima/old-character.safetensors": "Anima/new-character.safetensors",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "lora_rename_aliases.json").write_text(json.dumps(entries), encoding="utf-8")
+            with patch.object(module, "PROJECT_DIR", root):
+                aliases = module.load_lora_rename_aliases()
+            for old, new in entries.items():
+                self.assertEqual(aliases[old], new)
+                self.assertEqual(aliases["Illustrious_Hosiery_Test/" + old], "Illustrious_Hosiery_Test/" + new)
+                self.assertEqual(aliases[Path(old).name], Path(new).name)
+            with patch.object(module, "PROJECT_DIR", root / "missing"):
+                self.assertEqual(module.load_lora_rename_aliases(), {})
+
 
 
 if __name__ == "__main__":

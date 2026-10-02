@@ -126,16 +126,30 @@
   }
   function renderPresetNames() {
     Object.keys(SECTIONS).forEach(key => {
+      const saved = presetNames[key];
+      if (saved?.id) {
+        const options = [...pool(key),...(global.EasyPanelPresetSearch?.candidates(SECTIONS[key],'',Infinity) || [])];
+        const current = options.find(item => item.id === saved.id && item.text === (saved.presetText || saved.text));
+        if (current) presetNames[key] = {...current,text:saved.text,presetText:current.text};
+        else delete presetNames[key];
+      }
       if (presetNames[key] && !presetName(key)) delete presetNames[key];
       const label = document.getElementById(`promptPresetName_${key}`);
       const name = presetName(key);
       if (label) { label.textContent = name ? `预设：${name}` : ''; label.hidden = !name; }
+      global.EasyPanelPresetExamples?.showSection(key, name ? presetNames[key] : null);
     });
   }
   function changed() {
     clearSelection();
     renderPresetNames();
     if (typeof global.promptEditorChanged === 'function') global.promptEditorChanged();
+  }
+  function rememberPreset(key, choice) {
+    if (!SECTIONS[key]) return false;
+    presetNames[key] = {...choice,text:field(key).value,presetText:choice.text};
+    renderPresetNames();
+    return true;
   }
   function write(key, tokens) { if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return; } global.EasyPanelHistory?.record(); field(key).value = serialize(tokens); changed(); }
   function addTag(key, value) {
@@ -236,7 +250,8 @@
       lock.textContent = isTagLocked(key, token) ? '🔒' : '🔓'; lock.title = '锁定或解锁这个词条';
       lock.onclick = () => toggleTagLock(key, token);
       const dice = document.createElement('button'); dice.type = 'button'; dice.className = 'prompt-chip-dice'; dice.textContent = '🎲';
-      dice.title = '只换这个词条'; dice.onclick = () => randomTagNow(key, index);
+      dice.title = isTagLocked(key, token) ? '保留锁定词条，随机下一个' : '只换这个词条';
+      dice.onclick = () => isTagLocked(key, token) ? randomSectionNow(key) : randomTagNow(key, index);
       const search = document.createElement('button'); search.type = 'button'; search.className = 'prompt-chip-search'; search.textContent = '⌕';
       search.title = '在可视化词条库中搜索'; search.onclick = () => {
         const library = global.EasyPanelVisualTags;
@@ -320,61 +335,87 @@
     if (result.ok) clearSelection();
   }
   function pool(key) {
-    // A preset or bundle is a complete variation unit; never assemble random individual tags.
+    // Each source supplies a complete variation unit; retained locks are merged when drawing.
     const presets = typeof userPromptPresets !== 'undefined' ? userPromptPresets : [];
     const values = [];
     presets.forEach(item => {
-      if (item.category === key || (key === 'style' && item.category === 'artist')) values.push({name:item.name, text:typeof presetInsertText === 'function' ? presetInsertText(item) : item.content});
-      else if (item.category === 'combo' && item.sections?.[key]) values.push({name:item.name, text:typeof presetInsertText === 'function' ? presetInsertText(item, key) : item.sections[key]});
+      if (item.category === key || (key === 'style' && item.category === 'artist')) values.push({id:item.id, name:item.name, exampleImage:item.exampleImage, text:typeof presetInsertText === 'function' ? presetInsertText(item) : item.content});
+      // Clothing dice chooses standalone outfits. Old pose-led combinations
+      // can contain clothing overrides but their names describe the whole pose.
+      else if (key !== 'clothing' && item.category === 'combo' && item.sections?.[key]) values.push({id:item.id, name:item.name, exampleImage:item.exampleImage, text:typeof presetInsertText === 'function' ? presetInsertText(item, key) : item.sections[key]});
     });
+    values.push(...(global.EasyPanelVisualPresetSource?.candidates(key === 'style' ? 'artist' : key) || []));
     const seen = new Set();
     return values.filter(item => { const text = String(item.text || '').trim(), normalized = text.toLowerCase(); if (!text || seen.has(normalized)) return false; seen.add(normalized); return true; });
   }
   function eligibleCandidates(key) {
     const current = field(key).value.trim().toLowerCase();
-    const required = lockedTerms(key).map(normalized);
-    return pool(key).filter(item => item.text.trim().toLowerCase() !== current && required.every(term => tokenize(item.text).some(candidate => normalized(candidate) === term)));
+    const retained = lockedTerms(key), required = new Set(retained.map(token => normalized(translationSource(token))));
+    return pool(key).map(item => {
+      if (!retained.length) return item;
+      const next = tokenize(item.text).filter(token => !required.has(normalized(translationSource(token))));
+      // A source containing only retained terms cannot supply a next variation.
+      if (!next.length) return null;
+      return {...item,presetText:item.text,text:serialize([...retained,...next])};
+    }).filter(item => item && item.text.trim().toLowerCase() !== current);
   }
   function candidate(key) {
     const options = eligibleCandidates(key);
     return options.length ? options[Math.floor(Math.random() * options.length)] : null;
   }
+  function waitForVisual(keys, resume) {
+    const source = global.EasyPanelVisualPresetSource;
+    if (!source || source.loaded) return false;
+    const snapshot = keys.map(key => field(key).value);
+    status('正在载入可视化图库…');
+    source.ensure().then(() => {
+      if (keys.some((key,index) => field(key).value !== snapshot[index])) { status('输入内容已变化，请重新随机。'); return; }
+      resume();
+    }).catch(error => status(error.message + '；可再次点击重试。'));
+    return true;
+  }
   function randomTagNow(key, index) {
+    if (waitForVisual([key], () => randomTagNow(key,index))) return false;
     if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
     const terms = tokenize(field(key).value), current = terms[index];
     if (!current) return false;
     if (isTagLocked(key, current)) { status('这个词条已锁定，解锁后才能随机。'); return false; }
     if (kind(current) !== 'tag' || protectedLabel(current)) { status('结构词、LoRA、权重和自然语言不能单独随机。'); return false; }
     const existing = new Set(terms.map(normalized));
-    const candidates = [...new Set(pool(key).flatMap(item => tokenize(item.text)).filter(token => kind(token) === 'tag' && !protectedLabel(token) && !existing.has(normalized(token))))];
-    if (!candidates.length) { status('这个分区没有其他可用标签；先保存更多个人预设或组件。'); return false; }
+    const sources = pool(key);
+    const candidates = [...new Set(sources.flatMap(item => tokenize(item.text)).filter(token => kind(token) === 'tag' && !protectedLabel(token) && !existing.has(normalized(token))))];
+    if (!candidates.length) { status('这个分区没有其他可用标签；先保存更多个人预设、组件或图库词条。'); return false; }
     const next = candidates[Math.floor(Math.random() * candidates.length)];
     global.EasyPanelHistory?.record();
     terms[index] = next; field(key).value = serialize(terms); changed();
+    const source = sources.find(item => tokenize(item.text).includes(next));
+    if (source) rememberPreset(key,source);
     status(`已将「${current}」换为「${next}」；可用顶部 ↶ 撤销。`);
     return true;
   }
   function stage(keys) {
+    if (waitForVisual(keys, () => stage(keys))) return;
     const changes = keys.filter(key => !isLocked(key)).map(key => ({key, before:field(key).value, choice:candidate(key)})).filter(item => item.choice);
-    if (!changes.length) { status('这些分区没有可替换的个人预设或组件；先在“我的提示词预设”中保存对应分区内容。'); return; }
+    if (!changes.length) { status('这些分区没有可替换的个人预设、组件或图库词条；先在“我的提示词预设”中保存对应分区内容。'); return; }
     pending = changes;
     const box = document.getElementById('promptVariationPreview'); box.hidden = false;
     const list = box.querySelector('.prompt-variation-list'); list.replaceChildren();
-    changes.forEach(item => { const row = document.createElement('div'); row.textContent = `${LABELS[item.key]} · ${item.choice.name}\n${item.before || '（空）'} → ${item.choice.text}`; list.append(row); });
+    changes.forEach(item => { const row = document.createElement('div'); row.textContent = `${LABELS[item.key]} · ${item.choice.name}\n${item.before || '（空）'} → ${item.choice.text}`; if (global.EasyPanelPresetExamples) row.append(global.EasyPanelPresetExamples.previewFigure ? global.EasyPanelPresetExamples.previewFigure(item.key,item.choice) : global.EasyPanelPresetExamples.figure(item.choice.exampleImage,item.choice.name)); list.append(row); });
     status(`预览 ${changes.length} 个分区的变化；确认后才会写入。`);
   }
   function randomSectionNow(key) {
+    if (waitForVisual([key], () => randomSectionNow(key))) return false;
     if (isLocked(key)) { status(`${LABELS[key]}已锁定，请先解锁。`); return false; }
     const choice = candidate(key);
-    if (!choice) { status(lockedTerms(key).length ? `${LABELS[key]}没有同时保留锁定词条的其他预设或组件。` : `${LABELS[key]}没有其他可用的个人预设或组件；先保存一个不同内容的预设。`); return false; }
+    if (!choice) { status(`${LABELS[key]}没有其他可用的个人预设、组件或图库词条；已保留锁定内容。`); return false; }
     global.EasyPanelHistory?.record();
     field(key).value = choice.text;
-    presetNames[key] = {name:choice.name, text:choice.text};
+    presetNames[key] = {...choice};
     pending = null;
     const preview = document.getElementById('promptVariationPreview');
     if (preview) preview.hidden = true;
     changed();
-    status(`已将${LABELS[key]}换成「${choice.name}」；可用顶部 ↶ 撤销。`);
+    status(`已${lockedTerms(key).length ? '保留锁定词条，并将其余内容换成' : '将'+LABELS[key]+'换成'}「${choice.name}」；可用顶部 ↶ 撤销。`);
     return true;
   }
   function accept() {
@@ -383,10 +424,11 @@
     if (pending.some(item => field(item.key).value !== item.before)) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('分区内容已变化，请重新随机预览。'); return; }
     if (pending.some(item => lockedTerms(item.key).some(token => !tokenize(item.choice.text).some(candidate => normalized(candidate) === normalized(token))))) { pending = null; document.getElementById('promptVariationPreview').hidden = true; status('锁定词条已变化，请重新随机预览。'); return; }
     global.EasyPanelHistory?.record();
-    pending.forEach(item => { field(item.key).value = item.choice.text; presetNames[item.key] = {name:item.choice.name, text:item.choice.text}; });
+    pending.forEach(item => { field(item.key).value = item.choice.text; presetNames[item.key] = {...item.choice}; });
     pending = null; document.getElementById('promptVariationPreview').hidden = true; changed(); status('已应用变体；可用顶部 ↶ 撤销。');
   }
   function randomUnlocked() {
+    if (waitForVisual(Object.keys(SECTIONS), randomUnlocked)) return;
     let keys = Object.keys(SECTIONS).filter(key => !locks[key] && eligibleCandidates(key).length);
     const strength = document.getElementById('promptVariationStrength').value;
     if (strength !== 'bold') {
@@ -434,6 +476,7 @@
     const bar = document.createElement('div'); bar.className = 'prompt-variation-bar';
     bar.innerHTML = '<button type="button" class="secondary" data-action="pose">🎲 换一个姿势</button><button type="button" data-action="scene">🎲 换一个画面</button><label>变化程度 <select id="promptVariationStrength"><option value="light">轻微 · 1 个分区</option><option value="normal" selected>标准 · 最多 3 个</option><option value="bold">大胆 · 所有未锁定分区</option></select></label><span id="promptVariationStatus" class="small" role="status"></span>';
     grid.before(bar);
+    global.EasyPanelPresetExamples?.attachVisibilityControl(bar);
     const preview = document.createElement('div'); preview.id = 'promptVariationPreview'; preview.className = 'prompt-variation-preview'; preview.hidden = true;
     preview.innerHTML = '<div class="prompt-variation-list"></div><button type="button" data-action="accept">接受变体</button><button type="button" class="secondary" data-action="reroll">再随机</button><button type="button" class="secondary" data-action="cancel">取消</button>';
     bar.after(preview);
@@ -461,7 +504,7 @@
       if (locks[key]) lockedValues[key] = input.value;
       lock.onclick = () => { locks[key] = !locks[key]; if (locks[key]) lockedValues[key] = input.value; else delete lockedValues[key]; try { localStorage.setItem(LOCK_KEY, JSON.stringify(locks)); } catch (_) {} paintLock(); renderChips(key); };
       paintLock();
-      const dice = document.createElement('button'); dice.type = 'button'; dice.textContent = '🎲'; dice.title = '立即从本分区的个人预设或组件换一个'; dice.onclick = () => randomSectionNow(key);
+      const dice = document.createElement('button'); dice.type = 'button'; dice.textContent = '🎲'; dice.title = '立即从本分区的个人预设、组件或图库词条换一个'; dice.onclick = () => randomSectionNow(key);
       const mode = document.createElement('button'); mode.type = 'button'; mode.textContent = '标签'; mode.setAttribute('aria-pressed', 'false');
       const chips = document.createElement('div'); chips.className = 'prompt-chip-list'; chips.hidden = true;
       mode.onclick = () => { chips.hidden = !chips.hidden; input.hidden = !chips.hidden; mode.textContent = chips.hidden ? '标签' : '源码'; mode.setAttribute('aria-pressed', String(!chips.hidden)); renderChips(key); };
@@ -472,6 +515,6 @@
       chips.ondrop = event => { event.preventDefault(); if (drag) moveChip(drag.key, drag.index, key, tokenize(field(key).value).length); drag = null; };
     });
   }
-  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, randomUnlocked, renderAll, presetName, isLocked, isFieldLocked, restoreLocked, beginTrustedRestore, endTrustedRestore, init};
+  global.EasyPanelPromptVariations = {tokenize, serialize, kind, translationSource, protectedLabel, colorizedToken, addTag, pool, stage, accept, randomSectionNow, randomTagNow, randomUnlocked, renderAll, presetName, rememberPreset, refreshPresetExamples:renderPresetNames, isLocked, isFieldLocked, restoreLocked, beginTrustedRestore, endTrustedRestore, init};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })(window);

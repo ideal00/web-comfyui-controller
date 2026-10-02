@@ -90,13 +90,14 @@ class Element {
   remove() {}
 }
 
-function createPage(fetchImpl) {
+function createPage(fetchImpl, overrides = {}) {
   const ids = [
     'creativeLibraryDialog', 'creativeLibraryOpen', 'creativeLibraryClose', 'creativeLibraryRefresh',
     'creativeLibraryAuth', 'creativeLibraryToken', 'creativeLibraryNotice', 'creativeLibraryListView',
     'creativeLibraryFilters', 'creativeLibraryOperation', 'creativeLibraryStatus', 'creativeLibraryModel', 'creativeLibrarySort',
     'creativeLibraryOrder', 'creativeLibraryApplyFilters', 'creativeLibraryList',
     'creativeLibraryPagination', 'creativeLibraryPrevious', 'creativeLibraryPageInfo', 'creativeLibraryNext',
+    'creativeLibraryJump', 'creativeLibraryPageNumber', 'creativeLibraryJumpButton',
     'creativeLibraryDetailView', 'creativeLibraryBack', 'creativeLibraryDetailStatus', 'creativeLibraryDetail',
     'panelImageViewer',
     'status', 'quality',
@@ -122,8 +123,10 @@ function createPage(fetchImpl) {
     fetch: fetchImpl,
     location: { origin: 'http://localhost:8190' },
     URL,
+    AbortController,
     setTimeout,
     openLinkedImageViewer: undefined,
+    ...overrides,
   }
   vm.runInNewContext(source, {
     window: root,
@@ -148,6 +151,102 @@ async function flush() {
   await new Promise((resolve) => setImmediate(resolve))
   await new Promise((resolve) => setImmediate(resolve))
 }
+
+test('library reads reuse the browser session without a second login form', () => {
+  assert.doesNotMatch(html, /id="creativeLibraryAuth"|id="creativeLibraryToken"|使用 Token 读取/)
+})
+
+test('thumbnail URLs stay authenticated and use the small preview endpoint', () => {
+  assert.equal(library.thumbnailPath('/api/rpg/image?name=a.png&preview=0', 'http://localhost'), '/api/rpg/image?name=a.png&preview=1')
+  assert.equal(library.thumbnailPath('https://outside.invalid/api/rpg/image?name=a.png', 'http://localhost'), '')
+  assert.equal(library.pageOffset('3', 49), 48)
+  for (const input of ['', '0', '-1', '1.5', '1e1', '4', 'Infinity']) assert.equal(library.pageOffset(input, 49), null)
+})
+
+test('jump submits a single target page while preserving active filters', async () => {
+  const requests = []
+  const page = createPage(async (url) => {
+    if (!url.startsWith('/api/rpg/library/generations?')) return response({})
+    requests.push(url)
+    const offset = Number(new URLSearchParams(url.split('?')[1]).get('offset'))
+    return response({items:[{generation_id:offset.toString(16).padStart(32,'0'),model:'sample'}],total:73,has_more:offset<72})
+  })
+  page.elements.creativeLibraryModel.value = 'selected model'
+  page.elements.creativeLibraryOpen.click()
+  await flush()
+  page.elements.creativeLibraryPageNumber.value = '4'
+  page.elements.creativeLibraryJump.dispatch('submit')
+  await flush()
+  const query = new URLSearchParams(requests.at(-1).split('?')[1])
+  assert.equal(query.get('offset'), '72')
+  assert.equal(query.get('model'), 'selected model')
+  assert.match(page.elements.creativeLibraryPageInfo.textContent, /第 4 \/ 4 页/)
+  for (const invalid of ['0','5','1.5','']) {
+    page.elements.creativeLibraryPageNumber.value = invalid
+    page.elements.creativeLibraryJump.dispatch('submit')
+  }
+  assert.equal(requests.length, 2)
+  assert.match(page.elements.creativeLibraryNotice.textContent, /整数页码/)
+  page.elements.creativeLibraryClose.click()
+})
+
+test('thumbnails appear independently, stay bounded, and abort when the library closes', async () => {
+  const items = Array.from({length:8},(_,i)=>({generation_id:i.toString(16).padStart(32,'0'),thumbnail_url:'/api/rpg/image?name='+i+'.png'}))
+  const pending = []
+  const page = createPage((url, options) => {
+    if (url.startsWith('/api/rpg/image')) {
+      assert.equal(new URLSearchParams(url.split('?')[1]).get('preview'),'1')
+      return new Promise((resolve) => pending.push({resolve,signal:options.signal}))
+    }
+    return Promise.resolve(response({items,total:8,has_more:false}))
+  })
+  page.elements.creativeLibraryOpen.click()
+  await flush()
+  assert.equal(pending.length,4)
+  const firstThumb = page.elements.creativeLibraryList.children[0].children[0].children[0]
+  const secondThumb = page.elements.creativeLibraryList.children[1].children[0].children[0]
+  pending[0].resolve(response({}))
+  await flush()
+  assert.equal(firstThumb.children[0].tagName,'IMG')
+  assert.equal(secondThumb.children[0].tagName,'SPAN')
+  assert.equal(pending.length,5)
+  page.elements.creativeLibraryClose.click()
+  assert.ok(pending.slice(1).every((job)=>job.signal.aborted))
+  pending.slice(1).forEach((job)=>job.resolve(response({})))
+  await flush()
+  assert.equal(pending.length,5, 'closed pages must not drain the old queue')
+})
+
+test('offscreen cards wait for intersection and returning pages reuse thumbnails', async () => {
+  const items=Array.from({length:25},(_,i)=>({generation_id:i.toString(16).padStart(32,'0'),thumbnail_url:'/api/rpg/image?name='+i+'.png'}))
+  let observer,images=0
+  class Observer {
+    constructor(callback){this.callback=callback;this.targets=[];observer=this}
+    observe(target){this.targets.push(target)}
+    unobserve(){}
+    disconnect(){}
+  }
+  const page=createPage(async(url)=>{
+    if(url.startsWith('/api/rpg/image')){images++;return response({})}
+    if(url.startsWith('/api/rpg/library/generations?')){
+      const offset=Number(new URLSearchParams(url.split('?')[1]).get('offset'))
+      return response({items:items.slice(offset,offset+24),total:25,has_more:offset===0})
+    }
+    return response({})
+  },{IntersectionObserver:Observer})
+  page.elements.creativeLibraryOpen.click();await flush()
+  assert.equal(images,0)
+  observer.callback([{target:observer.targets[0],isIntersecting:true}]);await flush()
+  assert.equal(images,1)
+  page.elements.creativeLibraryNext.click();await flush()
+  observer.callback([{target:observer.targets[0],isIntersecting:true}]);await flush()
+  assert.equal(images,2)
+  page.elements.creativeLibraryPrevious.click();await flush()
+  observer.callback([{target:observer.targets[0],isIntersecting:true}]);await flush()
+  assert.equal(images,2)
+  assert.equal(page.elements.creativeLibraryList.children[0].children[0].children[0].children[0].tagName,'IMG')
+  page.elements.creativeLibraryClose.click()
+})
 
 test('list query bounds and URL-encodes filters without exposing credentials', () => {
   const query = library.buildListQuery({
@@ -176,14 +275,14 @@ test('desktop HTML contains the isolated Library entry, dialog, and script after
   assert.match(html, /id="creativeLibraryDialog"/)
   assert.match(html, /id="creativeLibraryFilters"/)
   assert.match(html, /id="creativeLibraryDetail"/)
-  assert.match(html, /snapshot-flow\.js\?v=3[\s\S]*creative-library\.js\?v=11/)
-  assert.match(html, /panel\.css\?v=72/)
+  assert.match(html, /snapshot-flow\.js\?v=3[\s\S]*creative-library\.js\?v=13/)
+  assert.match(html, /panel\.css\?v=\d+/)
   assert.match(html, /id="pendingDerivation"/)
 })
 
 test('desktop generation routes consume and clear one-shot lineage context', () => {
   assert.match(panelSource, /function applyPendingDerivation\(/)
-  assert.match(panelSource, /const body=payload\(\),count=generationCount\(\),outputSize=effectiveOutputSize\(\),submissionContext=beginGenerationProgress\(count\)/)
+  assert.match(panelSource, /const body=payload\(\),count=(?:freshSeed\?1:)?generationCount\(\),outputSize=effectiveOutputSize\(\),submissionContext=beginGenerationProgress\(count\)/)
   assert.match(panelSource, /body:JSON\.stringify\(batchPayload\(body,index,submissionContext\)\)/)
   assert.match(panelSource, /const body=applyPendingDerivation\(payload\(\),pendingDerivationContext\)/)
   assert.match(panelSource, /function markPendingGenerationAccepted\(/)
@@ -381,7 +480,7 @@ test('closing a paged image gallery shows the viewed work and returns to its lis
   await flush()
   page.elements.creativeLibraryNext.click()
   await flush()
-  assert.equal(page.elements.creativeLibraryPageInfo.textContent, '25–48 / 49')
+  assert.equal(page.elements.creativeLibraryPageInfo.textContent, '第 2 / 3 页 · 25–48 / 49')
   page.elements.creativeLibraryListView.scrollTop = 180
   page.elements.creativeLibraryList.children[0].children[0].click()
   await flush()
@@ -396,6 +495,6 @@ test('closing a paged image gallery shows the viewed work and returns to its lis
   const heading = page.elements.creativeLibraryDetail.children[0].children[1].children[0]
   assert.equal(heading.textContent, ids[25])
   page.elements.creativeLibraryBack.click()
-  assert.equal(page.elements.creativeLibraryPageInfo.textContent, '25–48 / 49')
+  assert.equal(page.elements.creativeLibraryPageInfo.textContent, '第 2 / 3 页 · 25–48 / 49')
   assert.equal(page.elements.creativeLibraryListView.scrollTop, 180)
 })

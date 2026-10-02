@@ -58,8 +58,11 @@
 
 源文件更新后，在项目根目录执行：
 
+构建需要 PowerShell 7（安装器本身仍可使用 Windows PowerShell）：
+
 ```powershell
-.\installers\Build-Packages.ps1
+pwsh -NoProfile -File .\installers\Build-Packages.ps1
+python .\tools\verify_release.py --packages
 ```
 
-脚本会先把当前核心文件同步到 `installers\payload`，再重建七个 ZIP，并更新 `installers\packages\SHA256SUMS.txt`。`__pycache__` 和 `.pyc` 不会进入安装包。
+脚本会先把当前核心文件与教程同步到 `installers\payload`，再重建七个 ZIP，并更新 `installers\packages\SHA256SUMS.txt`。`__pycache__`、`.pyc`、私人诊断图片、个人预设 / 例图和图库源数据不会进入安装包。发布流程见 [维护者说明](../docs/RELEASING.md)。

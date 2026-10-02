@@ -173,8 +173,6 @@
       const menu = document.createElement('details'); menu.className = 'prompt-section-more';
       const summary = document.createElement('summary'); summary.textContent = '⋯'; summary.title = '更多分区操作';
       const actions = document.createElement('div'); actions.className = 'prompt-section-more-actions';
-      const clear = button.parentElement?.querySelector('.prompt-section-clear');
-      if (clear) actions.append(clear);
       if (id !== 'promptNaturalLanguage') {
         const clean = document.createElement('button'); clean.type = 'button'; clean.className = 'prompt-section-clean';
         clean.textContent = '清洗格式'; clean.onclick = () => { cleanPromptField(id); menu.open = false; };
@@ -203,6 +201,13 @@
       ['pointerup','pointercancel','pointerleave'].forEach(name => button.addEventListener(name, () => clearTimeout(hold)));
       button.addEventListener('click', event => { if (button.dataset.longPress) { event.preventDefault(); event.stopImmediatePropagation(); delete button.dataset.longPress; } }, true);
     });
+    const closeMoreOnOutside = event => {
+      document.querySelectorAll('.prompt-section-more[open]').forEach(menu => {
+        if (!menu.contains(event.target)) menu.open = false;
+      });
+    };
+    document.addEventListener('pointerdown', closeMoreOnOutside);
+    document.addEventListener('click', closeMoreOnOutside);
   }
   global.EasyPanelQuickActions = {seedFromHistory, recordGeneratedSeed, setSeed, restorePreviousSeed, finishClearFocus, readFirstClipboardText, cleanPromptText, cleanPromptField, cleanBeforeGenerate, organizePromptField, pasteMode, setPasteMode, init};
   if (typeof module !== 'undefined' && module.exports) module.exports = global.EasyPanelQuickActions;

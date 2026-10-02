@@ -17,6 +17,17 @@ import easy_panel
 
 
 class CreativeLibraryApiTests(unittest.TestCase):
+    def test_background_maintenance_still_prunes_when_comfyui_is_unavailable(self):
+        with patch.object(easy_panel.threading, "Event") as event, \
+                patch.object(easy_panel.threading, "Thread") as thread, \
+                patch.object(easy_panel, "reconcile_creative_index_jobs", side_effect=TimeoutError) as reconcile, \
+                patch.object(easy_panel, "prune_creative_missing_outputs") as prune:
+            event.return_value.wait.side_effect = [False, True]
+            easy_panel.start_creative_index_reconciler()
+            thread.call_args[1]["target"]()
+            reconcile.assert_called_once()
+            prune.assert_called_once()
+
     def test_library_read_initializes_from_legacy_json_without_rewriting_it(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -245,6 +256,8 @@ class CreativeLibraryApiTests(unittest.TestCase):
                     patch.object(easy_panel, "OUTPUT", output), \
                     patch.object(easy_panel, "SNAPSHOT_FILE", root / "missing-snapshots.json"), \
                     patch.object(easy_panel, "RPG_JOB_FILE", root / "missing-jobs.json"), \
+                    patch.object(easy_panel, "reconcile_creative_index_jobs", side_effect=AssertionError("Library reads must not wait for ComfyUI")) as reconcile, \
+                    patch.object(easy_panel, "prune_creative_missing_outputs", side_effect=AssertionError("Library reads must not scan all outputs")) as prune, \
                     patch.dict(os.environ, {"EASY_PANEL_RPG_TOKEN": "library-token"}, clear=False):
                 server = easy_panel.ThreadingHTTPServer(("127.0.0.1", 0), easy_panel.Handler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -302,6 +315,22 @@ class CreativeLibraryApiTests(unittest.TestCase):
                     self.assertEqual(400, status)
                     status, _body = request("POST", "/api/rpg/library/generations", auth, b"{}")
                     self.assertEqual(404, status)
+                    reconcile.assert_not_called()
+                    prune.assert_not_called()
+
+                    # Opening the local panel reuses its configured token via
+                    # a signed HttpOnly cookie; no second login is needed.
+                    connection = http.client.HTTPConnection(host, port, timeout=5)
+                    connection.request("GET", "/")
+                    response = connection.getresponse()
+                    cookie = response.getheader("Set-Cookie")
+                    response.read()
+                    connection.close()
+                    self.assertIn("HttpOnly", cookie)
+                    self.assertNotIn("library-token", cookie)
+                    status, body = request("GET", "/api/rpg/library/generations?limit=1", {"Cookie": cookie.split(";", 1)[0]})
+                    self.assertEqual(200, status)
+                    self.assertEqual(1, json.loads(body)["total"])
                 finally:
                     server.shutdown()
                     server.server_close()

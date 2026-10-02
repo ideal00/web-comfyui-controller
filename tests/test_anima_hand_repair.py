@@ -232,7 +232,7 @@ class HandRepairFrontendTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, css)
         for page in self.pages:
-            self.assertIn("anima-highres.js?v=10", page)
+            self.assertRegex(page, r"anima-highres\.js\?v=\d+")
 
     def test_hand_workbench_routes_to_anima_panel(self):
         self.assertIn("window.modelFamilyClient", self.hand)

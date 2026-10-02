@@ -5,12 +5,13 @@
     promptSubject:'subject', promptAppearance:'appearance', promptExpression:'expression',
     promptClothing:'clothing', promptPose:'pose', promptComposition:'composition',
     promptScene:'scene', promptLighting:'lighting', promptStyle:'style',
-    prompt:'manual', negative:'negative'
+    prompt:'manual', negative:'negative', promptNaturalLanguage:'naturalLanguage'
   };
   const MATCH = /(^|[,;\n]\s*)([^,;\n]{1,})$/;
   const cache = new Map();
   const previewCache = new Map();
   let chipPicker = null;
+  const fieldCompletions = new Map();
   let advancedSequence = 0;
   let advancedIndex = -1;
   let relatedSequence = 0;
@@ -102,6 +103,10 @@
     return [...featured, ...rest];
   }
   function resultMarkup(item) {
+    if (item.source === 'preset') {
+      const image = global.EasyPanelPresetExamples?.url(item.exampleImage);
+      return `<span class="easy-preset-result">${image ? `<img class="easy-preset-thumb" src="${escapeHtml(image)}" alt="${escapeHtml(item.name)}的例图" loading="lazy">` : '<span class="easy-preset-placeholder">无例图</span>'}<span class="easy-preset-copy"><span class="easy-tag-name">${escapeHtml(item.name)}</span><small class="easy-tag-meta">${item.origin === 'visual' ? '图库 · ' + escapeHtml(item.libraryCategory) : '本区预设 · ' + escapeHtml(item.category)}${item.combo ? ' · 组合只取本区' : ''}</small><span class="easy-preset-text">${escapeHtml(item.text.slice(0,120))}</span></span></span>`;
+    }
     const count = Number(item.count || item.post_count || 0).toLocaleString();
     const label = item.translation || item.category || item.kind || '';
     return `<span class="easy-tag-name">${escapeHtml(item.tag)}</span><small class="easy-tag-meta">${item.source === 'local' ? '本地图鉴 · ' : ''}${escapeHtml(label)}${count !== '0' ? ' · ' + count : ''}</small><span class="easy-tag-image" data-autocomplete-image="${escapeHtml(item.tag)}" title="在可视化图库查看" aria-label="查看 ${escapeHtml(item.tag)} 的图片">🖼</span>`;
@@ -156,6 +161,7 @@
     document.getElementById('easyTagPreview')?.remove();
   }
   async function previewFor(item) {
+    if (item.source === 'preset') { const url = global.EasyPanelPresetExamples?.url(item.exampleImage); return url ? {url,source:'预设例图 · '+item.name} : null; }
     if (item.imageId) return {url:'/api/visual-tags/image?' + new URLSearchParams({id:item.imageId,size:'thumb',px:'320'}),source:'本地可视化图库'};
     const key = normalized(item.tag);
     if (!previewCache.has(key)) {
@@ -184,7 +190,7 @@
     return previewCache.get(key);
   }
   function showPreview(item, completion) {
-    const key = normalized(item.tag);
+    const key = item.source === 'preset' ? 'preset:'+item.id : normalized(item.tag);
     let box = document.getElementById('easyTagPreview');
     if (box?.dataset.tag === key) return;
     hidePreview();
@@ -198,14 +204,14 @@
     const load = () => previewFor(item).then(result => {
       if (sequence !== previewSequence || !box.isConnected) return;
       body.replaceChildren();
-      if (!result) { body.textContent = '本地图库和云端暂无参考图'; return; }
+      if (!result) { body.textContent = item.source === 'preset' ? '这个预设未绑定例图' : '本地图库和云端暂无参考图'; return; }
       const img = document.createElement('img'); img.src = result.url; img.alt = `${item.tag} 参考图`;
       img.onerror = () => { body.textContent = '参考图暂不可用'; };
       const source = document.createElement('small'); source.textContent = result.source;
       body.append(img, source);
       if (item.description) { const note = document.createElement('p'); note.textContent = item.description; box.append(note); }
     });
-    if (item.imageId) load(); else previewTimer = setTimeout(load, 60);
+    if (item.source === 'preset' || item.imageId) load(); else previewTimer = setTimeout(load, 60);
   }
   function positionPreview(box, completion) {
     if (matchMedia('(pointer:coarse)').matches || document.documentElement.classList.contains('easy-panel-mobile')) {
@@ -341,19 +347,38 @@
       dropdown:{maxCount:180,className:'textcomplete-dropdown easy-tag-dropdown',
         header(items) {
           const local = items.find(item => item.source === 'local');
-          const count = local ? `本地${Number(local.localMatched || 0).toLocaleString()} · ` : '';
+          const presets = items.filter(item => item.source === 'preset').length;
+          const count = (presets ? `本区预设 ${presets} · ` : '') + (local ? `本地${Number(local.localMatched || 0).toLocaleString()} · ` : '');
           return `<span class="easy-tag-header-count">${count}${items.length}项</span><span class="easy-tag-header-tools">${colorChoiceMarkup()}<button type="button" data-autocomplete-related="true" title="查看所选标签的相关词" aria-label="查看所选标签的相关词">🔗</button>${local ? '<button type="button" data-autocomplete-all="local" title="在本地图鉴查看全部匹配" aria-label="在本地图鉴查看全部匹配">▦</button>' : ''}<button type="button" data-autocomplete-close="true" title="关闭候选词" aria-label="关闭候选词">×</button></span>`;
         }}
     });
+    let lookup = 0;
+    completion.cancelLookup = () => { lookup++; completion.hide(); };
     completion.register([{
       id:'easy-panel-tags', match:MATCH, index:2,
       search(term, callback) {
-        const query = String(term || '').trim();
-        if (field.dataset.composing === '1' || !searchable(query) || !/^\s*(?:[,;\n]|$)/.test(field.value.slice(field.selectionEnd))) { callback([]); return; }
-        search(query).then(items => {
+        const query = String(term || '').trim(), request = ++lookup;
+        const presetSearch = onChipInsert ? null : global.EasyPanelPresetSearch;
+        const range = presetSearch?.queryRange(field);
+        let matches = presetSearch ? presetSearch.candidates(field.id,query,30).map(item => ({...item,range})) : [];
+        if (field.readOnly || field.disabled || field.dataset.composing === '1' || !searchable(query) || !/^\s*(?:[,;\n]|$)/.test(field.value.slice(field.selectionEnd))) { callback([]); return; }
+        if (matches.length || field.id === 'promptNaturalLanguage') callback(matches);
+        if (field.id === 'promptNaturalLanguage') return;
+        const before = field.value, caret = field.selectionEnd;
+        Promise.all([search(query),presetSearch?.ready?.().catch(()=>{})]).then(([items]) => {
+          if (lookup !== request || field.value !== before || field.selectionEnd !== caret || field.dataset.composing === '1') return;
+          if (presetSearch) matches = presetSearch.candidates(field.id,query,30).map(item => ({...item,range}));
           const used = onChipInsert ? currentTerms(fieldForKey(onChipInsert)) : currentTerms(field);
-          callback(items.slice(0, 180).map(item => ({...item, existing:used.has(baseTag(item.tag))})));
-        }, () => callback([]));
+          const selected = completion.dropdown.getActiveItem()?.searchResult.data;
+          const scrollTop = completion.dropdown.el.scrollTop;
+          callback(matches.concat(items.slice(0, 180 - matches.length).map(item => ({...item, existing:used.has(baseTag(item.tag))}))));
+          if (selected) {
+            const active = completion.dropdown.items.find(item => selected.source === 'preset'
+              ? item.searchResult.data.source === 'preset' && item.searchResult.data.id === selected.id
+              : item.searchResult.data.source !== 'preset' && normalized(item.searchResult.data.tag) === normalized(selected.tag));
+            if (active) { completion.dropdown.el.scrollTop = scrollTop; active.activate(); showPreview(active.searchResult.data, completion); }
+          }
+        }, () => { if (lookup === request && field.value === before && field.selectionEnd === caret) callback(matches); });
       },
       template(item) { return `<span class="easy-tag-result${item.existing ? ' existing' : ''}">${resultMarkup(item)}</span>`; },
       replace(item) {
@@ -363,6 +388,7 @@
     }]);
     completion.on('select', event => {
       const item = event.detail.searchResult.data;
+      if (item.source === 'preset') { event.preventDefault(); global.EasyPanelPresetSearch?.apply(item,field.id,'complete',item.range); completion.hide(); return; }
       if (item.existing) { event.preventDefault(); completion.hide(); return; }
       if (onChipInsert) {
         event.preventDefault();
@@ -374,6 +400,7 @@
     connectPreview(completion, touchAction);
     connectPositioning(field, completion, editor);
     field.addEventListener('keydown', event => {
+      if (event.key === 'Escape') lookup++;
       if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && completion.dropdown.shown) {
         const active = completion.dropdown.getActiveItem();
         if (active) { keepActiveVisible(completion.dropdown, active); showPreview(active.searchResult.data, completion); }
@@ -382,10 +409,12 @@
         const active = completion.dropdown.getActiveItem() || completion.dropdown.items[0];
         if (active) { event.preventDefault(); completion.dropdown.select(active); }
       }
+      if (!onChipInsert && (event.ctrlKey || event.metaKey) && !event.shiftKey && event.code === 'Space') { event.preventDefault(); completion.hide(); global.EasyPanelPresetSearch?.open(field.id); }
       if (!onChipInsert && event.ctrlKey && event.shiftKey && event.code === 'Space') { event.preventDefault(); showRelated(field, completion); }
     });
-    field.addEventListener('compositionstart', () => { field.dataset.composing = '1'; completion.hide(); });
+    field.addEventListener('compositionstart', () => { lookup++; field.dataset.composing = '1'; completion.hide(); });
     field.addEventListener('compositionend', () => { field.dataset.composing = '0'; completion.trigger(field.value.slice(0, field.selectionStart)); });
+    if (!onChipInsert) fieldCompletions.set(field.id,completion);
     return completion;
   }
   function closeChipPicker() {
@@ -524,7 +553,7 @@
       if (related && !related.hidden && !related.contains(event.target)) related.hidden = true;
     });
   }
-  global.EasyPanelTagAutocomplete = {search, mergeResults, searchable, baseTag, currentTerms, formatTag, colorChoiceMarkup, queryAtCursor, tagAtCursor, activateWithoutScroll, keepActiveVisible, openChipPicker, closeChipPicker, init};
+  global.EasyPanelTagAutocomplete = {hideField:id=>fieldCompletions.get(id)?.cancelLookup(),search, mergeResults, searchable, baseTag, currentTerms, formatTag, colorChoiceMarkup, queryAtCursor, tagAtCursor, activateWithoutScroll, keepActiveVisible, openChipPicker, closeChipPicker, init};
   if (typeof module !== 'undefined' && module.exports) module.exports = global.EasyPanelTagAutocomplete;
   if (typeof document === 'undefined') return;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

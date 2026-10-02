@@ -12,6 +12,7 @@ import { openAdvancedPanel } from '../services/easyPanelAdvanced'
 import { getEasyPanelPromptInstruction, resolveEasyPanelBaseUrl } from '../services/easyPanelVisual'
 import { artifactStageLabel, artifactState, artifactStateText, generationIsPending, PENDING_ARTIFACT_TEXT } from '../lib/easyPanelPlan'
 import { getEasyPanelGeneration, type EasyPanelGenerationArtifact, type EasyPanelGenerationDetail, type EasyPanelGenerationSummary } from '../services/easyPanelLibrary'
+import { libraryPageOffset } from '../lib/easyPanelLibrary'
 
 declare global {
   interface Window {
@@ -944,6 +945,9 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
           items={controller.library}
           thumbnailSources={controller.libraryThumbnailSources}
           total={controller.libraryTotal}
+          page={controller.libraryPage}
+          pageSize={controller.libraryPageSize}
+          onGoToPage={(page) => void controller.goToLibraryPage(page)}
           hasMore={controller.libraryHasMore}
           favoriteOnly={controller.libraryFavoriteOnly}
           groups={controller.libraryGroups}
@@ -983,11 +987,14 @@ function EasyPanelLibraryDialog({ controller, onClose, onAddToProject }: {
   )
 }
 
-function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, groups, groupFilter, onSelectGroup, thumbnailLoading, loading, error, message, savedScrollTop = 0, restoreGenerationId = '', onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadMore, onLoadThumbnail, onOpen, onDelete }: {
+function LibraryList({ items, thumbnailSources, total, page, pageSize, onGoToPage, favoriteOnly, groups, groupFilter, onSelectGroup, thumbnailLoading, loading, error, message, savedScrollTop = 0, restoreGenerationId = '', onScrollTopChange, onRefresh, onToggleFavoriteFilter, onToggleFavorite, onLoadThumbnail, onOpen, onDelete }: {
   items: EasyPanelGenerationSummary[]
   thumbnailSources: Record<string, string>
   total: number
   hasMore: boolean
+  page: number
+  pageSize: number
+  onGoToPage: (page: number) => void
   favoriteOnly: boolean
   groups: ReturnType<typeof useEasyPanelController>['libraryGroups']
   groupFilter: string
@@ -1008,6 +1015,42 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
   onDelete: (id: string) => void
 }) {
   const contentRef = useRef<HTMLDivElement>(null)
+  const lastPageRef = useRef(page)
+  const [jumpPage, setJumpPage] = useState(String(page))
+  const [pageError, setPageError] = useState('')
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+
+  useEffect(() => {
+    setJumpPage(String(page))
+    setPageError('')
+    if (lastPageRef.current !== page) {
+      if (contentRef.current) contentRef.current.scrollTop = 0
+      onScrollTopChange?.(0)
+      lastPageRef.current = page
+    }
+  }, [page])
+
+  const pagination = total > 0 && <nav className="epm-library-pagination" aria-label="作品库分页">
+    <span>第 {page} / {pageCount} 页 · 每页 {pageSize} 条</span>
+    <div className="epm-library-page-buttons">
+      <button type="button" className="epm-quiet-button" disabled={loading || page <= 1} onClick={() => onGoToPage(page - 1)}>上一页</button>
+      <button type="button" className="epm-quiet-button" disabled={loading || page >= pageCount} onClick={() => onGoToPage(page + 1)}>下一页</button>
+    </div>
+    <form className="epm-library-page-jump" onSubmit={(event) => {
+      event.preventDefault()
+      if (loading) return
+      if (libraryPageOffset(jumpPage, total) === null) {
+        setPageError(`请输入 1–${pageCount} 的整数页码。`)
+        return
+      }
+      setPageError('')
+      onGoToPage(Number(jumpPage))
+    }}>
+      <label>跳至<input type="number" min="1" max={pageCount} step="1" inputMode="numeric" aria-label="跳转页码" value={jumpPage} onChange={(event) => setJumpPage(event.target.value)} disabled={loading} required />页</label>
+      <button type="submit" className="epm-quiet-button" disabled={loading}>跳转</button>
+    </form>
+    {pageError && <span className="epm-error-banner" role="alert">{pageError}</span>}
+  </nav>
 
   // Restore the previously saved scroll offset when the list is remounted after
   // viewing a work detail, so going back stays at the original position.
@@ -1083,6 +1126,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
         </div>
       </div>
       {error && <div className="epm-error-banner" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>}
+      {pagination}
       <div className="epm-library-group-filter">
         <button
           type="button"
@@ -1107,7 +1151,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
             <button type="button" className="epm-library-item" data-library-thumbnail-id={item.generation_id} onClick={() => onOpen(item.generation_id)}>
               <div className="epm-library-thumb">
                 {thumbnailSources[item.generation_id]
-                  ? <img src={thumbnailSources[item.generation_id]} alt="" />
+                  ? <img src={thumbnailSources[item.generation_id]} alt="" decoding="async" loading="lazy" />
                   : thumbnailLoading[item.generation_id] ? <LoaderCircle size={22} className="epm-spin" /> : <ImageIcon size={24} />}
               </div>
               <div className="epm-library-item-copy">
@@ -1139,10 +1183,7 @@ function LibraryList({ items, thumbnailSources, total, hasMore, favoriteOnly, gr
             </button>
           </div>)}
         </div>
-        {hasMore && <button type="button" className="epm-library-load-more" onClick={onLoadMore} disabled={loading}>
-          {loading ? <LoaderCircle size={15} className="epm-spin" /> : <ChevronDown size={15} />}
-          {loading ? '正在读取…' : `加载更多${total > items.length ? `（还剩 ${total - items.length} 张）` : ''}`}
-        </button>}
+        {pagination}
       </> : <div className="epm-library-empty"><BookOpen size={28} /><strong>暂无作品记录</strong><span>新任务完成后会进入作品库；也可在电脑端执行重建索引。</span></div>}
     </div>
   )

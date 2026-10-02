@@ -28,7 +28,8 @@ class LoraMemoOverwriteTests(unittest.TestCase):
         self.assertIn("const OUTFIT_MAIN_CLASSES=", self.js)
         self.assertIn("function replaceOutfitMainClass(item)", self.js)
         self.assertIn("outfitMainClass(entry.item)===mainClass", self.js)
-        self.assertIn("outfitMainClass(entry.item)!==mainClass", self.js)
+        self.assertIn("appliedOutfits.filter(entry=>!matching.includes(entry))", self.js)
+        self.assertIn("isFieldLocked(sec.field)", self.js)
         self.assertIn("memoOutfitOverwriteMode?replaceOutfitMainClass(item):insertOutfitSections(item)", self.js)
 
     def test_editor_derives_one_main_class_from_the_first_populated_section(self):

@@ -1,0 +1,7 @@
+.preset-example-editor{margin:10px 0;padding:10px;border:1px solid #3c5069;border-radius:8px;background:#111d2b}
+.preset-example-editor p{margin:6px 0}.preset-example-upload{display:grid;gap:4px;max-width:260px;font-size:12px}.preset-example-upload input{max-width:100%}
+.preset-example{margin:8px 0;max-width:320px}.preset-example img{display:block;width:100%;max-height:240px;object-fit:contain;border:1px solid #3c5069;border-radius:6px;background:#0b111b}
+.preset-example figcaption{margin-top:4px;font-size:11px;color:#9eafc6}.preset-example a{color:#91c2ff}.prompt-preset-example[hidden]{display:none}
+.prompt-variation-list .preset-example{max-width:240px}.prompt-variation-list .preset-example img{max-height:180px}.user-preset-item .preset-example{max-width:240px}
+.preset-example-body[hidden]{display:none}.preset-example-toggle{margin-top:4px;padding:3px 8px;font-size:12px}
+@media(max-width:620px){.preset-example-editor .actions{flex-wrap:wrap}.preset-example-upload{max-width:100%}}

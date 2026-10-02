@@ -292,7 +292,7 @@ function Install-CoreModule {
         "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
         "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
         "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd",
-        "easy_panel_app", "web", "tools"
+        "easy_panel_app", "web", "tools", "docs", "android-client", "CHANGELOG.md", "RPG_MOBILE_API.md", "RPG_MOBILE_CHANGELOG.md", "START_HERE_RPG_MOBILE.txt"
     )
     $existingCore = @($coreItems | Where-Object { Test-Path -LiteralPath (Join-Path $target $_) })
     if ($existingCore.Count) {

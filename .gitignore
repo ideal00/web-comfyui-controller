@@ -59,3 +59,13 @@ visual_tag_index.sqlite
 visual_tag_index.sqlite-wal
 visual_tag_index.sqlite-shm
 cache/visual_tag_thumbs/
+visual_tag_uploads/
+preset_examples/
+
+# Personal import scripts, diagnostics, and generated preset backups
+diagnostics/
+preset_packs/
+tools/*_2026*.py
+tools/install_playground_presets.cjs
+tools/verify_playground_compile.cjs
+docs/images/

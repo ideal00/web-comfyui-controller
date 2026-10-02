@@ -1,0 +1,47 @@
+#creativePlaygroundOpen{margin:12px 0;background:linear-gradient(110deg,#385367,#57457c);border:1px solid #62708d;min-height:40px}
+.creative-playground{width:min(1060px,96vw);max-height:92vh;padding:0;border:1px solid #536179;border-radius:20px;background:#131c29;color:#edf2fa;box-shadow:0 30px 100px #0008;overflow:auto}
+.creative-playground::backdrop{background:#070b13b8;backdrop-filter:blur(4px)}
+.creative-playground [hidden]{display:none!important}
+.play-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding:24px 26px 14px;background:linear-gradient(120deg,#253b46,#292942)}
+.play-head h2{margin:6px 0;font-size:24px}.play-kicker{font-size:11px;font-weight:800;letter-spacing:.18em;color:#a8d7d0}
+.play-note{color:#b6c4d5;font-size:13px;line-height:1.65;margin:9px 0;overflow-wrap:anywhere}
+.play-head button{flex:none}.play-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:12px 24px;border-bottom:1px solid #344056;background:#182232;position:sticky;top:0;z-index:1}
+.play-tabs button{font-size:13px;padding:9px 13px;min-height:38px}.play-tabs .active{background:#c4e4db;color:#142b30;font-weight:700}
+.play-body{padding:10px 24px 22px}.play-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:15px}
+.play-card{border:1px solid #35465c;border-radius:13px;background:#1c293a;padding:16px;min-width:0}.play-card h3{font-size:15px;margin:0 0 8px}.play-card button{margin:7px 6px 0 0;font-size:13px}
+.play-field{display:block;margin:12px 0;font-size:13px;line-height:1.7}.play-field textarea{margin-top:6px;min-height:95px}.play-field input,.play-field select{margin-top:6px}
+.play-check{display:flex;align-items:center;gap:8px;font-size:13px}.play-check input{width:18px;height:18px}
+.play-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}.play-actions input{flex:1;min-width:150px}.play-primary{background:#b8ddd3;color:#152c32;font-weight:700}
+.play-preview{margin:0 24px 18px;padding:16px;border:1px solid #638b86;background:#152c32;border-radius:12px}.play-preview h3{margin:0 0 12px;font-size:16px}.play-preview details{border-top:1px solid #3b575d;padding:10px 0}.play-preview summary{cursor:pointer;font-size:13px}.play-preview textarea{font-size:12px}
+.play-footer{padding:12px 24px 18px;border-top:1px solid #344056}.play-status{font-size:13px;color:#bde5d7;line-height:1.65}.play-error{color:#ffc8ab}
+.play-shot{height:145px;overflow:hidden;border-radius:8px;margin-bottom:12px;background:#172637}.play-shot svg{height:100%;width:100%}
+.play-blind-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0}.play-blind-grid img{width:100%;height:240px;object-fit:contain;background:#0c1520;border-radius:8px;margin-bottom:12px}
+.play-draft-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}.play-draft-field{min-width:0;padding:12px!important;border:1px solid #42616a!important;border-radius:10px;background:#142630}.play-draft-field>summary{font-weight:700;min-height:28px}.play-draft-field .play-actions{align-items:flex-end}.play-draft-field .play-actions .play-field{flex:1;min-width:140px;margin:0}.play-draft-field textarea{min-height:120px}.play-draft-field select{font-size:13px}.play-draft-field button{font-size:12px}
+@media(max-width:700px){.play-draft-grid{grid-template-columns:1fr}}
+/* Compact disclosure cards keep unrelated fields from stretching with an editor. */
+.creative-playground{color-scheme:dark;background:#121b28;border-color:#46566d}
+.creative-playground button{transition:background .15s,border-color .15s;cursor:pointer}
+.creative-playground button:hover{filter:brightness(1.12)}
+.creative-playground :is(button,input,select,textarea,summary):focus-visible{outline:2px solid #a8ded1;outline-offset:3px}
+.creative-playground :is(input,select,textarea){box-sizing:border-box;max-width:100%;border:1px solid #40546b;border-radius:8px;background:#101925;color:#edf2fa;padding:10px 12px}
+.creative-playground textarea{line-height:1.65;resize:vertical}
+.play-head{background:radial-gradient(ellipse at top right,#42526b55,transparent 65%),#1b2b39}
+.play-preview{background:#16222f;border-color:#3e5966;padding:20px}
+.play-draft-grid{align-items:start;gap:12px}
+.play-draft-field{background:#192937;border-color:#344b5e!important;transition:border-color .15s}
+.play-draft-field[open]{border-color:#647f8a!important;box-shadow:0 5px 18px #0002}
+.play-draft-field>summary{position:relative;padding:3px 70px 3px 2px;line-height:24px;min-height:24px}
+.play-mode-badge{position:absolute;right:0;top:4px;border-radius:6px;padding:0 8px;font-size:11px;font-weight:500;line-height:22px;background:#263848;color:#b8c8d5}
+.play-draft-field[data-mode=append] .play-mode-badge{background:#254e46;color:#bcf1df}
+.play-draft-field[data-mode=replace] .play-mode-badge{background:#55482f;color:#f8dfac}
+.play-draft-field[data-mode=locked] .play-mode-badge{background:#28303d;color:#a8b3c4}
+.play-preset-search{width:100%;margin-top:8px}
+.play-source-info{font-size:12px;border-left:2px solid #547482;padding-left:10px}
+#playDraftSummary{border-top:1px solid #3c5061;padding-top:16px;margin-top:18px}
+.play-change-count{font-size:14px;color:#c9e9df}
+.play-diff-row{padding:10px 0;border-bottom:1px solid #34485c}
+.play-diff-row textarea{min-height:65px;background:#101925}
+.play-editor-actions{position:sticky;bottom:0;z-index:2;background:#192a38f5;border:1px solid #486071;border-radius:10px;padding:12px;box-shadow:0 -6px 22px #0003;margin-top:18px}
+.play-editor-actions .play-primary{background:#b8ddd3;border-color:#b8ddd3;color:#152c32}
+@media(max-width:620px){.play-preview{padding:14px}.play-editor-actions{gap:6px;padding:9px}.play-editor-actions button{flex:1 1 42%;min-height:40px}.play-tabs{flex-wrap:nowrap;overflow-x:auto}.play-tabs button{flex:none}.play-draft-field .play-actions{flex-wrap:wrap}}
+@media(max-width:620px){.creative-playground{width:98vw;max-height:95vh;border-radius:12px}.play-head{padding:18px 14px 10px}.play-head h2{font-size:20px}.play-tabs{padding:10px 12px}.play-body{padding:6px 12px 16px}.play-grid{grid-template-columns:1fr}.play-preview{margin:0 12px 14px}.play-footer{padding:10px 14px}.play-blind-grid img{height:170px}.play-blind-grid .play-card{padding:10px}}

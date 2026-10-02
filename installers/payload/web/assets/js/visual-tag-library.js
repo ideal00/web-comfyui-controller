@@ -29,7 +29,7 @@
   const state = {
     source: "local",
     query: "",
-    category: "",
+    category: "", compilerSection: "",
     rating: "general",
     sort: "newest",
     page: 1,
@@ -84,7 +84,7 @@
   function saveState() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        source: state.source, category: state.category, rating: state.rating, sort: state.sort,
+        source: state.source, category: state.category, compilerSection:state.compilerSection, rating: state.rating, sort: state.sort,
         bundleCategory: state.bundleCategory, bundleMode: state.bundleMode,
       }));
     } catch (_error) { /* 忽略隐私模式写入失败 */ }
@@ -95,6 +95,7 @@
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
       if (saved.source === "local" || saved.source === "cloud") state.source = saved.source;
       if (typeof saved.category === "string") state.category = saved.category;
+      if (typeof saved.compilerSection === "string") state.compilerSection = saved.compilerSection;
       if (RATINGS[saved.rating]) state.rating = saved.rating;
       if (SORTS[saved.sort]) state.sort = saved.sort;
       if (typeof saved.bundleCategory === "string") state.bundleCategory = saved.bundleCategory;
@@ -139,7 +140,7 @@
     try {
       const layer = dialect();
       const params = new URLSearchParams({
-        q: state.query, limit: String(LOCAL_LIMIT), category: state.category,
+        q: state.query, limit: String(LOCAL_LIMIT), category: state.category, section:state.compilerSection,
         offset: String(Math.max(0, state.page - 1) * LOCAL_LIMIT),
         family: layer ? layer.family() : "", dialect: layer ? layer.currentDialect() : "",
       });
@@ -227,6 +228,7 @@
       state.localTotal = data.entries || 0;
       state.categories = data.categories || [];
       await loadLocal();
+      document.dispatchEvent(new Event('easy-panel:visual-tag-rebuilt'));
       setNotice(`索引已重建：${data.entries} 条词条 / ${(data.categories || []).length} 个分类（${data.generated_at}）。`);
     } catch (error) {
       setNotice(`重建索引失败：${error.message}`, "error");
@@ -423,11 +425,13 @@
       <div class="vtl-body">
         <div class="vtl-tag">${esc(entry.tag)}</div>
         <div class="vtl-zh">${esc(entry.name_zh || "")}${entry.group ? `<span class="vtl-group">${esc(entry.group)}</span>` : ""}</div>
+        ${(entry.compiler_sections || []).length ? `<div class="vtl-write">对应输入框：${entry.compiler_sections.map(item=>esc(item.label)).join(' · ')}</div>` : ''}
         ${entry.description ? `<div class="vtl-desc" title="${esc(entry.description)}">${esc(entry.description)}</div>` : ""}
         ${converted ? `<div class="vtl-write">写入：${esc(formatted)}</div>` : ""}
       </div>
       <div class="vtl-actions">
         <button type="button" class="vtl-add">＋ 加入</button>
+        ${entry.generation_id ? `<button type="button" class="vtl-source-work" data-generation="${esc(entry.generation_id)}">来源作品</button>` : ''}
         <span class="vtl-cat">${esc(entry.category || "")}</span>
       </div>
     </article>`;
@@ -666,6 +670,12 @@
         .map((item) => `<option value="${esc(item)}">${esc(item)}</option>`).join("");
       if (state.categories.indexOf(current) >= 0) category.value = current;
     }
+    const compiler = byId('vtlCompilerSection');
+    if (compiler) {
+      compiler.hidden = state.source !== 'local';
+      compiler.innerHTML = '<option value="">全部输入框</option>' + Object.entries(state.meta?.section_labels || {}).map(([key,label])=>`<option value="${esc(key)}">${esc(label)}</option>`).join('');
+      compiler.value = state.compilerSection;
+    }
     ["vtlRating", "vtlSort"].forEach((id) => {
       const node = byId(id);
       if (node) node.hidden = state.source !== "cloud";
@@ -709,9 +719,12 @@
         <div class="vtl-toolbar">
           <input id="vtlSearch" class="vtl-search" placeholder="搜索 tag / 中文名 / 释义；中文可直接输入（云端会先解析）">
           <select id="vtlCategory" title="按本地分类筛选"></select>
+          <select id="vtlCompilerSection" title="按结构化提示词分区筛选" aria-label="图库对应输入框"></select>
           <select id="vtlRating" title="云端分级过滤">${Object.keys(RATINGS).map((key) => `<option value="${key}">${RATINGS[key]}</option>`).join("")}</select>
           <select id="vtlSort" title="云端排序（不提供热门排序：Danbooru 的 order:score 在热门标签上会 500）">${Object.keys(SORTS).map((key) => `<option value="${key}">${SORTS[key]}</option>`).join("")}</select>
           <select id="vtlTarget" title="插入到哪个提示词分区"></select>
+          <button type="button" id="vtlAddReference" class="vtl-ghost">＋ 添加图片与 Tag</button>
+          <button type="button" id="vtlFromLibrary" class="vtl-ghost">从作品库添加</button>
           <button type="button" id="vtlRebuild" class="vtl-ghost" title="源文档有改动时重建本地索引">重建索引</button>
         </div>
         <div id="vtlFrequent" class="tag-recent"></div>
@@ -768,6 +781,9 @@
       state.selected = [];
       reload();
     });
+    byId('vtlCompilerSection').addEventListener('change', () => {
+      state.compilerSection = byId('vtlCompilerSection').value; state.category = ''; state.page = 1; saveState(); loadLocal();
+    });
     byId("vtlCategory").addEventListener("change", () => {
       state.category = byId("vtlCategory").value;
       state.page = 1;
@@ -787,6 +803,14 @@
       loadCloud();
     });
     byId("vtlRebuild").addEventListener("click", rebuildIndex);
+    byId("vtlAddReference").addEventListener("click", () => window.EasyPanelVisualTagEditor?.open());
+    byId("vtlFromLibrary").addEventListener("click", () => { close(); window.openCreativeLibrary?.(); });
+    document.addEventListener('easy-panel:visual-tag-added', (event) => {
+      const entry = event.detail;
+      state.source = 'local'; state.compilerSection = ''; state.category = entry.category; state.query = entry.name_zh; state.page = 1;
+      saveState();
+      void loadLocal().then(() => setNotice('已添加图片与 Tag，可继续添加新词条。'));
+    });
     byId("vtlSuggest").addEventListener("click", (event) => {
       const chip = event.target.closest(".vtl-suggest");
       if (chip) searchTag(chip.dataset.tag, "cloud");
@@ -821,6 +845,12 @@
     byId("vtlGrid").addEventListener("click", async (event) => {
       const card = event.target.closest(".vtl-card");
       if (!card) return;
+      const sourceWork = event.target.closest('.vtl-source-work');
+      if (sourceWork) {
+        close(); window.openCreativeLibrary?.();
+        document.dispatchEvent(new CustomEvent('easy-panel:open-generation', {detail:{generationId:sourceWork.dataset.generation}}));
+        return;
+      }
       const full = event.target.closest(".vtl-full");
       if (full) {
         window.open(full.dataset.full, "_blank", "noopener,noreferrer");
@@ -882,7 +912,7 @@
       }
       const clearCategory = event.target.closest(".vtl-clear-category");
       if (clearCategory) {
-        state.category = "";
+        state.category = ""; state.compilerSection = "";
         state.page = 1;
         saveState();
         loadLocal();
@@ -1219,7 +1249,7 @@ button.vtl-ghost:disabled{opacity:.45;cursor:not-allowed}
   function openTag(tag, source = "local") {
     state.query = String(tag || "").trim();
     state.page = 1;
-    state.category = "";
+    state.category = ""; state.compilerSection = "";
     state.source = source;
     const search = byId("tagSearch");
     if (search) search.value = state.query;

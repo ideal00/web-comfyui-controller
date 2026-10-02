@@ -210,6 +210,7 @@ class LibraryTestCase(unittest.TestCase):
             mock.patch.dict(os.environ, {vtl.ROOT_ENV_KEYS[0]: str(self.root)}),
             mock.patch.object(vtl, "INDEX_FILE", Path(self.temp.name) / "idx.sqlite"),
             mock.patch.object(vtl, "THUMB_DIR", Path(self.temp.name) / "thumbs"),
+            mock.patch.object(vtl, "USER_LIBRARY_DIR", Path(self.temp.name) / "uploads"),
         ]
         for patcher in self.patchers:
             patcher.start()

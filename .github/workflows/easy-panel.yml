@@ -1,0 +1,71 @@
+name: Easy Panel checks and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install image dependency
+        run: python -m pip install pillow
+      - name: Python regression tests
+        run: python -m unittest discover -s tests
+      - name: JavaScript regression tests
+        shell: pwsh
+        run: node --test (Get-ChildItem tests/*.node-test.cjs).FullName
+      - name: Build all installer packages
+        shell: pwsh
+        run: ./installers/Build-Packages.ps1
+      - name: Check versions, payload and ZIP contents
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            python tools/verify_release.py --packages --tag $env:GITHUB_REF_NAME
+          } else {
+            python tools/verify_release.py --packages
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easy-panel-installers
+          path: installers/packages/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check-and-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: easy-panel-installers
+          path: release-assets
+      - name: Publish tested installer packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --title "Easy Panel $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
+          elif gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -qx 'SHA256SUMS.txt'; then
+            echo 'Reviewed installer packages already exist; keeping the published assets.'
+            exit 0
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/*

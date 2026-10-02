@@ -66,6 +66,8 @@ import {
 } from '../lib/easyPanelSnapshot'
 import {
   restoreLibraryGenerationToSettings,
+  LIBRARY_PAGE_SIZE,
+  libraryPageOffset,
   type EasyPanelLibraryRestoreMode,
 } from '../lib/easyPanelLibrary'
 
@@ -111,6 +113,9 @@ export interface EasyPanelController {
   restoredSnapshot?: EasyPanelSnapshotRecord
   library: EasyPanelGenerationSummary[]
   libraryTotal: number
+  libraryPage: number
+  libraryPageSize: number
+  goToLibraryPage: (page: number) => Promise<void>
   libraryHasMore: boolean
   libraryLoading: boolean
   libraryMessage: string
@@ -133,7 +138,7 @@ export interface EasyPanelController {
   refreshSnapshots: () => Promise<void>
   restoreSnapshot: (id: string, mode?: EasyPanelSnapshotRestoreMode) => Promise<boolean>
   clearSnapshotAdvancedConfig: () => void
-  refreshLibrary: (options?: boolean | { favoriteOnly?: boolean; group?: string }) => Promise<void>
+  refreshLibrary: (options?: boolean | { favoriteOnly?: boolean; group?: string; page?: number }) => Promise<void>
   openLibraryGeneration: (id: string) => Promise<boolean>
   clearLibraryDetail: () => void
   deleteLibraryGeneration: (id: string) => Promise<boolean>
@@ -159,7 +164,6 @@ export interface EasyPanelController {
 }
 
 const CONTROLLER_GAME_ID = 'easy-panel-mobile'
-const LIBRARY_PAGE_SIZE = 30
 const LIBRARY_INITIAL_THUMBNAIL_COUNT = 6
 const LIBRARY_THUMBNAIL_CONCURRENCY = 3
 
@@ -190,6 +194,7 @@ export function useEasyPanelController(): EasyPanelController {
   const [restoredSnapshot, setRestoredSnapshot] = useState<EasyPanelSnapshotRecord>()
   const [library, setLibrary] = useState<EasyPanelGenerationSummary[]>([])
   const [libraryTotal, setLibraryTotal] = useState(0)
+  const [libraryPage, setLibraryPage] = useState(1)
   const [libraryHasMore, setLibraryHasMore] = useState(false)
   const [libraryLoading, setLibraryLoading] = useState(false)
   const [libraryMessage, setLibraryMessage] = useState('连接后读取作品库')
@@ -462,6 +467,12 @@ export function useEasyPanelController(): EasyPanelController {
           const previous = libraryThumbnailUrlsRef.current[id]
           if (previous) URL.revokeObjectURL(previous)
           const nextSources = { ...libraryThumbnailUrlsRef.current, [id]: source }
+          // Keep a few recent pages without accumulating decoded images forever.
+          for (const stale of Object.keys(nextSources).slice(0, Math.max(0, Object.keys(nextSources).length - 90))) {
+            URL.revokeObjectURL(nextSources[stale])
+            delete nextSources[stale]
+            libraryThumbnailLoadedRef.current.delete(stale)
+          }
           libraryThumbnailUrlsRef.current = nextSources
           libraryThumbnailLoadedRef.current.add(id)
           libraryThumbnailFailedRef.current.delete(id)
@@ -519,7 +530,10 @@ export function useEasyPanelController(): EasyPanelController {
     }
   }, [enqueueLibraryThumbnail])
 
-  const refreshLibrary = useCallback(async (options?: boolean | { favoriteOnly?: boolean; group?: string }) => {
+  const refreshLibrary = useCallback(async (options?: boolean | { favoriteOnly?: boolean; group?: string; page?: number }) => {
+    const requestedPage = options && typeof options === 'object' ? options.page ?? 1 : 1
+    const paged = options && typeof options === 'object' && options.page !== undefined
+    let offset = (requestedPage - 1) * LIBRARY_PAGE_SIZE
     const favoriteOnly = typeof options === 'boolean'
       ? options
       : options && typeof options === 'object' && typeof options.favoriteOnly === 'boolean'
@@ -542,7 +556,7 @@ export function useEasyPanelController(): EasyPanelController {
     libraryRequestRef.current = requestNumber
     libraryOffsetRef.current = 0
     resetLibraryThumbnailQueue()
-    clearLibraryThumbnailSources()
+    if (!paged) clearLibraryThumbnailSources()
     setLibrary([])
     setLibraryTotal(0)
     setLibraryHasMore(false)
@@ -554,22 +568,29 @@ export function useEasyPanelController(): EasyPanelController {
       ? '正在读取入选作品…'
       : groupFilter ? '正在读取该收藏组…' : '正在读取电脑端作品库…')
     try {
-      const response = await getEasyPanelLibrary(config, {
+      const query = {
         limit: LIBRARY_PAGE_SIZE,
-        offset: 0,
-        favorite: favoriteOnly ? 'favorite' : '',
+        offset,
+        favorite: favoriteOnly ? 'favorite' as const : '' as const,
         group: groupFilter,
-        sort: 'created_at',
-        order: 'desc',
-      })
+        sort: 'created_at' as const,
+        order: 'desc' as const,
+      }
+      let response = await getEasyPanelLibrary(config, query)
+      if (libraryRequestRef.current !== requestNumber) return
+      if (!response.items.length && offset > 0 && response.total > 0) {
+        offset = (Math.ceil(response.total / LIBRARY_PAGE_SIZE) - 1) * LIBRARY_PAGE_SIZE
+        response = await getEasyPanelLibrary(config, { ...query, offset })
+      }
       if (libraryRequestRef.current !== requestNumber) return
       setLibrary(response.items)
+      setLibraryPage(response.total ? Math.floor(response.offset / LIBRARY_PAGE_SIZE) + 1 : 1)
       setLibraryTotal(response.total)
       setLibraryHasMore(response.has_more)
       if (Array.isArray(response.groups)) setLibraryGroups(response.groups)
       libraryOffsetRef.current = response.offset + response.items.length
       setLibraryMessage(response.items.length
-        ? `已读取 ${response.items.length} / ${response.total} 条作品${response.has_more ? '，可继续加载更早作品' : ''}`
+        ? `第 ${Math.floor(response.offset / LIBRARY_PAGE_SIZE) + 1} 页 · 共 ${response.total} 条作品`
         : '电脑端暂无可用作品')
       loadLibraryThumbnails(response.items, config, requestNumber)
     } catch (caught) {
@@ -579,6 +600,15 @@ export function useEasyPanelController(): EasyPanelController {
       if (libraryRequestRef.current === requestNumber) setLibraryLoading(false)
     }
   }, [clearLibraryThumbnailSources, config, loadLibraryThumbnails, resetLibraryThumbnailQueue, settings.baseUrl, settings.token, libraryFavoriteOnly, libraryGroupFilter])
+
+  const goToLibraryPage = useCallback(async (page: number) => {
+    if (libraryLoading) return
+    if (libraryPageOffset(page, libraryTotal) === null) {
+      setLibraryError(`请输入 1–${Math.max(1, Math.ceil(libraryTotal / LIBRARY_PAGE_SIZE))} 的整数页码。`)
+      return
+    }
+    await refreshLibrary({ page })
+  }, [libraryLoading, libraryTotal, refreshLibrary])
 
   const toggleLibraryFavoriteFilter = useCallback(() => {
     const next = !libraryFavoriteOnly
@@ -1215,6 +1245,9 @@ export function useEasyPanelController(): EasyPanelController {
     restoredSnapshot,
     library,
     libraryTotal,
+    libraryPage,
+    libraryPageSize: LIBRARY_PAGE_SIZE,
+    goToLibraryPage,
     libraryHasMore,
     libraryLoading,
     libraryMessage,

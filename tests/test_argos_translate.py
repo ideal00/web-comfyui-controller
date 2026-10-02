@@ -189,19 +189,12 @@ class ArgosWiringTests(unittest.TestCase):
         self.assertIn("/assets/js/offline-translate.js?v=", page)
         self.assertIn("translateArgosOffline()", page)
         self.assertIn('id="argosHint"', page)
-        # 逐框「翻译」已覆盖分区翻译：保留整段入口，去掉重复的分区按钮与它的提示位
+        # 标签入口统一负责逐框对照和编辑，整段离线翻译仍保留。
         self.assertNotIn("translateArgosSections()", page)
-        self.assertNotIn('id="argosSectionTranslate"', page)
-        self.assertNotIn('id="argosSectionHint"', page)
-        # 每个带「清空 / 粘贴」的框也带一个「翻译」按钮（共 12 个）
-        fields = re.findall(r'data-translate-field="([a-zA-Z]+)"', page)
-        self.assertEqual(12, len(fields))
-        for field in ("promptSubject", "promptPose", "promptScene", "negative"):
-            self.assertIn(field, fields)
-        for field in fields:
-            self.assertIn(f"translateArgosField('{field}')", page)
-            # 状态位就挂在同行的「翻译」按钮后面，提示不再写到全局标题栏
-            self.assertIn(f'data-translate-status="{field}"', page)
+        self.assertNotIn('data-translate-field=', page)
+        self.assertNotIn('data-translate-status=', page)
+        self.assertNotIn('translateArgosField(', page)
+        self.assertIn('/assets/js/prompt-explain.js', page)
         script = (ROOT / "web/assets/js/offline-translate.js").read_text(encoding="utf-8")
         for marker in ("/api/argos-translate", "EasyPanelHistory?.record()",
                        "promptEditorChanged", "naturalLanguage", "global.translateArgosField",
@@ -216,8 +209,7 @@ class ArgosWiringTests(unittest.TestCase):
                 self.assertIn(marker, script)
         self.assertNotIn("argosSectionHint", script)
         styles = (ROOT / "web/assets/css/panel.css").read_text(encoding="utf-8")
-        self.assertIn(".prompt-section-translate{", styles)
-        self.assertIn(".prompt-section-translate:hover", styles)
+        self.assertNotIn(".prompt-section-translate", styles)
 
     def test_payload_copy_stays_byte_identical(self):
         for relative in ("easy_panel.py", "easy_panel_app/integrations/argos.py",

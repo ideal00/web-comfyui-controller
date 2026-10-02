@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import unittest
 from pathlib import Path
@@ -33,6 +34,10 @@ CLASS_FIELDS = {
 }
 
 
+@unittest.skipUnless(
+    os.environ.get("EASY_PANEL_AUDIT_LOCAL_LORAS") == "1" and MANIFEST.is_file() and NOTES.is_file(),
+    "Historical personal LoRA import audit; opt in with EASY_PANEL_AUDIT_LOCAL_LORAS=1",
+)
 class LoraMemoRulesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

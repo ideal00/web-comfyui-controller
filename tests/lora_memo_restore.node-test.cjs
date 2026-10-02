@@ -30,7 +30,7 @@ function desktopContext() {
     'promptClothing', 'negative', 'safetyLevel', 'promptMode', 'status',
   ].map((id) => [id, { id, value: '', textContent: '', focus() { this.focusCount = (this.focusCount ?? 0) + 1; } }]));
   const context = vm.createContext({
-    fields, sessionStorage: storage(), PROMPT_SECTION_IDS: { clothing: 'promptClothing' },
+    fields, window: {}, sessionStorage: storage(), PROMPT_SECTION_IDS: { clothing: 'promptClothing' },
     OUTFIT_SECTIONS: [{ key: 'clothing', label: '服装' }],
     $: (id) => fields[id],
     collectPromptSections: () => ({ clothing: fields.promptClothing.value }),
@@ -41,6 +41,7 @@ function desktopContext() {
     outfitSignature: (item) => item.clothing,
     outfitSectionSummary: (item) => item.clothing ? '服装' : '',
     activeOutfitSectionCount: () => 1,
+    outfitTargetSections: (item) => item.clothing ? [{field: 'promptClothing', text: item.clothing}] : [],
     insertOutfitSections: (item) => {
       fields.promptClothing.value = item.clothing;
       return { active: { clothing: true }, added: { clothing: [item.clothing] }, removed: {} };
@@ -150,7 +151,7 @@ test('Android WebView snapshot restores LoRA state and memo provenance together'
   const model = { options: [{ value: 'anima.safetensors' }] };
   const fields = { model, loras };
   const context = vm.createContext({
-    localStorage, sessionStorage: storage(), location: { search: '?mobile=1' },
+    window: {}, localStorage, sessionStorage: storage(), location: { search: '?mobile=1' },
     $: (id) => fields[id],
     payload: () => ({ model: 'anima.safetensors', promptSections: { clothing: 'white bikini' } }),
     allLoraState: () => rows, addLora: (name, weight, enabled) => rows.push({ name, weight, enabled }),

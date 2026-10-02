@@ -17,14 +17,15 @@ function Assert-ChildPath([string]$Path, [string]$Parent) {
     return $resolvedPath
 }
 
-function Copy-CleanDirectory([string]$Source, [string]$Destination) {
-    $destinationPath = Assert-ChildPath $Destination $installerRoot
+function Copy-CleanDirectory([string]$Source, [string]$Destination, [string]$AllowedRoot = $installerRoot) {
+    $destinationPath = Assert-ChildPath $Destination $AllowedRoot
     if (Test-Path -LiteralPath $destinationPath) {
         Remove-Item -LiteralPath $destinationPath -Recurse -Force
     }
     New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
     foreach ($item in Get-ChildItem -LiteralPath $Source -Force -Recurse) {
         $relative = [System.IO.Path]::GetRelativePath($Source, $item.FullName)
+        if ((Split-Path -Leaf $Source) -eq "docs" -and $relative -match '^images([\\/]|$)') { continue }
         if ($relative -split '[\\/]' -contains "__pycache__") { continue }
         if ($item.Extension -eq ".pyc") { continue }
         if ($item.Extension -eq ".lnk") { continue }
@@ -43,7 +44,7 @@ function Sync-CorePayload {
     New-Item -ItemType Directory -Path $payloadRoot -Force | Out-Null
     foreach ($file in "easy_panel.py", "index.html", "embedding_notes.json", "pose_editor_workflow.json", "README.md", "LORA_MEMO_RULES.md",
                       "lora_txt_generator.py", "lora_txt_to_json.py", "classify_tags.py",
-                      "import_all_sidecars.py", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
+                      "import_all_sidecars.py", "CHANGELOG.md", "RPG_MOBILE_API.md", "RPG_MOBILE_CHANGELOG.md", "START_HERE_RPG_MOBILE.txt", "生成-LoRA同名TXT.bat", "智能导入-LoRA-TXT到JSON.bat",
                       "生成-LoRA同名TXT.cmd", "智能导入-LoRA-TXT到JSON.cmd") {
         $source = Join-Path $repositoryRoot $file
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
@@ -53,6 +54,14 @@ function Sync-CorePayload {
     }
     Copy-CleanDirectory (Join-Path $repositoryRoot "easy_panel_app") (Join-Path $payloadRoot "easy_panel_app")
     Copy-CleanDirectory (Join-Path $repositoryRoot "web") (Join-Path $payloadRoot "web")
+    Copy-CleanDirectory (Join-Path $repositoryRoot "docs") (Join-Path $payloadRoot "docs")
+    $mobileDocs = Join-Path $payloadRoot "android-client"
+    New-Item -ItemType Directory -Path $mobileDocs -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "android-client\README.md") -Destination (Join-Path $mobileDocs "README.md") -Force
+    $brandRelative = "android-client\android\app\src\main\res\drawable-nodpi\easy_panel_brand_source.png"
+    $brandDestination = Join-Path $payloadRoot $brandRelative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $brandDestination) -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot $brandRelative) -Destination $brandDestination -Force
     $legacyPayloadLaunchers = Join-Path $payloadRoot "launchers"
     foreach ($legacyLauncherName in "Start_ComfyUI_and_EasyPanel.bat", "Start_EasyPanel_Mobile_RPG.bat", "Stop_ComfyUI_and_EasyPanel.bat") {
         $legacyLauncher = Join-Path $legacyPayloadLaunchers $legacyLauncherName
@@ -79,12 +88,12 @@ function Sync-CorePayload {
         Copy-Item -LiteralPath $source -Destination (Join-Path $toolsPayload (Split-Path -Leaf $tool)) -Force
     }
     $mergedAliases = [ordered]@{}
-    foreach ($aliasFile in Get-ChildItem -LiteralPath (Join-Path $repositoryRoot "lora_imports") -Filter "*_chinese_filenames.json" | Sort-Object Name) {
-        $entries = Get-Content -LiteralPath $aliasFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
-        foreach ($entry in $entries.GetEnumerator()) { $mergedAliases[$entry.Key] = $entry.Value }
+    # Keep the reviewed compatibility map. Builds must not depend on a maintainer's
+    # ignored import history or silently publish personal filenames.
+    $aliasPath = Join-Path $payloadRoot "lora_rename_aliases.json"
+    if (-not (Test-Path -LiteralPath $aliasPath -PathType Leaf)) {
+        [IO.File]::WriteAllText($aliasPath, "{}", [Text.UTF8Encoding]::new($false))
     }
-    $aliasJson = $mergedAliases | ConvertTo-Json -Depth 5
-    [IO.File]::WriteAllText((Join-Path $payloadRoot "lora_rename_aliases.json"), $aliasJson, [Text.UTF8Encoding]::new($false))
 }
 
 function New-Package([string]$Name, [string]$CommandFile, [switch]$Core, [switch]$Tags) {
@@ -95,7 +104,7 @@ function New-Package([string]$Name, [string]$CommandFile, [switch]$Core, [switch
         Copy-Item -LiteralPath (Join-Path $installerRoot $CommandFile) -Destination $temporaryRoot
         Copy-Item -LiteralPath (Join-Path $installerRoot "README.md") -Destination (Join-Path $temporaryRoot "使用说明.md")
         if ($Core) {
-            Copy-Item -LiteralPath $payloadRoot -Destination (Join-Path $temporaryRoot "payload") -Recurse -Force
+            Copy-CleanDirectory $payloadRoot (Join-Path $temporaryRoot "payload") $temporaryRoot
         }
         if ($Tags) {
             Copy-Item -LiteralPath (Join-Path $installerRoot "tag_payload") -Destination (Join-Path $temporaryRoot "tag_payload") -Recurse -Force

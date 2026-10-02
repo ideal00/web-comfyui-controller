@@ -25,6 +25,20 @@ def preset(name, content, *, item_id="preset_a", updated_at=100):
 
 
 class SharedStateTests(unittest.TestCase):
+    def test_natural_language_presets_and_combo_sections_survive_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            natural = preset("双人对话", "Two adults are talking.")
+            natural["category"] = "naturalLanguage"
+            natural["exampleImage"] = "a" * 64
+            combo = preset("咖啡馆组合", "Two adults are talking.\ncafe", item_id="combo_nl")
+            combo.update(category="combo", sections={"naturalLanguage":"Two adults are talking.", "scene":"cafe"})
+            store.merge({"promptPresets":[natural,combo]}, 0)
+            items = {item["id"]:item for item in store.read()["promptPresets"]}
+            self.assertEqual("naturalLanguage", items[natural["id"]]["category"])
+            self.assertEqual("a" * 64, items[natural["id"]]["exampleImage"])
+            self.assertEqual("Two adults are talking.", items["combo_nl"]["sections"]["naturalLanguage"])
+
     def make_store(self, directory):
         return SharedStateStore(Path(directory) / "easy_panel_shared_state.json")
 

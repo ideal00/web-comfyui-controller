@@ -188,7 +188,7 @@ class StudioHeaderDensityTests(unittest.TestCase):
                 html.index('id="animaHighresMount"'),
                 html.index("<details><summary>多人区域提示词</summary>"),
             )
-            self.assertIn("anima-highres.js?v=10", html)
+            self.assertRegex(html, r"anima-highres\.js\?v=\d+")
             # 版本号会随改动 bump，这里只查脚本仍然加载（前缀匹配）。
             self.assertIn("result-workbench.js?v=", html)
 

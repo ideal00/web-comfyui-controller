@@ -1,0 +1,44 @@
+/* Main workspace polish, deliberately separate from dialogs and panel sizing. */
+.studio-header{background:#101722;border-bottom:1px solid #304057;box-shadow:0 4px 18px #0002}
+.studio-brand h1{letter-spacing:-.025em}.studio-brand p{color:#99adc3}
+.studio-nav button{border-radius:8px;color:#b8c8d9;min-height:34px}
+.studio-nav button:hover{background:#26364b;color:#f3f8ff}
+.studio-rail>.rail-fold{border-color:#2f4057;box-shadow:none;background:#162130}
+.studio-rail>.rail-fold>summary{padding:14px 12px}
+.studio-rail .rail-fold-state{color:#94abc2}
+#promptComposer{border-color:#3a4b63;background:#151f2c}
+#promptSectionGrid{gap:14px;align-items:start}
+#promptSectionGrid>[data-prompt-group]{min-width:0;border:1px solid #33465d;border-radius:12px;padding:12px;background:#192636}
+#promptSectionGrid .field-title{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:0 0 10px}
+#promptSectionGrid .prompt-section-label{display:flex;align-items:center;flex-wrap:wrap;gap:5px;color:#e0ebf5;font-size:13px;font-weight:600}
+#promptSectionGrid .prompt-section-label button,#promptSectionGrid .prompt-section-more>summary{background:#223247;border:1px solid #3a4b62;color:#aec1d4;font-size:11px;padding:4px 7px;min-height:27px;border-radius:6px;font-weight:400}
+#promptSectionGrid .prompt-chip-controls{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-start}
+#promptSectionGrid .prompt-chip-controls button{min-height:28px;padding:4px 8px;border-radius:6px;background:#27394e;color:#c0d0df;border:1px solid #3d526b}
+#promptSectionGrid .prompt-chip-controls .section-preset-browse{margin-left:auto;color:#bfdfed;background:#263f50;border-color:#46667b}
+#promptSectionGrid textarea{border-color:#3a4b60;background:#101b28;line-height:1.65;min-height:88px}
+#promptSectionGrid textarea:read-only{background:#141e2a;border-style:dashed;color:#bac6d4}
+#promptSectionGrid>[data-prompt-group]:focus-within{border-color:#7ba8c9;box-shadow:0 0 0 1px #7ba8c92b}
+#promptComposer :is(input,select,textarea,button,summary):focus-visible{outline:2px solid #8ac6e2;outline-offset:2px}
+#userPromptPresetPanel{border:1px solid #3c5069;border-radius:12px;background:#152232;padding:12px;margin-top:14px}
+#userPromptPresetPanel>summary{font-weight:600;color:#d9e9f5;padding:3px 0}
+.preset-browse-tools{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:14px 0 10px}
+.preset-browse-tools button{min-height:36px;font-size:12px;background:#29475e}
+.preset-browse-tools .secondary{background:#26364b}
+.preset-editor-fold{border:1px solid #354961;border-radius:9px;padding:10px;margin-bottom:14px}
+.preset-editor-fold>summary{font-size:12px;color:#aec1d5}
+.preset-editor-fold[open]{background:#192b3c}
+#userPresetList{gap:12px}
+#userPresetList .user-preset-item{border-color:#334b64;background:#192a3b;padding:14px;border-radius:11px;box-shadow:none}
+#userPresetList .user-preset-head{align-items:flex-start;gap:8px}
+#userPresetList .user-preset-head>b{font-size:14px;line-height:1.5;color:#edf4fa}
+#userPresetList .user-preset-head>span{background:#263d52;color:#aac9de;border-radius:5px;padding:3px 6px;font-size:11px}
+#userPresetList .user-preset-content{line-height:1.65;color:#bacbdb;background:#122131;border-radius:7px;padding:10px;margin-top:10px}
+#userPresetList .user-preset-desc{border-top:1px solid #344b5e;margin-top:8px;padding-top:8px;color:#9acbbf;font-size:12px}
+#userPresetList .user-preset-actions{gap:6px;margin-top:12px;flex-wrap:wrap}
+#userPresetList .user-preset-actions button{min-height:32px;border:1px solid #3c536d;background:#2a425c;font-size:12px}
+#userPresetList .user-preset-actions .danger{background:transparent;color:#cf9eac;border-color:#59404c;margin-left:auto}
+#studioActionDock{background:#172233ed;border-color:#53647b;box-shadow:0 8px 28px #0007;backdrop-filter:blur(14px)}
+#studioActionDock .dock-generate{background:#9bc6ff;color:#11243c;border-color:#bad9ff;font-weight:700}
+#studioActionDock .dock-again{background:#2a3b53;border-color:#476080;color:#d5e6f7}
+#studioActionDock .dock-send{background:#30364e;border-color:#515d7a}
+@media(max-width:700px){#promptSectionGrid>[data-prompt-group]{padding:10px}#promptSectionGrid .prompt-section-label button,#promptSectionGrid .prompt-chip-controls button{min-height:32px}.preset-browse-tools .small{flex-basis:100%}#userPresetList .user-preset-actions button{min-height:38px}.studio-nav{gap:4px}}
